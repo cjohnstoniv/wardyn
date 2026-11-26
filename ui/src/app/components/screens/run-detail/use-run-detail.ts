@@ -23,7 +23,7 @@ import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled"
 import { usePoll } from "../../../lib/use-poll";
 import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
 import { failureSentence } from "../../wardyn/states";
-import { withNewestEvents } from "./audit-window";
+import { readTrail, touchesRecordingIndex, type AuditTrail } from "./audit-window";
 import { macOSDiskPending } from "./macos-run-facts";
 import { computerFolderSettling } from "./widgets/identity-computer-folder";
 
@@ -48,9 +48,14 @@ export function useRunDetail(id: string) {
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
   // The oldest and newest pages of a very long trail did not meet: counts read off `audit` are a floor.
   const [auditGap, setAuditGap] = React.useState(false);
-  // A full oldest page cannot change (the trail is append-only), so it is read once per run id and
-  // only the newest page is fetched again on later polls.
-  const oldestPage = React.useRef<{ id: string; events: AuditEvent[] } | null>(null);
+  // The trail as last read, for one run id. A poll reads only its newest window (audit-window.ts readTrail), and the
+  // oldest page stays inside it once full.
+  const trailRef = React.useRef<{ id: string; trail: AuditTrail } | null>(null);
+  // Whether the next poll re-reads the recording index. It is false only after recording reads that were all whole,
+  // and a window read whose new rows hold no recording row: the trail is append-only, so the reads would answer as
+  // before.
+  const recordingDue = React.useRef(true);
+  const recordingWhole = React.useRef(false);
   // The run's recording index, read apart from the general trail so its cap can't crowd it out: the
   // terminal session casts, the saved desktop recordings (by their exact write action, so a desktop's
   // pause and resume rows can never fill the page before them) and the desktop's pause gaps. Each read
@@ -159,6 +164,8 @@ export function useRunDetail(id: string) {
       // ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded
       // audit store fails listAudit. Each pane keeps its last-good value and
       // the page stays operable.
+      const held = trailRef.current?.id === id ? trailRef.current.trail : null;
+      const due = recordingDue.current || held === null;
       return Promise.allSettled([
         runsApi.getRun(id),
         runsApi.getGrants(id),
@@ -167,15 +174,15 @@ export function useRunDetail(id: string) {
         // LIST_LIMIT lifetime rows — see approvals.ts's listApprovals comment
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
-        oldestPage.current?.id === id ? Promise.resolve(oldestPage.current.events) : auditApi.listAudit(id),
+        readTrail(id, held),
         // "session.recording" names the ACTION FAMILY, prefixing both the old
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
-        auditApi.listAudit(id, { actionPrefix: "session.recording" }),
+        due ? auditApi.listAudit(id, { actionPrefix: "session.recording" }) : null,
         // A desktop's saved screen recordings (#2968), and apart from them its pause and resume rows.
-        auditApi.listAudit(id, { action: "desktop.recording.write" }),
-        auditApi.listAudit(id, { actionPrefix: "desktop.recording" }),
+        due ? auditApi.listAudit(id, { action: "desktop.recording.write" }) : null,
+        due ? auditApi.listAudit(id, { actionPrefix: "desktop.recording" }) : null,
       ])
-        .then(async ([r, g, runApprovals, a, recA, deskA, gapA]) => {
+        .then(([r, g, runApprovals, a, recA, deskA, gapA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
           // Case-insensitive: a non-canonical UUID in the URL is still this run.
@@ -192,10 +199,10 @@ export function useRunDetail(id: string) {
             }
             return;
           }
-          // The first page is the OLDEST 1000 rows; a run past that joins its newest page on, so the live
-          // evidence (egress, mints) keeps moving instead of freezing at row 1000.
-          if (a.status === "fulfilled" && a.value.length >= LIST_LIMIT) oldestPage.current = { id, events: a.value };
-          const trail = a.status === "fulfilled" ? await withNewestEvents(id, a.value) : undefined;
+          // A trail read that failed keeps the last trail, and the next poll reads from it again.
+          const read = a.status === "fulfilled" ? a.value : null;
+          const trail = read?.trail;
+          if (trail) trailRef.current = { id, trail };
           setRun(r.value ?? null);
           setGrantsReadable(g.status === "fulfilled");
           if (g.status === "fulfilled") setGrants(g.value);
@@ -209,19 +216,23 @@ export function useRunDetail(id: string) {
           // predicate cannot leak another run's rows onto this page.
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
-          const rows = {
-            sessions: recA.status === "fulfilled" ? recA.value : undefined,
-            desktop: deskA.status === "fulfilled" ? deskA.value : undefined,
-            gaps: gapA.status === "fulfilled" ? gapA.value : undefined,
-          };
-          setRecordingRows((last) => ({ sessions: rows.sessions ?? last.sessions, desktop: rows.desktop ?? last.desktop, gaps: rows.gaps ?? last.gaps }));
-          setRecordingIndex(
-            !rows.sessions || !rows.desktop
-              ? "failed"
-              : rows.sessions.length >= LIST_LIMIT || rows.desktop.length >= LIST_LIMIT
-                ? "capped"
-                : "complete",
-          );
+          if (due) {
+            const rows = {
+              sessions: recA.status === "fulfilled" && recA.value ? recA.value : undefined,
+              desktop: deskA.status === "fulfilled" && deskA.value ? deskA.value : undefined,
+              gaps: gapA.status === "fulfilled" && gapA.value ? gapA.value : undefined,
+            };
+            setRecordingRows((last) => ({ sessions: rows.sessions ?? last.sessions, desktop: rows.desktop ?? last.desktop, gaps: rows.gaps ?? last.gaps }));
+            const index: RecordingIndex =
+              !rows.sessions || !rows.desktop
+                ? "failed"
+                : rows.sessions.length >= LIST_LIMIT || rows.desktop.length >= LIST_LIMIT
+                  ? "capped"
+                  : "complete";
+            setRecordingIndex(index);
+            recordingWhole.current = index === "complete" && rows.gaps !== undefined;
+          }
+          recordingDue.current = !recordingWhole.current || !read?.added || touchesRecordingIndex(read.added);
           setStatus("ready");
           // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
           // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live

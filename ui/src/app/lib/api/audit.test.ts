@@ -496,3 +496,21 @@ describe("runEndingFromAudit — what a KILLED run's trail proves", () => {
     expect(evidence([noTime, confirm("success", at("10:00:40"))])).toBe("confirming");
   });
 });
+
+describe("listAudit — the newest window sends its own limit", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the window's limit, and the default page size without one", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await audit.listAudit("run_1", { newest: true, limit: 100 });
+    const windowUrl = String(fetchMock.mock.calls[0][0]);
+    expect(windowUrl).toContain("order=desc");
+    expect(windowUrl).toContain("limit=100");
+    expect(windowUrl).not.toContain("limit=1000");
+
+    await audit.listAudit("run_1");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("limit=1000");
+  });
+});
