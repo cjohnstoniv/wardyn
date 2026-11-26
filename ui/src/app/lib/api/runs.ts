@@ -52,6 +52,7 @@ import {
   wfetch,
   withLimit,
 } from "./core";
+import { followRunEvents } from "./run-events";
 
 // Map a backend credential-grant eligibility record (the GET /runs/{id}/grants
 // shape: { id, run_id, created_at, spec: { kind, scope, ttl_seconds,
@@ -286,6 +287,10 @@ export const runs = {
     if (res.status === 404) return undefined;
     return asJson<RunDetail>(res);
   },
+
+  // GET /api/v1/runs/{id}/events — the run's changes as they happen, for a screen that reads the run
+  // again on each (run-events.ts). Returns the function that closes the stream.
+  followEvents: followRunEvents,
 
   // POST /api/v1/runs/{id}/attach/ticket (renamed from attach-ticket in 0.8 —
   // docs/sdk.md "Renamed in 0.8"; the old path still answers, as a chi alias,

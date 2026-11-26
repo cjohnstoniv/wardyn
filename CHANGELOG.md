@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The Launched screen shows a starting run's new state as soon as it changes, instead of at the next 4-second refresh. It follows the run's event stream while the run starts or waits, and keeps the refresh as a fallback.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
