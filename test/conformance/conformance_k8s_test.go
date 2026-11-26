@@ -154,6 +154,10 @@ func TestConformanceK8s(t *testing.T) {
 		testExecIsAcceptedWithADiskBudget(t, r, agentImage)
 	})
 
+	t.Run("AnEndedAgentsFolderIsReadFromTheMainContainer", func(t *testing.T) {
+		testAnEndedAgentsFolderIsReadFromTheMainContainer(t, r, agentImage)
+	})
+
 	t.Run("AgentCannotReachAnythingButTheProxy", func(t *testing.T) {
 		testAgentCannotReachAnythingButTheProxy(t, r, agentImage)
 	})
@@ -544,6 +548,73 @@ func testExecIsAcceptedWithADiskBudget(t *testing.T, r runner.Runner, agentImage
 			"mounted over a path the agent cannot write is worse than no budget: the run cannot work at all", code)
 	default:
 		t.Fatalf("scratch-writability probe exited %d, a code the script never emits — investigate before trusting this result either way", code)
+	}
+}
+
+// endedAgentFile is what the agent writes into its work folder before it exits.
+const endedAgentFile = "/home/agent/work/wardyn-ended-agent-probe"
+
+// testAnEndedAgentsFolderIsReadFromTheMainContainer is the proof a fake clientset cannot give for a folder's copy back
+// after the agent has exited: the kubelet runs nothing in the agent's ended exec container, and the pod's main
+// container, which mounts the same work-folder volume, reads the file the agent wrote there. A folder on no shared
+// volume is refused before any exec.
+func testAnEndedAgentsFolderIsReadFromTheMainContainer(t *testing.T, r runner.Runner, agentImage string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skip("no ConfinementClasses declared; cannot create a sandbox")
+	}
+	sb, err := r.CreateSandbox(ctx, runner.SandboxSpec{
+		RunID:            uuid.New(),
+		Image:            agentImage,
+		ConfinementClass: caps.ConfinementClasses[len(caps.ConfinementClasses)-1],
+		Labels:           map[string]string{"wardyn.conformance": "true"},
+		// A disk size mounts the work folder as a volume the main container shares (ephemeralScratchVolumes).
+		Resources:   runner.Resources{DiskMiB: 512},
+		ProxyConfig: conformance.LoadableProxyConfig(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	defer func() { _ = r.StopSandbox(context.Background(), sb.Ref) }()
+
+	if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", "echo agent-wrote > " + endedAgentFile}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if code, err := r.Wait(ctx, sb.Ref); err != nil || code != 0 {
+		t.Fatalf("Wait = %d, %v; want the agent to write its file and exit 0", code, err)
+	}
+	read := func(agentDir string) (string, int, error) {
+		// Its own bound: a read the kubelet held open must not use up the case's time and hide the later reads.
+		rctx, rcancel := context.WithTimeout(ctx, 30*time.Second)
+		defer rcancel()
+		sess, err := r.ExecStream(rctx, sb.Ref, runner.ExecSpec{Argv: []string{"cat", endedAgentFile}, AgentDir: agentDir})
+		if err != nil {
+			return "", 0, err
+		}
+		defer sess.Close()
+		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
+		out, rerr := io.ReadAll(sess.Stdout)
+		code, werr := sess.Wait()
+		return string(out), code, errors.Join(rerr, werr)
+	}
+
+	if out, code, err := read("/home/agent/work"); err != nil || code != 0 || out != "agent-wrote\n" {
+		t.Errorf("the folder's read after the agent exited = %q, exit %d, %v; want the agent's file from the main container", out, code, err)
+	}
+	// Why the main container serves it: the same read sent to the ended agent container does not run (a read that ends
+	// at its own 30-second bound counts as not run).
+	if out, code, err := read(""); err == nil && code == 0 && out == "agent-wrote\n" {
+		t.Errorf("an exec in the ended agent container read %q: the kubelet ran it, so the main-container route is not needed", out)
+	}
+	if _, _, err := read("/home/agent/elsewhere"); !errors.Is(err, runner.ErrAgentDirUnshared) {
+		t.Errorf("a folder on no shared volume = %v, want runner.ErrAgentDirUnshared", err)
 	}
 }
 

@@ -375,6 +375,10 @@ type ExecSpec struct {
 	// corrupted by interleaved stderr without one.
 	TTY        bool
 	Cols, Rows uint16 // initial PTY window size (TTY only); zero => implementation default
+	// AgentDir, when set, says the exec reads and writes only under this folder of the agent's. Kubernetes then runs
+	// it in the pod's main container once the agent's own container has ended (ErrAgentDirUnshared when the folder is
+	// on no volume the two share); other substrates ignore it.
+	AgentDir string `json:",omitempty"`
 }
 
 // ExecSession is a live, bidirectional stream into ONE exec started by
