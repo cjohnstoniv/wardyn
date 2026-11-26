@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- With the image builder on, the server removes a reusable custom-image wrap (`wardyn-byoi/reuse:<key>`) once it is more than a week old and no run has been started on it for a week. It checks at start and every six hours, keeps an image a live run, a kept sandbox, a workspace or a starting run uses, and leaves images no run in its database recorded. Each pass that removes one writes an `image.reuse.reclaim` audit row.
+
+### Before you upgrade
+
+- With the image builder on, the first pass after the upgrade removes reusable custom-image wraps (`wardyn-byoi/reuse:<key>`) built more than a week ago that no run has been started on for a week.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
