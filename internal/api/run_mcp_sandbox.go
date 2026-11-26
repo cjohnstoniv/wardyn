@@ -810,6 +810,7 @@ func (s *Server) startRunMCPSandboxes(ctx context.Context, run types.AgentRun, d
 		waiting = append(waiting, made)
 	}
 	deadline := s.cfg.Now().Add(mcpReadyWait)
+wait:
 	for len(waiting) > 0 {
 		waiting = slices.DeleteFunc(waiting, func(made mcpMade) bool {
 			sb, err := m.MCPSandboxStatus(ctx, mcpSandboxIDAt(run, made.srv.ordinal))
@@ -820,13 +821,17 @@ func (s *Server) startRunMCPSandboxes(ctx context.Context, run types.AgentRun, d
 		}
 		select {
 		case <-ctx.Done():
+			break wait // a done dispatch waits no longer; what has not come up is ended below
 		case <-time.After(mcpReadyPoll):
 		}
 	}
+	// The ends land on a bound of their own, so a done dispatch still kills what did not come up.
+	wctx, cancel := mcpReviveWriteContext(ctx)
+	defer cancel()
 	for _, made := range waiting {
-		_ = m.KillMCPSandbox(ctx, mcpSandboxIDAt(run, made.srv.ordinal))
-		if ok, _ := st.FailMCPSandboxIfUp(ctx, run.ID, made.srv.ordinal, mcpFailReadiness); ok {
-			s.auditMCPSandboxEnd(ctx, run.ID, types.ActorSystem, "wardynd", &made.row, "failure", mcpFailReadiness)
+		_ = m.KillMCPSandbox(wctx, mcpSandboxIDAt(run, made.srv.ordinal))
+		if ok, _ := st.FailMCPSandboxIfUp(wctx, run.ID, made.srv.ordinal, mcpFailReadiness); ok {
+			s.auditMCPSandboxEnd(wctx, run.ID, types.ActorSystem, "wardynd", &made.row, "failure", mcpFailReadiness)
 		}
 	}
 	return true

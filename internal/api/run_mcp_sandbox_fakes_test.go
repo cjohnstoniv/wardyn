@@ -236,6 +236,8 @@ type mcpSandboxerFake struct {
 	statusDead bool
 	// honourCtx fails a kill on a done context, as the runner's call on a spent context fails.
 	honourCtx bool
+	// statusFn runs inside each status read, under the fake's lock.
+	statusFn func()
 }
 
 func newMCPSandboxerFake() *mcpSandboxerFake {
@@ -306,6 +308,10 @@ func (f *mcpSandboxerFake) KillMCPSandbox(ctx context.Context, id runner.MCPSand
 func (f *mcpSandboxerFake) MCPSandboxStatus(_ context.Context, id runner.MCPSandboxID) (runner.MCPSandbox, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.record("status", id.Ordinal)
+	if f.statusFn != nil {
+		f.statusFn()
+	}
 	return runner.MCPSandbox{ID: id, Live: f.live[id.Ordinal] && !f.statusDead}, nil
 }
 

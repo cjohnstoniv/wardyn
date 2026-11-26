@@ -424,6 +424,30 @@ func TestKillDuringMCPCreateLeavesNoSandbox(t *testing.T) {
 	}
 }
 
+// TestDispatchMCPReadinessWaitEndsWithItsContext: a dispatch whose context ends during the readiness wait
+// stops polling at once, rather than read the servers' status hot until the wait's deadline, and kills what
+// did not come up.
+func TestDispatchMCPReadinessWaitEndsWithItsContext(t *testing.T) {
+	f := newMCPDispatchFixture(t)
+	f.sbx.statusDead = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.sbx.statusFn = cancel
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.srv.dispatchRun(ctx, f.run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), f.p)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the dispatch did not return after its context ended")
+	}
+	if n := f.sbx.count("status"); n > 2 || f.sbx.left() != 0 {
+		t.Errorf("status reads %d, left %d: want the wait ended at once and the server killed", n, f.sbx.left())
+	}
+}
+
 // TestDispatchMCPReadinessLapseKeepsRun (Q6 A): a server that never comes up is failed alone with cause
 // readiness and killed; the run goes on.
 func TestDispatchMCPReadinessLapseKeepsRun(t *testing.T) {
