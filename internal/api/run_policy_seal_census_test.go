@@ -57,6 +57,8 @@ var lateAddCensus = map[string]int{
 	"run_overrides_apply.go applyRunEgressOverrides":            3, // the person's allow_all_egress edit at resolve, before the clamp and the seal; the third records a false narrowing the census reads only as a variable
 	"run_overrides_apply.go applyRunHostOverrides":              1,
 	"run_overrides_apply.go boundOverrideAdds":                  1,
+	"run_mcp_policy.go mcpSamePolicy":                           2, // a server's hosts into its MCP sandbox's policy, and the brokered-host denies; that policy's own finish seals it (mcpPolicyFinish)
+	"run_mcp_policy.go mcpOwnPolicy":                            1, // the own spec's private-literal drop, a narrowing, as boundRunUserSpecDrops' own
 	"run_policy_provenance.go canonicalKnobs":                   1,
 	"runs_autonomy.go autonomyPostureSpec":                      2,
 	"runs_autonomy.go unionADOEntraLane":                        1,

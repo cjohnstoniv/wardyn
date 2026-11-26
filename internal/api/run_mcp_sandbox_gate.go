@@ -111,9 +111,14 @@ func mcpAdmissionRefusal(site types.SiteConfig, c attachedComponent, i int) *com
 }
 
 // stepMCPSandbox is the fold's part of the gate: the machine kind, the placement and the executor's kinds,
-// and the count. It runs after the components were admitted (step 2) and after the placement was decided.
+// the count, then a narrower overlay judged against "same" from the folded policy (mcpNarrowerRefusal). It
+// runs after the components were admitted (step 2) and after the placement was decided.
 func (s *Server) stepMCPSandbox(f *runFold, _ *foldRecorder) bool {
-	return !s.mcpSandboxRefusal(f.r.Context(), *f.req, f.place, f.comps).write(s, f.w, f.r)
+	refusal := s.mcpSandboxRefusal(f.r.Context(), *f.req, f.place, f.comps)
+	if refusal == nil {
+		refusal = mcpNarrowerRefusal(f.spec, f.comps)
+	}
+	return !refusal.write(s, f.w, f.r)
 }
 
 // mcpSandboxRefusal is stepMCPSandbox's answer. A local run is refused without a capability read; a remote

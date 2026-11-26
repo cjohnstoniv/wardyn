@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -557,4 +559,50 @@ func mcpCanonColumn(t *testing.T, doc, heading string, col int) []string {
 		t.Fatalf("%q: read %d rows; the table is not where the test looks", heading, len(out))
 	}
 	return out
+}
+
+// TestMCPSandboxGateD5 is the matrix's step 6, D5: the fold, at preview, preflight and create alike, admits a
+// narrower overlay within "same" computed from the folded policy, and refuses one that names a host outside
+// it with the overlay's field path.
+func TestMCPSandboxGateD5(t *testing.T) {
+	i := slices.IndexFunc(runFoldSteps, func(st runFoldStep) bool {
+		return strings.HasSuffix(runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name(), ".stepMCPSandbox")
+	})
+	if i < 0 || runFoldSteps[i].modes != foldAll {
+		t.Fatalf("stepMCPSandbox is not a fold step at every door")
+	}
+	s := &Server{}
+	s.cfg.Store, s.cfg.Runner = mcpSiteStore{site: localMCPSite("on")}, mcpKindsRunner{kinds: []types.MachineKind{types.MachineContainer}}
+	for _, tc := range []struct {
+		name  string
+		allow []string
+		want  string
+	}{
+		{"within same", []string{"api.files.test"}, ""},
+		{"a host outside same", []string{"api.files.test", "wide.test"},
+			"mcp.sandbox.policy.overlay.allowed_domains: Narrower than the run can only remove access. Edit files to remove the extra hosts."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comps := stdioComps(1)
+			comps.attached[0].snapshot.Definition.MCP.Sandbox = &types.ComponentMCPSandbox{Policy: types.ComponentMCPSandboxPolicy{
+				Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{AllowedDomains: &tc.allow}}}
+			rec := httptest.NewRecorder()
+			f := &runFold{w: rec, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
+				req:   &createRunRequest{MachineKind: string(types.MachineContainer)},
+				place: runPlacement{pooled: true, placement: types.PlacementRemote}, comps: comps,
+				spec: types.RunPolicySpec{AllowedDomains: []string{"a.test"}}}
+			cont := s.stepMCPSandbox(f, nil)
+			if tc.want == "" {
+				if !cont || rec.Code != http.StatusOK {
+					t.Fatalf("refused %d %s, want admitted", rec.Code, rec.Body.String())
+				}
+				return
+			}
+			var body errorBody
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if cont || rec.Code != http.StatusUnprocessableEntity || body.Reason != reasonComponentDefinitionInvalid || body.Error != tc.want {
+				t.Fatalf("fold = %v %d %q %q, want 422 %q %q", cont, rec.Code, body.Reason, body.Error, reasonComponentDefinitionInvalid, tc.want)
+			}
+		})
+	}
 }
