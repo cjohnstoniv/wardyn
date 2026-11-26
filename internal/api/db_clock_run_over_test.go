@@ -279,7 +279,7 @@ func TestNoteExpiredDecisionPost_JudgesTheRunOnTheDatabaseClock(t *testing.T) {
 				r := httptest.NewRequest(http.MethodPost, decisionsDoor, nil)
 				srv.noteExpiredDecisionPost(r, &identity.ExpiredTokenError{RunID: runID, Expiry: time.Now().Add(-2 * identity.RunTokenLapseAfter)})
 				rows := reportLostRows(h, runID, reportLostExpired)
-				if given := srv.claimDecisionRefusal(runID, expiredRunRead); rows != tc.rows || given != tc.given {
+				if given := srv.claimDecisionRefusal(context.Background(), runID, expiredRunRead); rows != tc.rows || given != tc.given {
 					t.Fatalf("%d expired-token rows, read given back %v; want %d, %v", rows, given, tc.rows, tc.given)
 				}
 			})

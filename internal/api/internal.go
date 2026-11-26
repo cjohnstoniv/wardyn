@@ -642,7 +642,8 @@ func (s *Server) recordGroundtruthAudit(ctx context.Context, ev types.AuditEvent
 // refusal is a rate bound, not a security event — the 4096 rows it already
 // raised are the trail, and inventing an action here would mean a run that
 // hits the cap floods the audit log with the refusal instead, which is the same
-// mistake one wave over.
+// mistake one wave over. An MCP server's holds are not counted here; each server
+// has its own cap (maxMCPHoldsPerServer).
 const maxApprovalsPerRun = 4096
 
 // internalApprovalRequest is the proxy's POST /internal/approvals body.
@@ -794,14 +795,10 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	// error: an unbounded raise path is the thing being bounded, so "we could not
 	// tell how many this run has" must not read as "allow another one". The raise
 	// counts again under the run's cap lock in its own transaction, so two raises
-	// that both read the last free slot cannot both land.
-	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
-	if cerr != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalApprovalCountUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
-		return
-	}
-	if n >= maxApprovalsPerRun {
-		writeCapReached(w, store.ErrApprovalRunCap)
+	// that both read the last free slot cannot both land. An MCP proxy's hold is
+	// held to its server's own cap instead (approvalRaiseCap).
+	capped, ok := s.approvalRaiseCap(w, r, claims.RunID)
+	if !ok {
 		return
 	}
 
@@ -811,7 +808,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		Kind:           body.Kind,
 		RequestedScope: body.RequestedScope,
 	}
-	created, err := s.cfg.Approvals.Request(store.WithAdmissionCap(r.Context(), maxApprovalsPerRun), req)
+	created, err := s.cfg.Approvals.Request(capped, req)
 	if err != nil {
 		writeServerError(w, r, "request approval", err)
 		return

@@ -74,18 +74,8 @@ func (s *Server) decisionTouch(ctx context.Context, runID uuid.UUID, kind types.
 // tokenAudienceHint is the aud a bearer JWT says it carries, unverified: which door verifies it, never a
 // decision. A token that is not a JWT has none.
 func tokenAudienceHint(tok string) []string {
-	parts := strings.Split(tok, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil
-	}
-	var c struct {
-		Aud json.RawMessage `json:"aud"`
-	}
-	if json.Unmarshal(raw, &c) != nil {
+	c, ok := tokenPayloadHint(tok)
+	if !ok {
 		return nil
 	}
 	var one string
@@ -97,10 +87,84 @@ func tokenAudienceHint(tok string) []string {
 	return many
 }
 
+// tokenHint is the two claims the MCP door reads from a compact token's payload before, or without, a verify.
+type tokenHint struct {
+	Aud json.RawMessage `json:"aud"`
+	JTI string          `json:"jti"`
+}
+
+// tokenPayloadHint decodes tok's payload unverified. A caller trusts what it reads only as far as a verify of
+// the same token has gone.
+func tokenPayloadHint(tok string) (tokenHint, bool) {
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return tokenHint{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return tokenHint{}, false
+	}
+	var c tokenHint
+	return c, json.Unmarshal(raw, &c) == nil
+}
+
+// refuseMCPSandboxToken answers an MCP proxy's token that did not verify. The run's once-only
+// run.identity.expire row and the decision door's run.report.drop row are the agent's evidence, so it writes
+// neither: it writes one auth.fail row and answers 401, or 503 when the run behind a revoked token could not
+// be read. An expired token names its run, and its signature has been checked, so its jti is read from the
+// payload and the row is labelled with the key of the server row that holds that jti; this costs one read of
+// the run's rows, as a live token's post does.
+func (s *Server) refuseMCPSandboxToken(w http.ResponseWriter, r *http.Request, tok string, err error) {
+	var unreadable *runUnreadableError
+	if errors.As(err, &unreadable) {
+		slog.ErrorContext(r.Context(), "api: read the run behind an MCP proxy's revoked token",
+			slog.String("run_id", unreadable.RunID.String()), slog.Any("err", unreadable.Err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
+		return
+	}
+	var expired *identity.ExpiredTokenError
+	if hint, ok := tokenPayloadHint(tok); ok && hint.JTI != "" && errors.As(err, &expired) {
+		if key := s.mcpSandboxKeyOfJTI(r.Context(), expired.RunID, hint.JTI); key != "" {
+			r = r.WithContext(audit.WithMCPSandbox(r.Context(), key))
+		}
+	}
+	s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
+	writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
+}
+
+// mcpSandboxKeyOfJTI is the key of runID's server row whose current or previous jti is jti, or "" when no row
+// holds it or the rows could not be read.
+func (s *Server) mcpSandboxKeyOfJTI(ctx context.Context, runID uuid.UUID, jti string) string {
+	rows, _ := s.mcpSandboxRowsOf(ctx, runID) // a failed read leaves the refusal's row unlabelled
+	return mcpSandboxKeyOfRows(rows, jti)
+}
+
+// mcpSandboxRowsOf reads runID's server rows: none when the store keeps no such rows.
+func (s *Server) mcpSandboxRowsOf(ctx context.Context, runID uuid.UUID) ([]store.RunMCPSandbox, error) {
+	st, ok := s.cfg.Store.(store.RunMCPSandboxStore)
+	if !ok {
+		return nil, nil
+	}
+	return st.ListRunMCPSandboxes(ctx, runID)
+}
+
+// mcpSandboxKeyOfRows is the key of the row in rows whose current or previous jti is jti, or "" when none is.
+func mcpSandboxKeyOfRows(rows []store.RunMCPSandbox, jti string) string {
+	for _, row := range rows {
+		if jti != "" && (row.CPTokenJTI == jti || row.PrevCPTokenJTI == jti) {
+			return row.ServerKey
+		}
+	}
+	return ""
+}
+
 // mcpSandboxAuth serves an MCP proxy's token on its five routes. For that token on one of them it never calls
 // next: it verifies the token for the MCP audience, refuses a relayed request (no run reached through a
 // runner has an MCP sandbox), holds the run to internalAuth's liveness and relay gates, matches the token to
-// its server's row, then calls the route's handler with the claims, the run and the row's key in context.
+// its server's row, then calls the route's handler with the claims, the run and the row's key in context. The
+// run's server rows are read once, before the gates, so the rows the gates write are labelled with the key of
+// the row that holds the token's jti: they are the server's, not the agent's (record_evidence.go). When the
+// rows cannot be read the gates' rows stay unlabelled, which fails the agent's replay, the safe way.
 func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
@@ -116,7 +180,7 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 		}
 		claims, err := s.verifyRunTokenFor(r, tok, mcpSandboxAudience)
 		if err != nil {
-			s.refuseRunToken(w, r, err)
+			s.refuseMCPSandboxToken(w, r, tok, err)
 			return
 		}
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
@@ -124,11 +188,15 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 			s.denyRelayed(w, r, claims, placement.ReasonRelayRouteRefused, runner.String())
 			return
 		}
+		rows, rowsErr := s.mcpSandboxRowsOf(r.Context(), claims.RunID)
+		if key := mcpSandboxKeyOfRows(rows, claims.JTI); key != "" {
+			r = r.WithContext(audit.WithMCPSandbox(r.Context(), key))
+		}
 		run, ok := s.refuseTerminalRun(s.decisionGate(w, r, claims), r, claims)
 		if !ok || s.refuseRelayBinding(s.decisionGate(w, r, claims), r, claims, run) {
 			return
 		}
-		row, ok := s.mcpSandboxRowFor(w, r, claims)
+		row, ok := s.mcpSandboxRowFor(w, r, claims, rows, rowsErr)
 		if !ok {
 			return
 		}
@@ -139,19 +207,18 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 
 // mcpSandboxRowFor is the run's server row the token names: the one whose current jti it is, or whose previous
 // jti it is while that token has not lapsed. A stopped row is refused, except at the decision door within
-// terminalUploadGrace of its stop, so the rows its proxy flushes as it stops still land. It writes its own
-// refusal and returns false once it has.
-func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims *identity.Claims) (store.RunMCPSandbox, bool) {
+// terminalUploadGrace of its stop, so the rows its proxy flushes as it stops still land; a row with no server
+// key is refused as no row (the table refuses one too). rows and err are the run's server rows as
+// mcpSandboxRowsOf read them. It writes its own refusal and returns false once it has.
+func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims *identity.Claims, rows []store.RunMCPSandbox, err error) (store.RunMCPSandbox, bool) {
 	unknown := func() (store.RunMCPSandbox, bool) {
 		s.auditAuthFailedAs(r, internalAuthActor, reasonMCPSandboxUnknown)
 		writeErrorReason(w, http.StatusForbidden, reasonMCPSandboxUnknown, "no MCP server of this run holds this token")
 		return store.RunMCPSandbox{}, false
 	}
-	st, ok := s.cfg.Store.(store.RunMCPSandboxStore)
-	if !ok || claims.JTI == "" {
+	if _, ok := s.cfg.Store.(store.RunMCPSandboxStore); !ok || claims.JTI == "" {
 		return unknown()
 	}
-	rows, err := st.ListRunMCPSandboxes(r.Context(), claims.RunID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "api: read the run's MCP servers for its proxy's token",
 			slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
@@ -175,6 +242,9 @@ func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims
 		}
 		if row.State == store.MCPSandboxStopped &&
 			(r.URL.Path != decisionsDoor || row.StoppedAt == nil || now.Sub(*row.StoppedAt) > terminalUploadGrace) {
+			return unknown()
+		}
+		if row.ServerKey == "" { // the key is the label its rows carry, and an empty one reads as the agent's
 			return unknown()
 		}
 		return row, true

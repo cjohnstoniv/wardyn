@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS run_mcp_sandboxes (
     PRIMARY KEY (run_id, ordinal)
 );
 
+-- A row's server key is its label on every row its proxy writes; an empty key would read as the agent's
+-- own, so the table refuses it. The check is named and dropped first, so a re-run of this file is idempotent;
+-- migrateOn never applies a file it has recorded, so a re-run happens only where this file is not recorded.
+ALTER TABLE run_mcp_sandboxes DROP CONSTRAINT IF EXISTS run_mcp_sandboxes_server_key_set;
+
+ALTER TABLE run_mcp_sandboxes
+    ADD CONSTRAINT run_mcp_sandboxes_server_key_set CHECK (server_key <> '');
+
 DO $mig$
 DECLARE
     r record;

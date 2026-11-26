@@ -101,6 +101,10 @@ func governSites() []governSite {
 	}
 	boundSrv := func(t *testing.T) *Server { s, _, _ := memberBoundFixture(t, wide); return s }
 	plain := func(*testing.T) *Server { return New(Config{Audit: &recRecorder{}}) }
+	mcpHoldSrv := func(*testing.T) *Server { // the deployment ceiling, with no store, holds one host rule
+		hold := []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.files.test", Paths: []string{"/admin"}, Effect: types.HostRuleHold}}}}
+		return New(Config{Audit: &recRecorder{}, DefaultPolicy: types.RunPolicySpec{HostRules: hold}})
+	}
 	admitSrv := func(*testing.T) *Server {
 		return New(Config{Store: &admitSourcesStore{siteConfig: admitSite()}, Audit: &recRecorder{}})
 	}
@@ -325,6 +329,16 @@ func governSites() []governSite {
 		{"run_workspace_authorization.go workspaceProvidersRefusal", capSrv(&capStore{site: capProviderSite(), enf: capProviderEnforced()}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				return s.workspaceProvidersRefusal(governReq(ctx), "runs.workspace_provider", capProviderRepo) != nil
+			}},
+		{"run_mcp_policy.go mcpHoldsRewritten (Review's own-policy holds)", mcpHoldSrv,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				comps, _ := stdioAccessComps(&types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: &types.RunPolicySpec{}})
+				for _, n := range s.mcpHoldsRewritten(ctx, accessInputs{comps: comps}) {
+					if n > 0 {
+						return true // the member ceiling's hold rule reached the server's own policy
+					}
+				}
+				return false
 			}},
 		{"run_request_governance.go runRequestGovernance", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {

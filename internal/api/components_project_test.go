@@ -40,3 +40,30 @@ func TestOrgComponentView_MCPRowIsAnMCPCard(t *testing.T) {
 		}
 	}
 }
+
+// The owning-unit answer withholds an MCP sandbox policy's host paths below the super admin tier, on a copy,
+// and leaves a row with no sandbox policy as stored.
+func TestRedactComponentForRead(t *testing.T) {
+	mounts := []types.WorkspaceMount{{Source: "/srv/host-secret-path", Target: "/data"}}
+	c := types.Component{ID: uuid.New(), Name: "Files", Definition: types.ComponentDefinition{
+		MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
+			Launch:  &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "files-server@1.2.3"}},
+			Sandbox: &types.ComponentMCPSandbox{Policy: types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{WorkspaceMounts: &mounts}}}},
+	}}
+	for _, tier := range []specReadTier{specReadSecurity, specReadMember} {
+		raw := string(mustJSON(redactComponentForRead(c, tier)))
+		if strings.Contains(raw, "/srv/host-secret-path") || !strings.Contains(raw, mountSourceWithheld) {
+			t.Errorf("tier %d: %s, want the mount source withheld", tier, raw)
+		}
+	}
+	if got := (*c.Definition.MCP.Sandbox.Policy.Overlay.WorkspaceMounts)[0].Source; got != "/srv/host-secret-path" {
+		t.Errorf("the stored row was changed in place: source %q", got)
+	}
+	if raw := string(mustJSON(redactComponentForRead(c, specReadFull))); !strings.Contains(raw, "/srv/host-secret-path") {
+		t.Errorf("full tier: %s, want the row whole", raw)
+	}
+	plain := types.Component{ID: uuid.New(), Name: "Plain", Definition: types.ComponentDefinition{Hosts: []string{"api.example"}}}
+	if got, want := string(mustJSON(redactComponentForRead(plain, specReadMember))), string(mustJSON(plain)); got != want {
+		t.Errorf("a row with no sandbox policy = %s, want %s", got, want)
+	}
+}

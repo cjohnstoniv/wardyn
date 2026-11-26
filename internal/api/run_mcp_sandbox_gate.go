@@ -35,7 +35,7 @@ func mcpOwnSandboxOff(sc types.SiteConfig, readErr error) bool {
 type mcpGateFacts struct {
 	stdio int               // the run's MCP servers that start from a command
 	off   bool              // step 2: mcpOwnSandboxOff
-	kind  types.MachineKind // the run's machine kind, normalized
+	kind  types.MachineKind // the run's machine kind; a container run is "container", as executors advertise it
 	local bool              // the run lands on the local placement
 	kinds []types.MachineKind
 }
@@ -129,7 +129,10 @@ func (s *Server) stepMCPSandbox(f *runFold, _ *foldRecorder) bool {
 // mcpSandboxRefusal is stepMCPSandbox's answer. A local run is refused without a capability read; a remote
 // one reads the deployment's executor once, whose kinds are already intersected across its executors.
 func (s *Server) mcpSandboxRefusal(ctx context.Context, req createRunRequest, place runPlacement, comps runComponents) *runRefusal {
-	facts := mcpGateFacts{kind: types.MachineKind(req.MachineKind).Normalize()}
+	facts := mcpGateFacts{kind: types.MachineKind(req.MachineKind)}
+	if facts.kind == "" {
+		facts.kind = types.MachineContainer // the name an executor advertises in MCPSandboxKinds, not the stored ""
+	}
 	keys, server := mcpServerKeys(comps.attached), ""
 	for i, a := range comps.attached {
 		if a.snapshot.Definition.LocalMCP() {

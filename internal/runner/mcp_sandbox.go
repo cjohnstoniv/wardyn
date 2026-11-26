@@ -247,6 +247,24 @@ func EndSandboxCutAt(ctx context.Context, s ProxyGenerationStopper, ref string, 
 	return err
 }
 
+// LostProxyStopper stops the proxy of a run marked lost but not ended, and keeps its agent with no network,
+// acting for policy generation gen (0: none). ErrEndUnsupported: this run cannot be kept; tear it down.
+// nil only once the proxy is confirmed gone. Any other error leaves containment unresolved, with the agent
+// stopped too if the proxy could not be confirmed gone.
+type LostProxyStopper interface {
+	StopLostProxyAt(ctx context.Context, ref string, gen int) error
+}
+
+// CutLostEgressAt is StopLostProxyAt, then the run's MCP proxies, except when a newer revive owns the run
+// (ErrProxyGenerationNewer).
+func CutLostEgressAt(ctx context.Context, lp LostProxyStopper, ref string, gen int) error {
+	err := lp.StopLostProxyAt(ctx, ref, gen)
+	if !errors.Is(err, ErrProxyGenerationNewer) {
+		stopMCPProxies(ctx, lp, ref)
+	}
+	return err
+}
+
 // stopMCPProxies stops the run's MCP proxies when the receiver can, and logs a failure.
 func stopMCPProxies(ctx context.Context, recv any, ref string) {
 	m, ok := recv.(MCPProxyStopper)

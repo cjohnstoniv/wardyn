@@ -14,6 +14,7 @@ const (
 	reasonMCPSandboxLimit          = "mcp_sandbox_limit"           // the run has more MCP servers that start from a command than mcpSandboxMax
 	reasonMCPSandboxUnknown        = "mcp_sandbox_unknown"         // an MCP proxy's token names no live server row of its run (403), or a grant its row does not hold
 	reasonMCPSandboxHostReachable  = "mcp_sandbox_host_reachable"  // the Docker Engine is older than 28.0.0, so an MCP server's sandbox would have an address on the Docker host (runner.ErrMCPSandboxHostReachable); no setting admits one
+	reasonMCPSandboxApprovalCap    = "mcp_sandbox_approval_cap"    // an MCP server's proxy already holds maxMCPHoldsPerServer egress holds on its run (429)
 	reasonMCPSandboxRunEnded       = "mcp_sandbox_run_ended"       // a Restart or Stop of an MCP server on a run that is not live: ended, lost, kept, containment pending or cut on this replica (409)
 )
 
@@ -28,8 +29,8 @@ const (
 	mcpNarrowerWidensSentence        = "Narrower than the run can only remove access. Edit <server> to remove the extra hosts."
 	mcpReviveOffSentence             = "<server> was not restarted: MCP servers that start from a command are turned off here. End the run, or ask an administrator."
 	mcpReviveLegacySentence          = "<server> was not restarted: it ran inside the agent's sandbox, which this version no longer allows. End the run, then start a new one."
-	// mcpUpstreamProxySentence is the admission refusal on a site with an upstream proxy. It is not yet an
-	// approved template.
+	// mcpUpstreamProxySentence is the admission refusal on a site with an upstream proxy.
+	// PROPOSED: this sentence is not in the approved strings yet; it waits on the owner's review.
 	mcpUpstreamProxySentence = "MCP servers that start from a command can't run here yet: this organisation sends traffic through its own proxy. Use a remote (HTTPS) MCP server, or remove <server>."
 	// mcpSandboxRunEndedSentence (S-ended) and mcpSandboxUnknownSentence (S-unknown) are the run page's answers.
 	mcpSandboxRunEndedSentence = "This server stopped because the run's sandbox stopped."

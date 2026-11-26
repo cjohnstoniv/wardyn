@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,15 @@ func TestMCPHoldApprovalNeverWritesBack(t *testing.T) {
 				t.Fatalf("a workspace.requirement.write row: %+v", ev)
 			}
 		}
+		agent := uuid.New() // control: the agent's own hold for the same host, approved at "", writes it as today
+		h.approvals.byID[agent] = types.ApprovalRequest{ID: agent, RunID: runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"` + host + `"}`), State: types.ApprovalPending}
+		if w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+agent.String()+"/approve", adminToken, ""); w.Code != http.StatusOK {
+			t.Fatalf("approve the agent's hold: %d %s", w.Code, w.Body.String())
+		}
+		if _, ok := fake.ws.Requirements["egress:"+host]; !ok {
+			t.Fatalf("control: requirements = %+v, want egress:%s from the agent's hold", fake.ws.Requirements, host)
+		}
 	})
 }
 
@@ -177,6 +187,28 @@ func TestApprovalRuleSkipsMCPSandboxHold(t *testing.T) {
 	f.srv.runApprovalRules(hold)
 	if got := f.state(id); got != types.ApprovalPending {
 		t.Fatalf("after the rule pass the MCP hold is %s, want PENDING", got)
+	}
+	d := &policyDecider{rule: rule, m: types.ApprovalPolicyMatch{RuleID: rule.ID, RuleName: rule.Name, RuleVersion: rule.Version,
+		Matched: map[string]string{"host": "registry.npmjs.org", "repo": "org/repo"}}}
+	if code, body := f.srv.policyDecide(id, d); code != http.StatusForbidden || !strings.Contains(body, reasonApprovalRuleNotApplicable) {
+		t.Fatalf("a decide sent as the rule = %d %s, want 403 %s", code, body, reasonApprovalRuleNotApplicable)
+	}
+	f.pending(id)
+	seeded, err := f.aps.Request(ctx, types.ApprovalRequest{ID: uuid.New(), RunID: f.run.ID, Kind: types.ApprovalEgressDomain, RequestedScope: json.RawMessage(ruleEgressScope)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, f.srv, http.MethodPost, "/api/v1/governance/approval-rules/dry-run", adminToken, approvalRuleBody)
+	var report approvalRuleReport
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &report) != nil {
+		t.Fatalf("dry run = %d %s", w.Code, w.Body)
+	}
+	shown := map[uuid.UUID]bool{}
+	for _, row := range report.Pending {
+		shown[row.ApprovalID] = true
+	}
+	if shown[id] || !shown[seeded.ID] {
+		t.Fatalf("dry run pending = %+v; want the agent's hold %s and not the MCP hold %s", report.Pending, seeded.ID, id)
 	}
 }
 
@@ -204,5 +236,11 @@ func TestMCPApproveDoesNotUndoAgentDeny(t *testing.T) {
 	skips := f.pending(created.ID)
 	if len(skips) != 1 || skipReason(t, skips[0]) != reasonApprovalRuleHostDenied {
 		t.Fatalf("skip rows = %+v, want one naming %s", skips, reasonApprovalRuleHostDenied)
+	}
+	ap := f.aps.byID[approveID] // control: the same later approve on an agent row undoes the deny, as today
+	ap.RequestedScope = json.RawMessage(ruleEgressScope)
+	f.aps.byID[approveID] = ap
+	if denied, err := f.srv.personDeniedHost(ctx, f.run.ID, host, ""); err != nil || denied {
+		t.Fatalf("control: two agent rows, the later approve: denied %v, %v; want the deny undone", denied, err)
 	}
 }

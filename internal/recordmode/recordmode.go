@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -191,6 +192,12 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 // deny counter and observed-egress promotion read (egress.IsNetworkFault), so one source cannot be
 // a denial to one consumer and not another.
 func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool, confined bool) {
+	// An MCP server's proxy, in its own sandbox, writes these rows too, labelled with the server: what that
+	// server reached, was refused or waited on is never what the agent did, so it is neither observed, nor
+	// promoted, nor counted as caught.
+	if audit.MCPSandboxOfData(ev.Data) != "" {
+		return
+	}
 	var d egressData
 	_ = json.Unmarshal(ev.Data, &d) // best-effort: a malformed body still has Target
 

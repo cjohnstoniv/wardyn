@@ -3024,6 +3024,10 @@ func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string)
 	return nil
 }
 
+func (a *authzApprovals) CountForMCPSandbox(context.Context, uuid.UUID, string) (int, error) {
+	return 0, nil // this fixture raises no MCP server's hold
+}
+
 func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
