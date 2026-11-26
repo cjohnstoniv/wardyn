@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- The VM network relay no longer reads the process-wide DNS resolver setting each time it dials the run's proxy, so a test that swaps that setting no longer races a dial still in flight.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
