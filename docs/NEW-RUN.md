@@ -241,7 +241,7 @@ The `wardyn template` commands are listed in [Run templates](sdk.md#run-template
 - A refusal shows the server's sentence, and what you typed stays.
 - A launch the run's Azure DevOps token refused adds a note. Either connect again with **Connect Azure DevOps**, after which the dialog checks once more, or read that your organisation restricts who can create personal access tokens.
 
-The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds while the run is starting or waiting.
+The Launched screen opens at `?launched=<run id>`. While the run is starting or waiting, the screen updates as soon as the run changes, and also refreshes every 4 seconds.
 
 | Badge | Run state | Shows |
 |---|---|---|
