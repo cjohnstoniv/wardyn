@@ -133,7 +133,8 @@ func (s *Server) mcpReviveRecreates(ctx context.Context, run types.AgentRun, row
 // start, or a kept write that errors, fails that server alone and kills what ran of it; a
 // false keep ends that row (superseded); a cut on this replica at a generation not older than gen ends every
 // row (lost) and stops the phase, as does the phase's bound or a lost lock. An edit's phase that stops early
-// fails closed (failMCPEditRest). The run and the revive's answer are never changed by it. A server the
+// fails closed (failMCPEditRest). A row whose component is gone from the run's snapshot is ended
+// (superseded), as a restart ends it. The run and the revive's answer are never changed by it. A server the
 // dispatch re-check now refuses is not re-created: an edit that narrowed it ends it, as no wider sandbox may
 // keep running.
 func (s *Server) reviveMCPSandboxes(mcpCtx context.Context, run types.AgentRun, gen int, rebooted, edit bool) {
@@ -171,6 +172,9 @@ func (s *Server) reviveMCPSandboxes(mcpCtx context.Context, run types.AgentRun, 
 		}
 		i := slices.IndexFunc(servers, func(m mcpServer) bool { return m.ordinal == row.Ordinal })
 		if i < 0 {
+			if mcpRowUp(row) {
+				s.endMCPSandbox(mcpCtx, run, row, mcpEndReplaced) // its component is gone from the run's snapshot
+			}
 			continue
 		}
 		pol, err := s.mcpPolicyAgain(mcpCtx, b, servers[i], row)

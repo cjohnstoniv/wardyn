@@ -523,3 +523,24 @@ func TestLiveEditStoppedEarlyFailsChangedServers(t *testing.T) {
 		t.Errorf("search sandbox held %v, creates %d: want it killed and only files re-created", held, f.sbx.count("create"))
 	}
 }
+
+// TestReviveEndsErasedComponentsMCPRow: a revive ends the row of a server whose component is gone from the
+// run's snapshot (superseded), as a restart does, rather than leave it running under the policy it was made
+// under.
+func TestReviveEndsErasedComponentsMCPRow(t *testing.T) {
+	f := newMCPReviveFixture(t, true)
+	f.st.comps[1].Erased = true
+	f.revive(t, false, false)
+	if row := f.st.mcpRowsMem.get(1); row.State != store.MCPSandboxStopped || row.LastCause != mcpEndReplaced {
+		t.Fatalf("erased server's row %s (%q), want stopped (superseded)", row.State, row.LastCause)
+	}
+	f.sbx.mu.Lock()
+	held := f.sbx.held[1]
+	f.sbx.mu.Unlock()
+	if held || !f.audit.has(f.run.ID, "run.mcp_sandbox.end", "success") {
+		t.Errorf("sandbox held %v, end row %v: want it killed and its end written", held, f.audit.has(f.run.ID, "run.mcp_sandbox.end", "success"))
+	}
+	if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxReady || f.sbx.count("create") != 2 {
+		t.Errorf("files row %s creates %d: want the live server untouched", row.State, f.sbx.count("create"))
+	}
+}
