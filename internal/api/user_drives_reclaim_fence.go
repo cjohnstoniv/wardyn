@@ -160,3 +160,58 @@ func (s *Server) reclaimFenced(w http.ResponseWriter, r *http.Request, fs store.
 		writeServerError(w, r, "reclaim drive", rerr)
 	}
 }
+
+// driveReclaimFailure is the launch door's refusal of an object a reclaim has claimed, or nil. A store that cannot
+// answer refuses with the unclassed 503, as the runner-unavailable arm does (driveBindFailure). A store without the
+// fence attaches as before; it cannot reclaim either.
+func (s *Server) driveReclaimFailure(ctx context.Context, resolved types.ResolvedDrive) *driveBindFailure {
+	fs, ok := s.cfg.Store.(store.DriveReclaimFenceStore)
+	if !ok || !reclaimableObject(resolved.Drive.Backend) {
+		return nil
+	}
+	fenced, err := fs.DriveReclaimFenced(ctx, resolved.Drive.Backend, resolved.ObjectName)
+	if err != nil {
+		return &driveBindFailure{status: http.StatusServiceUnavailable, member: loggedMsg(ctx, "read the drive's reclaim fence", err)}
+	}
+	if !fenced {
+		return nil
+	}
+	return &driveBindFailure{status: http.StatusConflict, reason: driveRefusalReclaiming,
+		member: "an administrator is reclaiming this drive's storage, so no run can attach it until that finishes",
+		attrs:  []any{slog.String("drive", resolved.Drive.Name), slog.String("object", resolved.ObjectName)}}
+}
+
+// holdReclaimableDrives records the run as a holder of each reclaimable object it mounts and then re-reads the
+// fence, right before the sandbox is created. The hold commits before the fence is read, and a reclaim commits its
+// claim before it reads the holds, so of a run and a reclaim that overlap at least one sees the other. A hold that
+// cannot be written, or a fence that cannot be read, fails the run: a run the reclaim cannot see must not start.
+func (s *Server) holdReclaimableDrives(ctx context.Context, run types.AgentRun, drives []types.DriveMount) bool {
+	fs, ok := s.cfg.Store.(store.DriveReclaimFenceStore)
+	if !ok {
+		return true
+	}
+	for _, d := range drives {
+		if !reclaimableObject(d.Backend) || d.ObjectName == "" {
+			continue
+		}
+		err := fs.HoldDriveObject(ctx, d.Backend, d.ObjectName, run.ID)
+		fenced := false
+		if err == nil {
+			fenced, err = fs.DriveReclaimFenced(ctx, d.Backend, d.ObjectName)
+		}
+		if err == nil && !fenced {
+			continue
+		}
+		reason, hint := driveRefusalReclaiming, "This run was not launched: an administrator is reclaiming the storage of drive "+d.DriveName
+		if err != nil {
+			slog.ErrorContext(ctx, "api: record a run's hold on a drive", slog.String("run_id", run.ID.String()),
+				slog.String("object", d.ObjectName), slog.String("error", err.Error()))
+			reason, hint = reasonInternalError, "This run was not launched: its drive's hold could not be recorded"
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"reason": reason})))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
+		return false
+	}
+	return true
+}

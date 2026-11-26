@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -281,6 +282,67 @@ func TestReclaimFence_ClaimsBeforeTheCallAndSettlesOnConfirmedGone(t *testing.T)
 	})
 }
 
+// TestReclaimFence_LateRemovalKeepsTheObjectFenced: a call whose outcome is not known leaves the object fenced, the
+// launch door refuses it, a second reclaim within a minute makes no call, and a later confirmed gone lifts it.
+func TestReclaimFence_LateRemovalKeepsTheObjectFenced(t *testing.T) {
+	for name, callErr := range map[string]error{
+		"deadline": context.DeadlineExceeded,
+		"daemon":   errors.New("docker: drive: remove volume: daemon unreachable"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := reclaimDrive(nil)
+			rn := &fenceWatchRunner{reclaimRunner: &reclaimRunner{err: callErr}}
+			srv, _, audit := reclaimServer(t, d, nil, rn)
+			f := fenceOf(t, srv)
+			home, object := reclaimObjectOf(t, d)
+
+			if w := reclaimCall(t, srv, d.ID, reclaimBody); w.Code != http.StatusInternalServerError {
+				t.Fatalf("reclaim = %d, want 500: %s", w.Code, w.Body.String())
+			}
+			if _, data := reclaimRow(t, audit); data["outcome"] != driveReclaimOutcomeFailed {
+				t.Errorf("audit row = %v, want outcome failed", data)
+			}
+			if fenced, issues := f.state(d.Backend, object); !fenced || issues != 1 {
+				t.Fatalf("after the late removal: fenced %v issues %d, want true 1", fenced, issues)
+			}
+
+			resolved := types.ResolvedDrive{Drive: d, Tier: types.CapabilitySubjectUser, HomeName: home,
+				SubjectHash: types.DriveSubjectHash(reclaimSubject), ObjectName: object, SizeMiB: d.SizeMiB, Writable: true}
+			mount := func() (*httptest.ResponseRecorder, bool) {
+				rec := httptest.NewRecorder()
+				_, ok := srv.driveMountFor(context.Background(), rec, runDrive{resolved: resolved, target: runner.DriveTarget}, drivePlace{})
+				return rec, ok
+			}
+			rec, ok := mount()
+			if ok {
+				t.Fatal("driveMountFor attached an object a reclaim left fenced")
+			}
+			if reason, msg := errReason(t, rec.Body.Bytes()); rec.Code != http.StatusConflict || reason != driveRefusalReclaiming ||
+				!strings.HasPrefix(msg, "drive: an administrator is reclaiming") {
+				t.Errorf("door = %d %q %q, want 409 %s", rec.Code, reason, msg, driveRefusalReclaiming)
+			}
+
+			if w := reclaimCall(t, srv, d.ID, reclaimBody); w.Code != http.StatusConflict || len(rn.calls) != 1 {
+				t.Errorf("a second reclaim right away = %d with %d calls, want 409 and still 1: %s", w.Code, len(rn.calls), w.Body.String())
+			}
+
+			f.mu.Lock()
+			f.now = f.now.Add(61 * time.Second)
+			f.mu.Unlock()
+			rn.err, rn.outcome = nil, runner.DriveReclaimAlreadyAbsent
+			if w := reclaimCall(t, srv, d.ID, reclaimBody); w.Code != http.StatusOK {
+				t.Fatalf("a reclaim after a minute = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			if fenced, _ := f.state(d.Backend, object); fenced {
+				t.Error("already_absent left the object fenced")
+			}
+			if rec, ok := mount(); !ok {
+				t.Errorf("driveMountFor after the fence lifted = %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 // TestReclaimFence_RefusalsSettleTheClaim: each refusal before or at the call settles the claim exactly as far as
 // what it proved, and a settle that fails leaves the object fenced and answers so.
 func TestReclaimFence_RefusalsSettleTheClaim(t *testing.T) {
@@ -398,5 +460,121 @@ func TestReclaimFence_AnotherPersonsLiveRunHoldsTheObject(t *testing.T) {
 		case !held && (w.Code != http.StatusOK || len(rn.calls) != 1):
 			t.Errorf("no hold: reclaim = %d with %d calls, want 200 and 1: %s", w.Code, len(rn.calls), w.Body.String())
 		}
+	}
+}
+
+// dispatchFencedStore is the dispatch test store that also carries the fence.
+type dispatchFencedStore struct {
+	*dispatchTestStore
+	*reclaimFenceFake
+}
+
+// TestDispatch_ReclaimFenceFailsARunWhoseObjectIsClaimed: right before the sandbox is created, dispatch records the
+// run's hold on each reclaimable object and then re-reads the fence; a fenced object, or a hold that cannot be
+// written, fails the run.
+func TestDispatch_ReclaimFenceFailsARunWhoseObjectIsClaimed(t *testing.T) {
+	volume := func() *types.DriveMount {
+		return &types.DriveMount{Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-corp-nas-abc", DriveName: "Corp NAS",
+			HomeName: "abc", Target: runner.DriveTarget, SizeMiB: 10240}
+	}
+	for _, tc := range []struct {
+		name       string
+		drive      *types.DriveMount
+		fenced     bool
+		holdErr    error
+		creates    int
+		reason     string
+		steps      []string
+		wantHolder bool
+	}{
+		{name: "a fenced volume", drive: volume(), fenced: true, reason: driveRefusalReclaiming, steps: []string{"hold", "fenced"}, wantHolder: true},
+		{name: "an unfenced volume", drive: volume(), creates: 1, steps: []string{"hold", "fenced"}, wantHolder: true},
+		{name: "a share", drive: dispatchDrive(false), creates: 1},
+		{name: "the hold cannot be written", drive: volume(), holdErr: errors.New("store: hold drive reclaim: conn reset"),
+			reason: reasonInternalError, steps: []string{"hold"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := &fakeRunner{}
+			srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
+			f := newReclaimFenceFake()
+			f.holdErr = tc.holdErr
+			if tc.fenced {
+				f.fence(tc.drive.Backend, tc.drive.ObjectName)
+			}
+			srv.cfg.Store = &dispatchFencedStore{dispatchTestStore: st, reclaimFenceFake: f}
+			run.Task = ""
+			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+				RunToken: "run-token", Image: "wardyn/claude-code:latest",
+				Drives: driveList(tc.drive),
+			})
+
+			if fr.createCalls != tc.creates {
+				t.Fatalf("createCalls = %d, want %d; events: %s", fr.createCalls, tc.creates, auditDump(audit.events, run.ID))
+			}
+			if !slices.Equal(f.stepLog(), tc.steps) {
+				t.Errorf("fence steps = %v, want %v", f.stepLog(), tc.steps)
+			}
+			if got := slices.Contains(f.holds[reclaimFenceKey{tc.drive.Backend, tc.drive.ObjectName}], run.ID); got != tc.wantHolder {
+				t.Errorf("hold recorded = %v, want %v", got, tc.wantHolder)
+			}
+			if tc.reason == "" {
+				return
+			}
+			if st.State() != types.RunFailed {
+				t.Errorf("state = %s, want FAILED", st.State())
+			}
+			if tc.reason == driveRefusalReclaiming && !strings.Contains(st.FailureHint(), tc.drive.DriveName) {
+				t.Errorf("failure hint = %q, want the drive named", st.FailureHint())
+			}
+			ev := findAudit(audit.events, run.ID, "run.create", "failure")
+			if ev == nil || !strings.Contains(string(ev.Data), `"reason":"`+tc.reason+`"`) {
+				t.Errorf("no run.create failure with reason %s; events: %s", tc.reason, auditDump(audit.events, run.ID))
+			}
+		})
+	}
+}
+
+// TestDriveMountFor_ReclaimFenceReadFailsClosed: a fence that cannot be read refuses at the door, a fenced provisioned
+// claim is refused like a volume, and a share is never checked.
+func TestDriveMountFor_ReclaimFenceReadFailsClosed(t *testing.T) {
+	mountOn := func(target string, d types.UserDrive, f *reclaimFenceFake) (*httptest.ResponseRecorder, bool) {
+		t.Helper()
+		st := newDriveCRUDStore()
+		srv := New(Config{BaseCtx: testBaseCtx(t), Store: &reclaimFencedStore{driveCRUDStore: st, reclaimFenceFake: f}, RunnerTarget: target, LocalMode: true})
+		resolved := types.ResolvedDrive{Drive: d, Tier: types.CapabilitySubjectUser, HomeName: "abc", ObjectName: "wardyn-drive-abc",
+			SizeMiB: d.SizeMiB, Writable: true}
+		if d.Backend == types.DriveBackendHostPath {
+			resolved.ObjectName = d.HostRoot + "/abc"
+			if fail := srv.driveReclaimFailure(context.Background(), resolved); fail != nil {
+				t.Errorf("a share was refused by the reclaim fence: %+v", fail)
+			}
+		}
+		rec := httptest.NewRecorder()
+		_, ok := srv.driveMountFor(context.Background(), rec, runDrive{resolved: resolved, target: runner.DriveTarget}, drivePlace{})
+		return rec, ok
+	}
+
+	f := newReclaimFenceFake()
+	f.fencedErr = errors.New("store: read drive reclaim: conn reset")
+	if rec, ok := mountOn("docker", reclaimDrive(nil), f); ok || rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a fence read that fails = %d (ok %v), want 503", rec.Code, ok)
+	}
+
+	f = newReclaimFenceFake()
+	f.fence(types.DriveBackendK8sPVC, "wardyn-drive-abc")
+	pvc := reclaimDrive(func(d *types.UserDrive) { d.Backend = types.DriveBackendK8sPVC })
+	rec, ok := mountOn("k8s", pvc, f)
+	if reason, _ := errReason(t, rec.Body.Bytes()); ok || rec.Code != http.StatusConflict || reason != driveRefusalReclaiming {
+		t.Errorf("a fenced claim on Kubernetes = %d %q (ok %v), want 409 %s", rec.Code, reason, ok, driveRefusalReclaiming)
+	}
+
+	f = newReclaimFenceFake()
+	share := reclaimDrive(func(d *types.UserDrive) {
+		d.Backend, d.HostRoot, d.Reclaim = types.DriveBackendHostPath, t.TempDir(), types.DriveReclaimRetain
+	})
+	f.fence(types.DriveBackendHostPath, share.HostRoot+"/abc")
+	_, _ = mountOn("docker", share, f)
+	if slices.Contains(f.stepLog(), "fenced") {
+		t.Errorf("a share's mount read the reclaim fence: %v", f.stepLog())
 	}
 }
