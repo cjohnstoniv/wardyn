@@ -44,6 +44,11 @@ type mcpPolicyBase struct {
 	ungoverned bool
 }
 
+// denies is what every mode's finish unions in: the ceiling's own denies and the run's (P_run's, a live
+// egress edit's included once the edit's revive keeps them). A deny only narrows, so "own" takes the run's as
+// "same" and "narrower" already copy them, and an edit that denies a host changes every server's digest.
+func (b mcpPolicyBase) denies() []string { return slices.Concat(b.deny, b.run.DeniedDomains) }
+
 // mcpPolicy is one server's MCP sandbox policy.
 type mcpPolicy struct {
 	mode string
@@ -131,8 +136,9 @@ func (s *Server) mcpOwnPolicy(ctx context.Context, b mcpPolicyBase, authored typ
 }
 
 // mcpPolicyFinish is every mode's last step, in this order: the seal against the run's outer layers (the last
-// step that can narrow what a widening step added), the ceiling's own denies (reassertCeilingDenies' union;
-// the server's own secrets are withheld against the same list where dispatch assembles them), the deny list
+// step that can narrow what a widening step added), the denies it is given (mcpPolicyBase.denies, in
+// reassertCeilingDenies' union; the server's own secrets are withheld against the ceiling's where dispatch
+// assembles them), the deny list
 // spelled and ordered as the seal's meet spells it, every host rule with effect hold made deny (copied from
 // the run, appended by the clamp from its ceiling, or carried in by a layer through the seal), then one
 // types.AppendHostRuleSets over the result, so two sets the rewrite made equal collapse into one. Run again
@@ -250,7 +256,7 @@ func (s *Server) mcpSandboxPolicy(ctx context.Context, b mcpPolicyBase, i int) (
 	}
 	out.spec = mcpOnlyKnobs(out.spec, b.run)
 	out.spec.Resources = mcpSandboxResources(authored, bound, b.ceiling.Limits)
-	out.holds = mcpPolicyFinish(&out.spec, b.layers, b.deny)
+	out.holds = mcpPolicyFinish(&out.spec, b.layers, b.denies())
 	return out, nil
 }
 

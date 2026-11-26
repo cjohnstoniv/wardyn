@@ -114,8 +114,8 @@ func mcpReviveWriteContext(mcpCtx context.Context) (context.Context, context.Can
 
 // mcpReviveRecreates reports whether a revive re-creates row: a rebooted revive, a changed policy digest, or a
 // row not ready with a live sandbox. A live egress edit is not a revive: it re-creates only a row that is up
-// and whose digest changed, so every "same" or "narrower" server whose run egress the edit changed (each
-// copies the run's), and never an "own" server for a run deny, which its own policy does not take.
+// and whose digest changed: every "same" or "narrower" server whose run egress the edit changed (each copies
+// the run's), and every server, "own" included, whose policy an edit's deny narrowed (mcpPolicyBase.denies).
 func (s *Server) mcpReviveRecreates(ctx context.Context, run types.AgentRun, row store.RunMCPSandbox, digest string, rebooted, edit bool) bool {
 	changed := digest != row.PolicyDigest
 	if edit {
@@ -125,8 +125,9 @@ func (s *Server) mcpReviveRecreates(ctx context.Context, run types.AgentRun, row
 }
 
 // reviveMCPSandboxes is a revive's MCP phase, once the revive has succeeded and recorded it: each
-// server's policy derived again with the run's live deny set (liveWithholding's) unioned in for every mode,
-// "own" included, which only narrows, and each row mcpReviveRecreates
+// server's policy derived again with the live denies unioned in for every mode, "own" included, which only
+// narrows: liveWithholding's and the run's kept policy's, a live edit's among them (mcpPolicyBase.denies), and
+// each row mcpReviveRecreates
 // names killed, reopened to starting only while it is as read at the phase start and the run is live, created
 // and started, and kept starting for the watcher's settle. A false reopen skips that row; a reopen that
 // errors stops the phase; a policy it cannot derive again, a sandbox it cannot prepare, a failed create or

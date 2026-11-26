@@ -164,7 +164,7 @@ func (s *Server) mcpPolicyAgain(ctx context.Context, b mcpPolicyBase, srv mcpSer
 	}
 	out := mcpPolicy{mode: types.ComponentMCPSandboxOwn, spec: mcpOnlyKnobs(cfg.Policy, b.run)}
 	out.spec.Resources = mcpSandboxResources(cfg.Policy.Resources, cfg.Policy.Resources, b.ceiling.Limits)
-	out.holds = mcpPolicyFinish(&out.spec, b.layers, b.deny)
+	out.holds = mcpPolicyFinish(&out.spec, b.layers, b.denies())
 	return out, nil
 }
 
