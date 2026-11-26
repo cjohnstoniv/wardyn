@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -25,13 +26,26 @@ import (
 func withholdUnboundDispatchInjections(policy *types.RunPolicySpec, p dispatchParams, injections *[]runner.InjectionGrant) (unbound []runner.InjectionGrant) {
 	bound := proxy.CompilePolicy(sidecarPolicy(*policy, p)).AllowedExactHost
 	*injections = slices.DeleteFunc(slices.Clone(*injections), func(in runner.InjectionGrant) bool {
-		if bound(strings.TrimSpace(in.Rule.Host)) || brokeredMCPRule(p.Components.MCP, in.Rule.Host) { // as buildInjectorFor reads it
+		if bound(strings.TrimSpace(in.Rule.Host)) || brokeredMCPRule(p.Components.MCP, in.Rule.Host) || // as buildInjectorFor reads it
+			sandboxedMCPRule(p.Components.MCP, in.Rule) {
 			return false
 		}
 		unbound = append(unbound, in)
 		return true
 	})
 	return unbound
+}
+
+// sandboxedMCPRule reports whether rule is a header secret of a server that starts from a command: the one
+// takeMCPServerSecrets moves off the agent, after this check, to the server's own sandbox. Its host is one of
+// the server's own hosts, which never join the agent's allowlist (rawEgressHosts), so the agent's policy is
+// not the one to bind it. It pairs them by host and secret name, as the take does.
+func sandboxedMCPRule(servers []componentMCP, rule egress.InjectionRule) bool {
+	return slices.ContainsFunc(servers, func(m componentMCP) bool {
+		return m.Launch != nil && slices.ContainsFunc(m.Headers, func(sec types.ComponentSecret) bool {
+			return hostEqual(rule.Host, sec.Delivery.Host) && rule.SecretName == sec.SecretName
+		})
+	})
 }
 
 // hostsOfInjections is the hosts of ins, in order.

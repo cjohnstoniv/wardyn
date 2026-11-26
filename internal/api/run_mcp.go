@@ -238,6 +238,9 @@ type componentMCP struct {
 	// EnvNames is a local server's own variables: its env secrets' and its
 	// config's names.
 	EnvNames []string
+	// Headers is a local server's header secrets: each injection of one is its own sandbox's
+	// (takeMCPServerSecrets), never the agent's (sandboxedMCPRule).
+	Headers []types.ComponentSecret
 	// GatewayAudience and GatewayUID are an organisation's remote server's: the audience of the
 	// identity token its route sends, and the component and version that route is sealed against.
 	GatewayAudience, GatewayUID string

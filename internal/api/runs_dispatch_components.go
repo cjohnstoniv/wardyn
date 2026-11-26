@@ -110,8 +110,14 @@ func (c runComponents) dispatch() componentDispatch {
 			}
 			d.MCP = append(d.MCP, m)
 		case def.LocalMCP():
-			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], Harnesses: a.snapshot.MCPHarnesses,
-				Launch: def.MCP.Launch, EnvNames: componentEnvNames(def)})
+			m := componentMCP{Ordinal: row, Key: keys[i], Harnesses: a.snapshot.MCPHarnesses,
+				Launch: def.MCP.Launch, EnvNames: componentEnvNames(def)}
+			for _, sec := range def.Secrets {
+				if sec.Delivery.Mode == types.ComponentDeliveryHeader {
+					m.Headers = append(m.Headers, sec)
+				}
+			}
+			d.MCP = append(d.MCP, m)
 			continue // its header hosts and its config are its own sandbox's, never the agent's
 		}
 		for _, sec := range def.Secrets {
