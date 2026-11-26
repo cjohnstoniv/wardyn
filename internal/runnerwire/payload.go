@@ -56,6 +56,10 @@ type (
 		// runner ignores them.
 		PerRunCPUMillis int64 `json:"per_run_cpu_millis,omitempty"`
 		PerRunMemoryMiB int64 `json:"per_run_memory_mib,omitempty"`
+		// DeviceCert says the organisation has an MDM device CA set, so a Mac runner presents its MDM device
+		// identities (EventDeviceCert). Re-sent on every connect; absent or false (no CA, or an older
+		// organisation) means the runner reads no keychain; an older runner ignores it.
+		DeviceCert bool `json:"device_cert,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {

@@ -523,8 +523,8 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if !extra.noPosture {
 		reporter = posture.NewReporter()
 	}
-	// A Mac presents the MDM device identities its helper reads from the System keychain; with no helper
-	// beside this runner (no macOS VM support) it presents nothing.
+	// A Mac presents the MDM device identities its helper reads from the System keychain, only while the
+	// organisation asks (hooks.DeviceCert); with no helper beside this runner (no macOS VM support) it presents nothing.
 	var deviceCerts *posture.DeviceCertSender
 	if runtime.GOOS == "darwin" {
 		if helper, err := macVMHelperPath(); err == nil {
@@ -615,6 +615,8 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		LocalAttach: local.Set,
 		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
 		PerRunLimits: extra.macOSVM.setPerRunLimits,
+		// Whether the organisation has an MDM device CA set, on every connect: a Mac reads its keychain only then.
+		DeviceCert: deviceCerts.SetWanted,
 		StreamOffline: func(peer *runnerwire.Peer) {
 			caps.online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)

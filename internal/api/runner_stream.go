@@ -275,6 +275,19 @@ func (s *Server) runnerLocalAttach(rn types.Runner) bool {
 	return s.cfg.AttachLocal && rn.OwnerKind == types.RunnerOwnerPerson
 }
 
+// runnerDeviceCertWanted is the hub's DeviceCert answer: whether an MDM device CA is stored, read as the macOS
+// placement gate reads it (mdmDeviceVerdictFor). A Mac runner reads its keychain only while this is true.
+func (s *Server) runnerDeviceCertWanted(ctx context.Context) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, errRunnersConfigUnavailable
+	}
+	cfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	return runnerSettingsOf(cfg).MDMDeviceCAPEM != "", nil
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
@@ -314,6 +327,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		}
 		if cfg.LocalAttach == nil {
 			cfg.LocalAttach = s.runnerLocalAttach
+		}
+		if cfg.DeviceCert == nil {
+			cfg.DeviceCert = s.runnerDeviceCertWanted
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside

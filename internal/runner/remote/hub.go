@@ -83,6 +83,11 @@ type HubConfig struct {
 	// LocalAttach, when set, says whether AUTH_OK tells a claimed runner the organisation allows local
 	// attach (runnerwire.AuthOK.LocalAttach). Nil says false.
 	LocalAttach func(types.Runner) bool
+	// DeviceCert, when set, says whether the organisation has an MDM device CA set. AUTH_OK tells every claimed
+	// runner (runnerwire.AuthOK.DeviceCert), and the stored-row recheck asks once for all live sessions and ends a
+	// Mac's session (posture OS darwin) whose AUTH_OK said otherwise, so a CA set or cleared through any replica
+	// reaches it within one recheck. Nil, or an error, says false in AUTH_OK and ends no session.
+	DeviceCert func(context.Context) (bool, error)
 }
 
 type hubSession struct {
@@ -102,6 +107,9 @@ type hubSession struct {
 	// perRun is the per-run pair the session's AUTH_OK carried, which recheck compares with the stored
 	// row: a limits change committed through another replica ends the session. Nil before the first AUTH_OK.
 	perRun atomic.Pointer[perRunLimits]
+	// deviceCert is the device_cert answer the session's AUTH_OK carried, which recheck compares with the
+	// organisation's answer now. Nil before the first AUTH_OK.
+	deviceCert atomic.Pointer[bool]
 	// activityPeer is the peer a current-activity check has verified under mu, set while that check
 	// holds mu across its store lookups: Online reads it instead of reading the held mu as a session
 	// in transition. Nil whenever no check runs.
@@ -352,6 +360,7 @@ func (h *Hub) recheckAll(ctx context.Context) bool {
 		return true
 	}
 	disabled := h.cfg.Disabled != nil && h.cfg.Disabled(rctx)
+	deviceCert := h.deviceCertAnswer(rctx)
 	inactive := h.inactiveOf(rctx, rows)
 	for peer, ls := range live {
 		row, ok := rows[ls.id]
@@ -360,7 +369,7 @@ func (h *Hub) recheckAll(ctx context.Context) bool {
 		}
 		go func() { // on ctx, not rctx: the tick's reads end with the tick, an action may outlast it
 			defer h.releaseRecheck(peer)
-			h.recheckRow(ctx, ls.id, ls.s, peer, row, inactive[ls.id], disabled)
+			h.recheckRow(ctx, ls.id, ls.s, peer, row, inactive[ls.id], disabled, deviceCert)
 		}()
 	}
 	return true
@@ -447,10 +456,11 @@ func (h *Hub) inactiveOf(ctx context.Context, rows map[uuid.UUID]types.Runner) m
 }
 
 // recheckRow ends one live session as its stored row current says: with REVOKED once the row is revoked, and
-// with GOAWAY once its owner is inactive, runners are switched off, or its per-run limits differ from the pair
-// peer's AUTH_OK carried. The store already refuses a revoked runner's writes, so this only bounds the
-// session's lifetime.
-func (h *Hub) recheckRow(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer, current types.Runner, inactive, disabled bool) {
+// with GOAWAY once its owner is inactive, runners are switched off, its per-run limits differ from the pair
+// peer's AUTH_OK carried, or, on a Mac, deviceCert (the organisation's answer this tick, nil when unread) differs
+// from the device_cert answer that AUTH_OK carried. The store already refuses a revoked runner's writes, so this
+// only bounds the session's lifetime.
+func (h *Hub) recheckRow(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer, current types.Runner, inactive, disabled bool, deviceCert *bool) {
 	if current.ID != id {
 		return
 	}
@@ -460,8 +470,10 @@ func (h *Hub) recheckRow(ctx context.Context, id uuid.UUID, s *hubSession, peer 
 	case inactive || disabled:
 		_ = h.Goaway(ctx, id)
 	default:
-		if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
-			// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
+		limits, cert := s.perRun.Load(), s.deviceCert.Load()
+		// Each is what the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
+		if (limits != nil && *limits != perRunOf(current)) ||
+			(current.Posture.OS == "darwin" && deviceCert != nil && cert != nil && *cert != *deviceCert) {
 			_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
 		}
 	}
@@ -517,8 +529,10 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		}
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
-	h.orgChoices(&ok, current)
+	h.orgChoices(ctx, &ok, current)
 	s.perRun.Store(&perRunLimits{ok.PerRunCPUMillis, ok.PerRunMemoryMiB})
+	sentCert := ok.DeviceCert
+	s.deviceCert.Store(&sentCert)
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
 	}
@@ -762,7 +776,7 @@ func (h *Hub) Close() {
 }
 
 // orgChoices fills the fields of AUTH_OK the organisation chooses for the claimed runner current.
-func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
+func (h *Hub) orgChoices(ctx context.Context, ok *runnerwire.AuthOK, current types.Runner) {
 	if h.cfg.ProxyImage != nil {
 		ok.ProxyImage = h.cfg.ProxyImage(current)
 	}
@@ -771,4 +785,20 @@ func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
 	}
 	p := perRunOf(current)
 	ok.PerRunCPUMillis, ok.PerRunMemoryMiB = p.cpuMillis, p.memoryMiB
+	if on := h.deviceCertAnswer(ctx); on != nil {
+		ok.DeviceCert = *on
+	}
+}
+
+// deviceCertAnswer is DeviceCert's answer, nil when none is set or it could not be read: AUTH_OK then says no, and
+// the recheck ends no session on it.
+func (h *Hub) deviceCertAnswer(ctx context.Context) *bool {
+	if h.cfg.DeviceCert == nil {
+		return nil
+	}
+	on, err := h.cfg.DeviceCert(ctx)
+	if err != nil {
+		return nil
+	}
+	return &on
 }

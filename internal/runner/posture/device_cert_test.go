@@ -51,6 +51,7 @@ func TestDeviceCertSender_SendsAtStartAndReconnect(t *testing.T) {
 		seen.dir, seen.org, seen.at = dir, org, at
 		return want, nil
 	}, "/state", strings.Repeat("a", 64), func() time.Time { return certNow }, time.Hour)
+	s.SetWanted(true)
 	if err := s.Send(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +74,7 @@ func TestDeviceCert_AHelperFailureSendsNothing(t *testing.T) {
 	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
 		return runnerwire.DeviceCertReport{}, errors.New("no keychain")
 	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	s.SetWanted(true)
 	if err := s.Send(t.Context(), run); err == nil {
 		t.Fatal("want the helper's error")
 	}
@@ -90,6 +92,7 @@ func TestDeviceCert_WatchPresentsAgainEveryInterval(t *testing.T) {
 		n.Add(1)
 		return runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{}}, nil
 	}, "/state", strings.Repeat("a", 64), time.Now, 5*time.Millisecond)
+	s.SetWanted(true)
 	go s.Watch(run)
 	go s.Watch(run) // a second watcher of the same session does nothing
 	for i := 0; i < 3; i++ {
@@ -160,6 +163,7 @@ func TestDeviceCertSender_RefusedAckStops(t *testing.T) {
 		calls.Add(1)
 		return runnerwire.DeviceCertReport{}, nil
 	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	s.SetWanted(true)
 	var acks atomic.Int32
 	s.ack = func(context.Context, *runnerwire.Peer, runnerwire.Event) error {
 		acks.Add(1)
@@ -186,6 +190,7 @@ func TestDeviceCertSender_WatchSendsAtOnce(t *testing.T) {
 	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
 		return runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{}}, nil
 	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	s.SetWanted(true)
 	go s.Watch(run)
 	select {
 	case <-got:
@@ -211,6 +216,7 @@ func TestDeviceCertSender_TrimsAnOversizeReportAndKeepsSending(t *testing.T) {
 	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
 		return runnerwire.DeviceCertReport{Proofs: proofs}, nil
 	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	s.SetWanted(true)
 	s.ack = func(ctx context.Context, p *runnerwire.Peer, ev runnerwire.Event) error {
 		sizes = append(sizes, len(ev.Data))
 		return p.EventAck(ctx, ev)
@@ -345,6 +351,7 @@ func TestDeviceCertSender_WatchEndsWithThePeer(t *testing.T) {
 		<-ctx.Done()
 		return runnerwire.DeviceCertReport{}, ctx.Err()
 	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	s.SetWanted(true)
 	done := make(chan struct{})
 	go func() { s.Watch(run); close(done) }()
 	select {
@@ -358,4 +365,117 @@ func TestDeviceCertSender_WatchEndsWithThePeer(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Watch kept waiting on the helper after the peer ended")
 	}
+}
+
+// countingSender is a sender whose helper counts its runs and reports no identities.
+func countingSender(every time.Duration) (*DeviceCertSender, *atomic.Int32) {
+	n := new(atomic.Int32)
+	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
+		n.Add(1)
+		return runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{}}, nil
+	}, "/state", strings.Repeat("a", 64), time.Now, every)
+	return s, n
+}
+
+// With no MDM device CA set the helper never runs and nothing is sent, at the session's start or at any tick:
+// whether the organisation's AUTH_OK said no or, as an organisation older than the ask does, said nothing.
+func TestDeviceCertSender_NoCANeverRunsTheHelper(t *testing.T) {
+	for _, told := range []bool{false, true} {
+		run, got := deviceCertPeers(t)
+		s, n := countingSender(5 * time.Millisecond)
+		if told {
+			s.SetWanted(false)
+		}
+		if err := s.Send(t.Context(), run); err != nil {
+			t.Fatal(err)
+		}
+		go s.Watch(run)
+		select {
+		case r := <-got:
+			t.Fatalf("told=%v: sent %+v with no CA set", told, r)
+		case <-time.After(100 * time.Millisecond): // about 20 ticks
+		}
+		if c := n.Load(); c != 0 {
+			t.Fatalf("told=%v: the helper ran %d times with no CA set", told, c)
+		}
+	}
+}
+
+// With a CA set the helper runs at once and its report goes out.
+func TestDeviceCertSender_CASetRunsTheHelper(t *testing.T) {
+	run, got := deviceCertPeers(t)
+	s, n := countingSender(time.Hour)
+	s.SetWanted(true)
+	go s.Watch(run)
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no report with a CA set")
+	}
+	if c := n.Load(); c != 1 {
+		t.Fatalf("the helper ran %d times, want 1", c)
+	}
+}
+
+// A CA set while a session is up is presented at that session's next tick, a CA cleared stops the helper from the
+// tick after, and the session after a reconnect (the organisation ends a Mac's session when its answer changes)
+// presents at once. The helper reports each run and waits to be released, so no assertion rests on how fast the
+// ticker or the scheduler runs; each check that the helper did not run can only pass late, never fail early.
+func TestDeviceCertSender_ACASetMidSessionIsPresentedAtTheNextTick(t *testing.T) {
+	run, _ := deviceCertPeers(t)
+	calls, release := make(chan struct{}), make(chan struct{})
+	s := newDeviceCertSender(func(ctx context.Context, _, _ string, _ time.Time) (runnerwire.DeviceCertReport, error) {
+		select {
+		case calls <- struct{}{}:
+		case <-ctx.Done():
+			return runnerwire.DeviceCertReport{}, ctx.Err()
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return runnerwire.DeviceCertReport{}, ctx.Err()
+		}
+		return runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{}}, nil
+	}, "/state", strings.Repeat("a", 64), time.Now, time.Millisecond)
+	watched := make(chan struct{})
+	go func() { s.Watch(run); close(watched) }()
+	select {
+	case <-calls:
+		t.Fatal("the helper ran before the CA was set")
+	case <-time.After(50 * time.Millisecond): // many ticks with no CA set
+	}
+	s.SetWanted(true)
+	select {
+	case <-calls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no tick after the CA was set ran the helper")
+	}
+	// The run in flight read the flag before it was cleared; every later tick reads it after the release.
+	s.SetWanted(false)
+	release <- struct{}{}
+	select {
+	case <-calls:
+		t.Fatal("the helper ran after the CA was cleared")
+	case <-time.After(50 * time.Millisecond):
+	}
+	run.Close() // the session ends, as at the organisation's GOAWAY
+	<-watched
+	again, _ := deviceCertPeers(t)
+	s.SetWanted(true)
+	go s.Watch(again)
+	select {
+	case <-calls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session after a reconnect with a CA set did not run the helper")
+	}
+	s.SetWanted(false)
+	release <- struct{}{}
+}
+
+// A runner with no helper has no sender, and the hook it is wired to ignores the organisation's answer.
+func TestDeviceCertSender_SetWantedOnNoSenderIsANoOp(t *testing.T) {
+	var s *DeviceCertSender
+	hook := s.SetWanted
+	hook(true)
+	hook(false)
 }
