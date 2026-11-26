@@ -735,7 +735,7 @@ func setMCPRelay(spec *runner.SandboxSpec, key, addr, token string) bool {
 
 // mcpAgentSpecLeak names the first way the agent's spec holds one of a server's own secrets: a secret
 // variable's or file's name, or any secret's value, in its env, its secret env or its managed files. ""
-// when it holds none (DESIGN §3, I5 c).
+// when it holds none (I5 c).
 func mcpAgentSpecLeak(spec runner.SandboxSpec, servers []mcpServer, own []mcpOwn) string {
 	for i := range own {
 		for name := range own[i].secretEnv {

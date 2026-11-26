@@ -366,6 +366,7 @@ var governSiteElsewhere = map[string]string{
 	"conventionImageAdmission":  "test: run_image_pin_test.go",
 	"macOSBaseAllowedFor":       "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 	"ownerExemptAsAdmin":        "test: component_grant_withdrawn_test.go",
+	"mcpPolicyBaseAt":           "none: an own-mode MCP server's ceiling read at dispatch, no switch-on test",
 }
 
 // runUngovernedCallers is every function in dir's non-test sources that calls

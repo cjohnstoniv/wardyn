@@ -22,7 +22,7 @@ import (
 // revive, and by any revive when its row is not ready with a live sandbox (every row a loss ended): that
 // revive meets the dispatch re-check, the switch and the organisation's setting (a site config that cannot be
 // read reads as off), the site's upstream proxy and the runner's MCP sandbox kinds, and is refused naming the
-// server (D6). A live egress edit is not a revive and is never refused here: its MCP phase ends a server it
+// server. A live egress edit is not a revive and is never refused here: its MCP phase ends a server it
 // cannot re-create.
 func (s *Server) reviveMCPSandboxRefusal(ctx context.Context, run types.AgentRun, rebooted, edit bool, actorType types.ActorType, actor string) *reviveError {
 	if edit {
@@ -118,7 +118,7 @@ func (s *Server) mcpReviveRecreates(ctx context.Context, run types.AgentRun, row
 	return rebooted || changed || !s.mcpRowLive(ctx, run, row)
 }
 
-// reviveMCPSandboxes is a revive's MCP phase (D4-5), once the revive has succeeded and recorded it: each
+// reviveMCPSandboxes is a revive's MCP phase, once the revive has succeeded and recorded it: each
 // server's policy derived again with the current denies (only narrowing), and each row mcpReviveRecreates
 // names killed, reopened to starting only while it is as read at the phase start and the run is live, created
 // and started, and kept starting for the watcher's settle. A false reopen skips that row; a reopen that

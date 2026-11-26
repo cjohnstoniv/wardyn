@@ -388,7 +388,7 @@ func TestDispatchReturnLeavesNoMCPSandbox(t *testing.T) {
 	f.assertRowsEnded(t)
 }
 
-// TestKillDuringMCPCreateLeavesNoSandbox (I8, D4-3): a kill while the server is being created: its row never
+// TestKillDuringMCPCreateLeavesNoSandbox (I8): a kill while the server is being created: its row never
 // moves to ready, what was started is killed, and no sandbox, the agent's or the server's, is left.
 func TestKillDuringMCPCreateLeavesNoSandbox(t *testing.T) {
 	f := newMCPDispatchFixture(t)

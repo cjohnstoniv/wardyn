@@ -55,7 +55,7 @@ func (f *mcpDispatchFixture) lastMCPSpec() runner.MCPSandboxSpec {
 	return f.sbx.specs[len(f.sbx.specs)-1]
 }
 
-// TestMCPWatcherRestartsCrashedServer (D4-3, D4-4): a dead sandbox of a live run is restarted with a fresh
+// TestMCPWatcherRestartsCrashedServer: a dead sandbox of a live run is restarted with a fresh
 // MCP-audience token, the old one kept until the grace, on the same relay token and rank, so the agent's proxy
 // reaches it at its pinned address; the row is ready again and counts one restart.
 func TestMCPWatcherRestartsCrashedServer(t *testing.T) {
@@ -250,7 +250,7 @@ func TestMCPWatcherNoRestartAfterCut(t *testing.T) {
 	})
 }
 
-// TestMCPRestartAfterRenewResolvesItsGrant (D4-4): after a renew rotated the token, a restart mints a fresh
+// TestMCPRestartAfterRenewResolvesItsGrant: after a renew rotated the token, a restart mints a fresh
 // one, keeps the renewed one as the previous until the grace, and the new proxy's header injection still
 // names the grant the row holds, so its resolve is served.
 func TestMCPRestartAfterRenewResolvesItsGrant(t *testing.T) {

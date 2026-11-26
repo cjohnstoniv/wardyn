@@ -79,10 +79,10 @@ func (f *mcpDispatchFixture) assertNoneUp(t *testing.T) {
 	}
 }
 
-// TestReviveAfterOutageRecreatesMCPSandboxes (D4-5, F1): an outage-lost run's rows (ended, lost) are each
+// TestReviveAfterOutageRecreatesMCPSandboxes (F1): an outage-lost run's rows (ended, lost) are each
 // re-created by a revive that did not reboot: reopened to starting with a fresh token, the old kept until
 // the grace, on the same relay token and pinned address, and settled to ready by the watcher. With the switch
-// off the revive is refused (D6) naming the server, and nothing is created.
+// off the revive is refused naming the server, and nothing is created.
 func TestReviveAfterOutageRecreatesMCPSandboxes(t *testing.T) {
 	f := newMCPReviveFixture(t, true)
 	before := f.st.mcpRowsMem.all()
@@ -121,7 +121,7 @@ func TestReviveAfterOutageRecreatesMCPSandboxes(t *testing.T) {
 		rerr := f.srv.reviveMCPSandboxRefusal(context.Background(), f.current(), false, false, types.ActorHuman, "admin")
 		if rerr == nil || rerr.status != http.StatusUnprocessableEntity || rerr.reason != reasonComponentDefinitionInvalid ||
 			rerr.msg != mcpSandboxSentence(mcpReviveOffSentence, "files", "") {
-			t.Fatalf("refusal %+v, want D6 naming files", rerr)
+			t.Fatalf("refusal %+v, want the switch-off refusal naming files", rerr)
 		}
 		if f.sbx.count("create") != 1 {
 			t.Errorf("a refused revive created %d", f.sbx.count("create")-1)
@@ -378,7 +378,7 @@ func TestReviveRefusedOrLockLostLeavesNoMCPSandbox(t *testing.T) {
 	})
 }
 
-// TestReviveReplacesMCPProxyConfig (D4-5): a rebooted revive re-creates even a live, ready server, with a
+// TestReviveReplacesMCPProxyConfig: a rebooted revive re-creates even a live, ready server, with a
 // fresh token and a freshly sealed config.
 func TestReviveReplacesMCPProxyConfig(t *testing.T) {
 	f := newMCPReviveFixture(t, false)
