@@ -47,7 +47,7 @@ type reclaimFenceFake struct {
 
 func newReclaimFenceFake() *reclaimFenceFake {
 	return &reclaimFenceFake{
-		now:   time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC),
+		now:   time.Now().UTC(),
 		rows:  map[reclaimFenceKey]reclaimFenceRow{},
 		held:  map[reclaimFenceKey]bool{},
 		holds: map[reclaimFenceKey][]uuid.UUID{},
