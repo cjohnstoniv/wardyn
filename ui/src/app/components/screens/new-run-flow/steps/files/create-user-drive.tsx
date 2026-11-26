@@ -97,7 +97,8 @@ export function CreateUserDrive({ choose, reload, creating, setCreating, deletin
       ))}
       {creating && (
         <CreateDriveCard
-          create={(name) => createMyDrive(name, mac?.id)}
+          create={(name, team) => createMyDrive(name, mac?.id, team)}
+          teamOffered={!mac && door?.team_drives_allowed === true}
           intro={mac ? MAC_DRIVES.D02(mac.name) : undefined}
           hint={macOS && door && door.limit > 0 ? NR_FILES.CREATE_LIMIT(door.count, door.limit) : undefined}
           onClose={closeCard}
@@ -113,6 +114,7 @@ export function CreateUserDrive({ choose, reload, creating, setCreating, deletin
         <DeleteDriveConfirm
           name={deleting.drive.name}
           onMac={deleting.drive.onMac}
+          team={deleting.drive.team}
           remove={() => deleteMyDrive(deleting.drive.id)}
           returnFocusTo={() => (deleted.current ? null : deleting.opener)}
           onClose={() => setDeleting(null)}

@@ -76,6 +76,7 @@ func (s *Server) mountUserDriveFamily(r, operatorOnly, securityOps chi.Router) {
 	r.Delete("/me/drives/{id}", s.handleDeleteMyDrive)
 	operatorOnly.Get("/drives/member", s.handleListMemberDrives)
 	operatorOnly.Delete("/drives/member/{id}", s.handleDeleteMemberDriveAdmin)
+	operatorOnly.Put("/drives/member/{id}/team", s.handlePutMemberTeamDrive)
 }
 
 // userDriveReclaimRequest names the ALLOCATION whose object is to be

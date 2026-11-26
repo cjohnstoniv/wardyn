@@ -73,7 +73,10 @@ interface PickOption {
   repo?: string;
   /** A team drive's groups and whether the others in them see what this run writes. */
   sharedWith?: string;
-  othersSee?: boolean;
+  /** The note under a writable team drive: who else sees what this run writes. */
+  othersSee?: string;
+  /** A team drive the person made, shared with their unit. */
+  unitTeam?: boolean;
   /** The person's own drive: its row carries "Delete drive". */
   own?: boolean;
   /** A disk kept on a Mac (backend mac_disk): its delete confirm says what an offline or unregistered Mac means. */
@@ -113,7 +116,7 @@ export interface UserDriveSeam {
   creating: boolean;
   setCreating: (creating: boolean) => void;
   /** The own drive whose "Delete drive" was pressed, and the button to return focus to. */
-  deleting: { drive: { id: string; name: string; onMac?: boolean }; opener: HTMLElement } | null;
+  deleting: { drive: { id: string; name: string; onMac?: boolean; team?: boolean }; opener: HTMLElement } | null;
   setDeleting: (d: UserDriveSeam["deleting"]) => void;
 }
 
@@ -162,8 +165,16 @@ function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOpt
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
     shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d), meta: driveMeta(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
-    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true, onMac: d.backend === "mac_disk",
+    sharedWith: driveSharedWith(d), othersSee: othersSeeNote(d), unitTeam: d.shared_with_unit === true, own: d.owned === true, onMac: d.backend === "mac_disk",
   }));
+}
+
+// The note under a writable team drive: who else sees what the run writes. A person's own team drive whose unit was
+// deleted reaches no one else, so it has none; a group's team drive is never a person's own.
+function othersSeeNote(d: MeDrive): string | undefined {
+  if (d.team !== true || !d.writable) return undefined;
+  if (d.shared_with_unit) return NR_FILES.TEAM_OTHERS_SEE_UNIT;
+  return d.owned ? undefined : NR_FILES.TEAM_OTHERS_SEE;
 }
 
 function initial(open: DialogOpen, intent: RunIntent): State {
@@ -444,7 +455,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                         {o.shownPath && <PathText path={attachKind === "folder" ? o.shownPath : guest(o.shownPath)} className="text-muted-foreground" />}
                         {o.mounts && <span className="text-xs text-muted-foreground" data-testid="nr-drive-mounts">{o.mounts}</span>}
                         {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
-                        {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
+                        {o.othersSee && <span className="text-xs text-warning">{o.othersSee}</span>}
                         {reason && (
                           <span className="flex items-start gap-1.5 text-body">
                             <Lock className="mt-0.5 size-3 flex-none" aria-hidden="true" />
@@ -464,7 +475,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          setDeletingDrive({ drive: { id: o.key, name: o.name, onMac: o.onMac }, opener: e.currentTarget });
+                          setDeletingDrive({ drive: { id: o.key, name: o.name, onMac: o.onMac, team: o.unitTeam }, opener: e.currentTarget });
                         }}
                       >
                         {NR_FILES.DELETE_DRIVE}

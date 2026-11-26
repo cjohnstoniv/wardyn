@@ -34,6 +34,8 @@ export interface MeDrive {
   team: boolean;
   /** On a team drive, the caller's own groups that carry its allocation. */
   shared_with?: string[];
+  /** On a team drive a person made: shared with their governance unit and the units below it, not with groups. */
+  shared_with_unit?: boolean;
   /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
   kept_from_run?: string;
   /** That run's title when the catalogue was read; absent when the run is gone or untitled. */
@@ -80,6 +82,8 @@ export interface MemberDriveCreate {
   keep_work_folder: boolean;
   /** What binds a new drive's size here; "none" on Docker. */
   enforcement?: StorageEnforcement;
+  /** Whether the caller may make a team drive now: both switches on, Docker, and a unit that is not Default. */
+  team_drives_allowed: boolean;
 }
 
 /** Reads the caller's drive catalogue, checked against runnerPoolId when given. */
@@ -91,10 +95,10 @@ export async function myDrives(runnerPoolId?: string): Promise<MeDriveCatalogue>
 
 /**
  * POST /me/drives (pkg/client.MemberDriveCreateRequest): the caller's own new drive. A runnerId makes it
- * a disk kept on that Mac of theirs.
+ * a disk kept on that Mac of theirs; team makes it a team drive shared with the person's governance unit.
  */
-export async function createMyDrive(name: string, runnerId?: string): Promise<MeDrive> {
-  const body = runnerId ? { name, runner_id: runnerId } : { name };
+export async function createMyDrive(name: string, runnerId?: string, team?: boolean): Promise<MeDrive> {
+  const body = runnerId ? { name, runner_id: runnerId } : team === true ? { name, team: true } : { name };
   return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", asPerson: true, body: JSON.stringify(body) }));
 }
 

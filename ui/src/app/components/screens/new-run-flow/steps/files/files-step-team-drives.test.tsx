@@ -18,6 +18,7 @@ import { filesPreflight, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES } from "../
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
+import { driveKind } from "./file-items";
 import { FilesStep } from "./files-step";
 
 const wfetchMock = vi.fn();
@@ -165,3 +166,63 @@ describe("a team drive in the Add shared drive dialog", () => {
     expect(within(dialog()).queryByRole("radio", { name: /^platform-ref/ })).toBeNull();
   });
 });
+
+describe("a team drive a person made, shared with their unit (#3459)", () => {
+  const UNIT_RW: MeDrive = {
+    ...base, id: "77777777-7777-4777-8777-777777777777", name: "design-assets", section: "user", backend: "docker_volume",
+    target: "/home/agent/shared/design-assets", writable: true, team: true, shared_with_unit: true,
+  };
+  const UNIT_RO: MeDrive = { ...UNIT_RW, id: "88888888-8888-4888-8888-888888888888", name: "old-templates", target: "/home/agent/shared/old-templates", writable: false };
+
+  it("a writable drive shared with a unit says unit, not group", async () => {
+    catalogue = { drives: [UNIT_RW, UNIT_RO, WRITABLE], pool_checked: true };
+    show();
+    // A group's team drive keeps the group sentence, under shared drives.
+    await openShared();
+    expect(within(await option("team-scratch")).getByText(NR_FILES.TEAM_OTHERS_SEE)).toBeInTheDocument();
+    expect(within(dialog()).queryByRole("radio", { name: /^design-assets/ })).toBeNull();
+    await userEvent.click(within(dialog()).getByRole("button", { name: NR_SHARED.BACK }));
+    // A unit's team drive lists under user drives.
+    await userEvent.click(within(dialog()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    const rw = within(await option("design-assets"));
+    expect(rw.getByText(NR_FILES.TEAM_OTHERS_SEE_UNIT)).toBeInTheDocument();
+    expect(rw.queryByText(NR_FILES.TEAM_OTHERS_SEE)).toBeNull();
+    // A read-only unit drive says neither, and reads Team and Read-only.
+    const ro = within(await option("old-templates"));
+    expect(ro.queryByText(NR_FILES.TEAM_OTHERS_SEE_UNIT)).toBeNull();
+    expect(ro.queryByText(NR_FILES.TEAM_OTHERS_SEE)).toBeNull();
+    expect(ro.getByText(NR_FILES.SOURCE_TEAM)).toBeInTheDocument();
+    expect(ro.getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+  });
+});
+
+describe("a person's own team drive whose unit was deleted (#3459)", () => {
+  it("lists with user drives and says no one else sees what the run writes", async () => {
+    const ORPHAN: MeDrive = {
+      ...base, id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "old-templates", section: "user", backend: "docker_volume",
+      target: "/home/agent/shared/old-templates", writable: true, team: true, owned: true, shared_with_unit: false,
+    };
+    catalogue = { drives: [ORPHAN, WRITABLE], pool_checked: true };
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
+    await userEvent.click(within(dialog()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    const row = within(await option("old-templates"));
+    expect(row.queryByText(NR_FILES.TEAM_OTHERS_SEE)).toBeNull();
+    expect(row.queryByText(NR_FILES.TEAM_OTHERS_SEE_UNIT)).toBeNull();
+  });
+});
+
+// Where the Add dialog lists a drive: one row per value of the predicate.
+describe("driveKind", () => {
+  const MANAGED: MeDrive = { ...PLAIN, id: "99999999-9999-4999-8999-999999999999", name: "scratch", section: "user", backend: "docker_volume", team: false };
+  it.each<[string, MeDrive, "sharedDrive" | "userDrive"]>([
+    ["a group's team drive is shared", READ_ONLY, "sharedDrive"],
+    ["a unit's team drive is a user drive", { ...READ_ONLY, shared_with: undefined, shared_with_unit: true }, "userDrive"],
+    ["a managed drive that is not a team drive is a user drive", MANAGED, "userDrive"],
+    ["the owner's team drive whose unit was deleted is a user drive", { ...READ_ONLY, shared_with: undefined, owned: true, writable: true }, "userDrive"],
+    ["a drive in the shared section is shared", PLAIN, "sharedDrive"],
+  ])("%s", (_, d, kind) => {
+    expect(driveKind(d)).toBe(kind);
+  });
+});
+

@@ -54,7 +54,7 @@ func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive
 	}
 	_, oneSnapshot := s.cfg.Store.(store.HeldMemberDriveStore)
 	for _, d := range drives {
-		if d.OwnerSubject != owner || d.Deleting() {
+		if d.OwnerSubject != owner || d.Deleting() || d.Team {
 			continue
 		}
 		held := heldIDs[d.ID]
@@ -120,6 +120,7 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 	default:
 		out.Reason = client.MemberDriveCreateGovernance
 	}
+	out.TeamDrivesAllowed = out.Allowed && s.memberTeamDrivesOffered(r, policy)
 	return out
 }
 
@@ -162,7 +163,7 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 	for id, owner := range owners {
 		if ms != nil && owner == runOwner {
 			d, err := ms.GetMemberDriveOf(ctx, runOwner, id)
-			if err == nil && !d.Deleting() && !d.LegacyUnsettled {
+			if err == nil && !d.Deleting() && !d.LegacyUnsettled && s.memberTeamDriveSwitchOn(ctx, d) {
 				continue
 			}
 			if err == nil && d.LegacyUnsettled && !d.Deleting() {
@@ -173,6 +174,9 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 				s.failAndRevoke(ctx, run.ID, types.RunStarting, legacyDriveHeldMsg(d))
 				return false
 			}
+		}
+		if owner != runOwner && s.memberTeamDriveStillThere(ctx, run, id) {
+			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": string(authz.ReasonDriveNotFound)})))

@@ -161,6 +161,14 @@ export interface MemberDriveAdminItem {
   created_at: string;
   // True while a delete of the drive is in flight (a disk drive whose Mac is offline stays so until it returns).
   deleting: boolean;
+  // A person's own team drive, shared with a governance unit (#3459).
+  team?: boolean;
+  // The unit the team drive belongs to; absent when it is not a team drive or the unit was deleted.
+  team_unit_id?: string;
+  // A super admin let the unit write to the team drive.
+  members_can_write?: boolean;
+  // The team unit's name; absent when the unit is gone or could not be read.
+  team_unit_name?: string;
 }
 
 // pkg/client.MemberDriveList — one page, by owner then name, and how many there are in all.
@@ -413,6 +421,12 @@ export const drives = {
   async deleteMemberDrive(id: string): Promise<MemberDriveDeleteResult> {
     const res = await wfetch(`/drives/member/${encodeURIComponent(id)}`, { method: "DELETE" });
     return asJson<MemberDriveDeleteResult>(res);
+  },
+
+  // PUT /api/v1/drives/member/{id}/team: a person's team drive's write bit (super admin), answered with its row.
+  async setMemberTeamDriveWrite(id: string, on: boolean): Promise<MemberDriveAdminItem> {
+    const res = await wfetch(`/drives/member/${encodeURIComponent(id)}/team`, { method: "PUT", asPerson: true, body: JSON.stringify({ members_can_write: on }) });
+    return asJson<MemberDriveAdminItem>(res);
   },
 
   // DELETE /api/v1/drives/{id} -> 204.
