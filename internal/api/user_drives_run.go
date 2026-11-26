@@ -102,6 +102,7 @@ var driveRefusalReasons = []string{
 	driveRefusalNoAllocation, driveRefusalPaused, driveRefusalRunnerCannotMount,
 	driveRefusalBackendElsewhere, driveRefusalCeilingMoved, driveRefusalHomeMissing,
 	driveRefusalHomeUnreadable, driveRefusalShareUnreachable, driveRefusalReadOnly, driveRefusalDrivesDisabled,
+	driveRefusalReclaiming,
 }
 
 // refuseDrive is the ONE place a run is told it cannot have its drive: it
@@ -379,6 +380,10 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 	}
 	if refusal := driveReadOnlyRefusal(d.narrow, resolved); refusal != nil {
 		refusal.drive.write(s, w)
+		return nil, false
+	}
+	if f := s.driveReclaimFailure(ctx, resolved); f != nil {
+		f.write(s, w)
 		return nil, false
 	}
 

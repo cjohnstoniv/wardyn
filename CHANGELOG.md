@@ -46,12 +46,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
 - With the image builder on, the server removes a reusable custom-image wrap (`wardyn-byoi/reuse:<key>`) once it is more than a week old and no run has been started on it for a week. It checks at start and every six hours, keeps an image a live run, a kept sandbox, a workspace or a starting run uses, and leaves images no run in its database recorded. Each pass that removes one writes an `image.reuse.reclaim` audit row.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `drive_reclaims`, and `SELECT, INSERT` on `drive_object_holds`, to every role that was granted `UPDATE` on the user
+  drives table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up
+  new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the
+  migration has run. Until then a drive reclaim is refused, and so is a run that names a Docker volume or claim drive.
 
 ### Changed
 
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
 - On the server's Kubernetes cluster a run's agent pod is now created together with its proxy pod, not after the proxy is ready, so the two image pulls overlap. Each run reaches its proxy through its own ClusterIP Service with no selector, which Wardyn deletes with the run. The first command still waits for the proxy to be ready. Kubernetes runners (`wardyn-runnerd`) start as before.
 - The Launched screen shows a starting run's new state as soon as it changes, instead of at the next 4-second refresh. It follows the run's event stream while the run starts or waits, and keeps the refresh as a fallback.
+- A super admin's drive reclaim now keeps that person's drive storage from being attached until the storage confirms it is gone: a reclaim that times out or fails after asking the storage leaves the drive refused to runs (`409` `reclaiming`) until a later reclaim answers `deleted` or `already_absent`, and a reclaim is refused while any run that has not ended was started with that storage, whoever started it (#4137).
 
 ### Fixed
 

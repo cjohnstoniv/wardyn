@@ -27,6 +27,8 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 - An allocation keyed by an email or other alias needs the sign-in subject as `home_subject` (`--home-subject`); without it the reclaim is refused.
   A key no sign-in is recorded under is used as-is, unverified.
 - It answers `deleted` (this call destroyed the storage) or `already_absent` (nothing answered to the name).
+- A `500` once the storage was asked (the 30-second time-out, a daemon or API error) leaves the object **fenced**: no run attaches it, and a run that names the drive is refused with `409` `reclaiming`, until a reclaim answers `deleted` or `already_absent`. Run the same command again after a minute; a second reclaim within a minute of the first is refused (`409`). The same holds for a reclaim whose answer never arrived (a dropped connection) and for a `500` that says the mark could not be updated.
+- A `409` saying the claim is already `Terminating` also leaves the object fenced: run the reclaim again once the claim is gone; it then answers `already_absent` and lifts the fence.
 - **There is no console button**: the API and the CLI are the whole surface.
 
 **Do it in this order.**
@@ -43,7 +45,7 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 | `403` | Not a super-admin |
 | `400` | The `subject_type` is `group` or `all`, which name no single object: reclaim people one at a time. Or an alias key with no `home_subject` |
 | `422` | The drive is a share (`host_path`, `k8s_pvc_static`). Wardyn did not create that object and never deletes it; reclaiming it is a change on the share itself. There is no recursive delete in this product, at any privilege, for any backend |
-| `409` | One of the person's runs is starting, a run still holds the object, a reclaim is already in flight, or the object is not this drive's; see [below](#409-refusal) |
+| `409` | One of the person's runs is starting, a run that has not ended was started with the object (whoever started it), a run still holds the object, a reclaim is already in flight, or the object is not this drive's; see [below](#409-refusal) |
 | `501` | This deployment's runner cannot reclaim at all — use the substrate command |
 
 **On Kubernetes the daemon does not even hold the verb by default.**
@@ -60,6 +62,7 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 
 - A run still holds the object, a reclaim is already in flight (a claim already `Terminating`), or the object answering to that name is **not this drive's**
 - One of the person's runs is starting: reclaim once it has ended
+- A run that has not ended was started with the object: when two allocations name one directory, either person's run holds it
 - On Docker a run holds its drive volumes from its start to its teardown
 - The driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete,
 - and on Kubernetes binds the delete to the claim it checked: a claim deleted and re-created under the same name in between is refused, never deleted

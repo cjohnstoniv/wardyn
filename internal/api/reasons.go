@@ -635,6 +635,9 @@ const (
 	// many runs are still asking. Shared with userDriveWriteRefusal's OWN
 	// org-switch check (user_drives.go): the identical cause, one route apart.
 	driveRefusalDrivesDisabled = "drives_disabled"
+	// driveRefusalReclaiming: a super admin's reclaim has claimed the drive's storage object, and no run attaches it
+	// until the reclaim confirms the object gone (user_drives_reclaim_fence.go).
+	driveRefusalReclaiming = "reclaiming"
 )
 
 // The drives[] carrier (run_drives.go); the sentences are drive_refusals.go's.
