@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -20,6 +21,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -331,18 +334,67 @@ func TestMCPSandboxAudienceMatchesProxy(t *testing.T) {
 	}
 }
 
-// TestMCPRowWithEmptyKeyRefused: a row whose server key is empty would label its proxy's rows as the agent's,
-// so the door refuses its token on every one of the five routes as it refuses an unknown one.
-func TestMCPRowWithEmptyKeyRefused(t *testing.T) {
-	f := newMCPAuthFixture(t)
-	f.rows.set(func(r *store.RunMCPSandbox) { r.ServerKey = "" })
-	for _, c := range []struct{ method, path, body string }{
+// mcpRequest is one request on the MCP door.
+type mcpRequest struct{ method, path, body string }
+
+// fiveRequests is one request on each of the MCP door's five routes, each one the fixture's row would be
+// served on.
+func (f *mcpAuthFixture) fiveRequests() []mcpRequest {
+	return []mcpRequest{
 		{http.MethodPost, mcpDecisionsPath, mcpAllowDecision},
 		{http.MethodGet, "/api/v1/internal/injection/" + f.grant.String(), ""},
 		{http.MethodPost, "/api/v1/internal/token/renew", `{}`},
 		{http.MethodPost, mcpApprovalsPath, mcpEgressRaise},
 		{http.MethodGet, mcpApprovalsPath + "/" + uuid.NewString(), ""},
+	}
+}
+
+// mcpRunStateStore is the MCP fixture's store with its run read as run.
+type mcpRunStateStore struct {
+	mcpAuthStore
+	run types.AgentRun
+}
+
+func (s mcpRunStateStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	r := s.run
+	r.ID = id
+	return r, nil
+}
+
+// TestMCPDoorHoldsRunGates: the MCP door holds its run to internalAuth's liveness and relay gates. On a run
+// that ended past its tail grace each of the five routes answers 403 run_terminal, and on a run placed on a
+// runner, reached without its relay, 403 relay_required; the same token on the live run is served.
+func TestMCPDoorHoldsRunGates(t *testing.T) {
+	runner := uuid.New()
+	for _, c := range []struct {
+		name, reason string
+		run          types.AgentRun
+	}{
+		{"ended", string(authz.ReasonRunTerminal), types.AgentRun{State: types.RunCompleted, UpdatedAt: time.Now().UTC().Add(-time.Hour)}},
+		{"relay bound", string(placement.ReasonRelayRequired), types.AgentRun{State: types.RunRunning, Placement: types.PlacementLocal,
+			RunnerID: &runner, UpdatedAt: time.Now().UTC()}},
 	} {
+		f := newMCPAuthFixtureWith(t, func(cfg *Config, _ *mcpAuthFixture) {
+			cfg.Store = mcpRunStateStore{mcpAuthStore: cfg.Store.(mcpAuthStore), run: c.run}
+		})
+		for _, rq := range f.fiveRequests() {
+			if w := do(t, f.srv, rq.method, rq.path, f.tok, rq.body); w.Code != http.StatusForbidden || reasonOf(t, w) != c.reason {
+				t.Errorf("%s: %s %s = %d %s, want 403 %s", c.name, rq.method, rq.path, w.Code, w.Body.String(), c.reason)
+			}
+		}
+	}
+	f := newMCPAuthFixture(t)
+	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision); w.Code != http.StatusAccepted {
+		t.Fatalf("control: the live run's decision = %d %s, want 202", w.Code, w.Body.String())
+	}
+}
+
+// TestMCPRowWithEmptyKeyRefused: a row whose server key is empty would label its proxy's rows as the agent's,
+// so the door refuses its token on every one of the five routes as it refuses an unknown one.
+func TestMCPRowWithEmptyKeyRefused(t *testing.T) {
+	f := newMCPAuthFixture(t)
+	f.rows.set(func(r *store.RunMCPSandbox) { r.ServerKey = "" })
+	for _, c := range f.fiveRequests() {
 		w := do(t, f.srv, c.method, c.path, f.tok, c.body)
 		if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
 			t.Errorf("%s %s with an empty key: %d %s, want 403 %s", c.method, c.path, w.Code, w.Body.String(), reasonMCPSandboxUnknown)
@@ -443,15 +495,26 @@ func TestMCPTokenRelayedRefused(t *testing.T) {
 // TestMCPProxyDecisionsLand: the MCP proxy's decision rows are stored on the run, labelled with its server.
 func TestMCPProxyDecisionsLand(t *testing.T) {
 	f := newMCPAuthFixture(t)
-	for _, body := range []string{mcpDenyDecision, mcpAllowDecision} {
+	relay := `{"request":{"host":"api.files.test","method":"POST","path":"/mcp"},"decision":"allow","rule_source":"relay:mcp"}`
+	dns := `{"request":{},"dns":{"name":"api.files.test","type":"A","outcome":"refused","via":"proxy"}}`
+	for _, body := range []string{mcpDenyDecision, mcpAllowDecision, relay, dns} {
 		if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, body); w.Code != http.StatusAccepted {
 			t.Fatalf("decision: %d %s", w.Code, w.Body.String())
 		}
 	}
-	n := mcpRowsLabelled(f.h, "files")
-	if n < 2 {
-		t.Fatalf("rows labelled files = %d, want both decisions", n)
+	landed := map[string]bool{}
+	for _, ev := range f.h.audit.snapshot() {
+		var data map[string]any
+		if json.Unmarshal(ev.Data, &data) == nil && data["mcp_sandbox"] == "files" {
+			landed[ev.Action+" "+fmt.Sprint(data["rule_source"])] = true
+		}
 	}
+	for _, want := range []string{"egress.deny policy:denied", "egress.allow relay:mcp", egress.DNSQueryAction + " <nil>"} {
+		if !landed[want] {
+			t.Errorf("no row %q labelled files; labelled rows: %v", want, landed)
+		}
+	}
+	n := mcpRowsLabelled(f.h, "files")
 	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.agent, mcpDenyDecision); w.Code != http.StatusAccepted {
 		t.Fatalf("the agent's decision: %d", w.Code)
 	}
@@ -527,10 +590,35 @@ func TestMCPHoldFloodLeavesAgentRaise(t *testing.T) {
 // TestMCPTokenRaisesEgressHoldsOnly: no MCP policy holds a hold rule (the finish makes each a deny), and as a
 // backstop an MCP token raising any other kind is refused.
 func TestMCPTokenRaisesEgressHoldsOnly(t *testing.T) {
-	for _, pol := range []*types.ComponentMCPSandboxPolicy{nil, {Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{}}} {
-		p := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: mcpPolicyRun(), comps: mcpPolicyComps(pol)})
+	run := mcpPolicyRun() // holds GET a.test/admin with a hold host rule
+	if d := types.EvalHostRules(run.HostRules, "a.test", http.MethodGet, "/admin"); d.Effect != types.HostRuleHold {
+		t.Fatalf("fixture: the run's policy gives a.test/admin %s, want hold", d.Effect)
+	}
+	ceiling := governanceCeiling{Spec: types.RunPolicySpec{AllowedDomains: []string{"a.test"}, HostRules: run.HostRules}}
+	for _, pol := range []*types.ComponentMCPSandboxPolicy{
+		nil,
+		{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{}},
+		{Mode: types.ComponentMCPSandboxOwn, Spec: &types.RunPolicySpec{AllowedDomains: []string{"a.test"}}},
+	} {
+		p := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: run, ceiling: ceiling, comps: mcpPolicyComps(pol)})
+		for _, set := range p.spec.HostRules {
+			for _, r := range set.Rules {
+				if r.Effect == types.HostRuleHold {
+					t.Errorf("%s: a hold rule %+v is left in the MCP policy", p.mode, r)
+				}
+			}
+		}
 		if hostRuleEffects(p.spec.HostRules)["a.test"] != types.HostRuleDeny {
-			t.Errorf("%s: the run's hold on a.test is %+v, want deny", p.mode, p.spec.HostRules)
+			t.Errorf("%s: the hold on a.test is %+v, want deny", p.mode, p.spec.HostRules)
+		}
+		// What a proxy loaded with this policy decides: the host is on its list, and the rule the proxy evaluates
+		// (CompilePolicy keeps the spec's host rules, hostRuleVerdict asks types.EvalHostRules) refuses the
+		// request outright. Only a hold would have it raise an approval.
+		if v, err := proxy.NewBuiltinEvaluator(p.spec).EvaluateHost(context.Background(), egress.Request{Host: "a.test", Port: 443}); err != nil || v != egress.VerdictAllow {
+			t.Errorf("%s: the proxy's host verdict for a.test = %v, %v; want allow", p.mode, v, err)
+		}
+		if d := types.EvalHostRules(p.spec.HostRules, "a.test", http.MethodGet, "/admin"); d.Effect != types.HostRuleDeny {
+			t.Errorf("%s: the proxy's host rule decision for GET a.test/admin = %s, want deny with no raise", p.mode, d.Effect)
 		}
 	}
 	f := newMCPAuthFixture(t)
@@ -693,6 +781,44 @@ func (getErrApprovals) Get(context.Context, uuid.UUID) (types.ApprovalRequest, e
 // TestInternalTokenUnchangedByMCPAuth: the agent's internal token gets the same answer through the router,
 // with the MCP door mounted, as from internalAuth alone, and the raise refusals keep their order, status,
 // reason and row.
+// TestMCPDoorStepsAsideOnEveryRoute: on every /internal/ route the router has, the MCP door hands the agent's
+// internal token to the next handler untouched, and an MCP proxy's token too except on its five routes.
+func TestMCPDoorStepsAsideOnEveryRoute(t *testing.T) {
+	f := newMCPAuthFixture(t)
+	var patterns []string
+	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if strings.Contains(route, "/internal/") {
+			patterns = append(patterns, method+" "+route)
+		}
+		return nil
+	}
+	if err := chi.Walk(f.srv.router, walk); err != nil {
+		t.Fatal(err)
+	}
+	five := map[string]bool{}
+	for _, route := range mcpSandboxFiveRoutes {
+		five[route] = true
+	}
+	for _, route := range patterns {
+		method, pattern, _ := strings.Cut(route, " ")
+		for name, tok := range map[string]string{"internal": f.agent, "mcp": f.tok} {
+			rctx := chi.NewRouteContext()
+			rctx.RoutePatterns = []string{pattern}
+			r := httptest.NewRequest(method, "/x", strings.NewReader(`{}`))
+			r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+			r.Header.Set("Authorization", "Bearer "+tok)
+			passed := false
+			f.srv.mcpSandboxAuth(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { passed = true })).ServeHTTP(httptest.NewRecorder(), r)
+			if want := name == "internal" || !five[route]; passed != want {
+				t.Errorf("%s token on %s: handed on %v, want %v", name, route, passed, want)
+			}
+		}
+	}
+	if len(patterns) < 20 {
+		t.Fatalf("walked %d /internal/ routes, want the whole internal surface", len(patterns))
+	}
+}
+
 func TestInternalTokenUnchangedByMCPAuth(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -709,6 +835,7 @@ func TestInternalTokenUnchangedByMCPAuth(t *testing.T) {
 		handler          http.HandlerFunc
 	}{
 		{"decision", mcpDecisionsPath, mcpAllowDecision, h.srv.handlePostDecision},
+		{"renew", "/api/v1/internal/token/renew", `{}`, h.srv.handleInternalTokenRenew},
 		{"egress raise", mcpApprovalsPath, mcpEgressRaise, h.srv.handleInternalRequestApproval},
 		{"credential raise with a made-up rejoin", mcpApprovalsPath, `{"kind":"credential","requested_scope":{"x":1},"rejoin_id":"` + uuid.NewString() + `"}`, h.srv.handleInternalRequestApproval},
 		{"empty scope", mcpApprovalsPath, `{"kind":"egress_domain","rejoin_id":"` + uuid.NewString() + `"}`, h.srv.handleInternalRequestApproval},
