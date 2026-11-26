@@ -172,3 +172,19 @@ func TestReopenAndKeepMCPSandboxIfLive(t *testing.T) {
 		t.Errorf("stopped row moved to %s", m.State)
 	}
 }
+
+// TestInsertMCPSandboxRefusesEmptyServerKey: the table refuses a row with no server key, which would label its
+// proxy's rows as the agent's.
+func TestInsertMCPSandboxRefusesEmptyServerKey(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	r := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, r)
+	pg := store.NewPG(pool)
+	if err := pg.InsertRunMCPSandbox(ctx, store.RunMCPSandbox{RunID: r.ID, ServerKey: "", CPTokenJTI: "jti-1"}); err == nil {
+		t.Fatal("insert with an empty server key: nil error, want the check to refuse it")
+	}
+	if err := pg.InsertRunMCPSandbox(ctx, store.RunMCPSandbox{RunID: r.ID, ServerKey: "files", CPTokenJTI: "jti-1"}); err != nil {
+		t.Fatalf("control: insert keyed files: %v", err)
+	}
+}
