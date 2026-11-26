@@ -73,7 +73,9 @@ func (f *mcpDispatchFixture) loseRows() {
 	f.srv.endRunMCPSandboxes(context.Background(), f.run.ID, mcpEndLost)
 }
 
-// revivePhase runs a revive's MCP phase under the run's lock, as reviveRunProxy runs it, on ctx and lock.
+// revivePhase runs a revive's MCP phase under the run's lock, as reviveRunProxy runs it, on ctx and lock. A
+// lock ended with db.ErrLockLost ends the phase with it, as whileLockHeld ends it when a Postgres lock is
+// lost: a test's lock holds none, so whileLockHeld alone never sees its loss (db.WithoutCancelUnlessLost).
 func (f *mcpDispatchFixture) revivePhase(t *testing.T, ctx, lock context.Context, rebooted, edit bool) {
 	t.Helper()
 	_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
@@ -83,6 +85,16 @@ func (f *mcpDispatchFixture) revivePhase(t *testing.T, ctx, lock context.Context
 	defer unlock()
 	mcpCtx, end := reviveMCPContext(ctx, lock)
 	defer end()
+	mcpCtx, lost := context.WithCancelCause(mcpCtx)
+	defer lost(context.Canceled)
+	loseWith := func() {
+		if cause := context.Cause(lock); errors.Is(cause, db.ErrLockLost) {
+			lost(cause)
+		}
+	}
+	stop := context.AfterFunc(lock, loseWith)
+	defer stop()
+	loseWith() // lost already: the phase starts ended, as whileLockHeld hands it back
 	f.srv.reviveMCPSandboxes(mcpCtx, f.current(), 0, rebooted, edit)
 }
 
