@@ -155,6 +155,10 @@ func TestMCPWatcherNoRestartAfterCut(t *testing.T) {
 			f.setRun(func(r *types.AgentRun, _ *types.RunState) { r.LostAt, r.LostReason = &now, types.LostReboot })
 		}, false},
 		{"unwritten mark, generation 0", func(f *mcpDispatchFixture) { f.srv.lostCuts.Store(f.run.ID, 0) }, false},
+		{"unwritten mark at generation 0, the run's generation past it", func(f *mcpDispatchFixture) {
+			f.srv.cfg.Store = &mcpGenStore{mcpDispatchStore: f.st, gen: 3}
+			f.srv.lostCuts.Store(f.run.ID, 0) // lostCutHolds' g == 0 arm: an unfenced cut holds at every generation
+		}, false},
 		{"unwritten mark, then a revive that succeeded", func(f *mcpDispatchFixture) {
 			f.srv.lostCuts.Store(f.run.ID, 0)
 			f.srv.lostCuts.Delete(f.run.ID) // reviveRunProxy's delete beside leaseEnded
@@ -324,6 +328,25 @@ func TestMCPRestartRouteRefusedOnLostRun(t *testing.T) {
 				t.Fatalf("restart = %d %s, creates %d: want 409 %s and no create", w.Code, w.Body.String(), f.sbx.count("create"), reasonMCPSandboxRunEnded)
 			}
 		})
+	}
+}
+
+// TestMCPRestartRouteRestartsAStoppedServer: a server its owner stopped through the Stop route comes back
+// through the Restart route: 200, a new sandbox created and started, and the row ready again.
+func TestMCPRestartRouteRestartsAStoppedServer(t *testing.T) {
+	f := newMCPRestartFixture(t)
+	key := f.st.mcpRowsMem.get(0).ServerKey
+	if w := f.mcpRouteCall(t, f.srv.handleStopRunMCPServer, http.MethodPost, key, "stop"); w.Code != http.StatusOK {
+		t.Fatalf("stop = %d %s", w.Code, w.Body.String())
+	}
+	if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxStopped || row.LastCause != mcpEndPerson || f.sbx.left() != 0 {
+		t.Fatalf("after Stop: row %s (%q), sandboxes left %d; want stopped (person) and none", row.State, row.LastCause, f.sbx.left())
+	}
+	if w := f.mcpRouteCall(t, f.srv.handleRestartRunMCPServer, http.MethodPost, key, "restart"); w.Code != http.StatusOK {
+		t.Fatalf("restart of a stopped server = %d %s", w.Code, w.Body.String())
+	}
+	if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxReady || f.sbx.count("create") != 2 || f.sbx.left() != 1 {
+		t.Errorf("after Restart: row %s, creates %d, left %d; want ready, a second create, one sandbox", row.State, f.sbx.count("create"), f.sbx.left())
 	}
 }
 
@@ -555,5 +578,73 @@ func TestMCPRestartPastItsBoundLeavesNoRestartingRow(t *testing.T) {
 	if f.sbx.left() != 0 || !f.audit.has(f.run.ID, "run.mcp_sandbox.restart", "failure") {
 		t.Errorf("left %d, restart failure row %v: want what was made killed and the failure written", f.sbx.left(),
 			f.audit.has(f.run.ID, "run.mcp_sandbox.restart", "failure"))
+	}
+}
+
+// TestMCPWatcherTwoReplicas: each replica's cut set is its own. Replica A is the fixture's server, replica B
+// a second server over the same store; B's revive is the store's state after it (lost_at null, the run's
+// generation advanced, or put back where an untouched failure abandoned it).
+func TestMCPWatcherTwoReplicas(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		gen     int
+		a, b    []int // the cut entries A and B hold, if any (one generation each)
+		restart bool
+	}{
+		{"lost on A by an ordinary loss (no entry), revived through B", 4, nil, nil, true},
+		{"A holds an older fenced cut, the run revived through B past it", 4, []int{3}, nil, true},
+		{"B cut the run at its current generation; A did not", 4, nil, []int{4}, true},
+		{"B's revive failed untouched after its advance on A's unwritten-mark cut", 3, []int{0}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMCPRestartFixture(t)
+			f.srv.cfg.Store = &mcpGenStore{mcpDispatchStore: f.st, gen: tc.gen}
+			b := New(f.srv.cfg)
+			for _, g := range tc.a {
+				f.srv.lostCuts.Store(f.run.ID, g)
+			}
+			for _, g := range tc.b {
+				b.lostCuts.Store(f.run.ID, g)
+			}
+			if _, ok := f.srv.mcpCreateAllowed(context.Background(), f.current()); ok != tc.restart {
+				t.Fatalf("A's mcpCreateAllowed = %v, want %v", ok, tc.restart)
+			}
+			if len(tc.b) > 0 {
+				if _, ok := b.mcpCreateAllowed(context.Background(), f.current()); ok {
+					t.Error("B's mcpCreateAllowed = true under B's own cut")
+				}
+			}
+			f.crash()
+			f.pass()
+			if got := f.sbx.count("create") == 2; got != tc.restart {
+				t.Errorf("A's watcher restarted %v, want %v (creates %d)", got, tc.restart, f.sbx.count("create"))
+			}
+		})
+	}
+}
+
+// TestMCPCutEntryClearedOnceTheRunIsOver: mcpCreateAllowed drops this replica's cut entry for a run that is
+// over or marked lost, whose store state is then the guard, and keeps it for a run still RUNNING.
+func TestMCPCutEntryClearedOnceTheRunIsOver(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		set  func(r *types.AgentRun, s *types.RunState)
+		kept bool
+	}{
+		"killed": {func(_ *types.AgentRun, s *types.RunState) { *s = types.RunKilled }, false},
+		"lost":   {func(r *types.AgentRun, _ *types.RunState) { r.LostAt, r.LostReason = &now, types.LostOutage }, false},
+		"live":   {func(*types.AgentRun, *types.RunState) {}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMCPRestartFixture(t)
+			f.srv.lostCuts.Store(f.run.ID, 0)
+			f.setRun(tc.set)
+			if _, ok := f.srv.mcpCreateAllowed(context.Background(), f.current()); ok {
+				t.Fatal("a create was allowed under a cut")
+			}
+			if _, held := f.srv.lostCuts.Load(f.run.ID); held != tc.kept {
+				t.Errorf("cut entry held %v, want %v", held, tc.kept)
+			}
+		})
 	}
 }

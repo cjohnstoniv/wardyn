@@ -112,11 +112,18 @@ func TestLostRunEndsMCPSandboxes(t *testing.T) {
 		return f, rows, fake
 	}
 	t.Run("outage", func(t *testing.T) {
-		f, rows, fake := lost(t, func(f *lostFixture) { f.ls.lapsed = true; f.sweepTokens(t) })
+		f, rows, fake := lost(t, func(f *lostFixture) {
+			f.srv.lostCuts.Store(f.run.ID, 0) // an earlier unwritten mark's cut: the applied mark is the guard now
+			f.ls.lapsed = true
+			f.sweepTokens(t)
+		})
 		if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage {
 			t.Fatalf("lost = %v %q, want outage", lostAt, reason)
 		}
 		assertMCPRowsEnded(t, f.audit, f.run.ID, rows, fake, mcpEndLost)
+		if _, held := f.srv.lostCuts.Load(f.run.ID); held {
+			t.Error("the applied lost mark left this replica's cut entry")
+		}
 	})
 	t.Run("outage, a kill fails once", func(t *testing.T) {
 		f := newLostFixture(t)
@@ -230,14 +237,43 @@ func TestRunCompletionEndsMCPRows(t *testing.T) {
 }
 
 // TestKillCascadeKillsMCPSandboxes: a kill ends every MCP row with cause killed, also for a run killed
-// before its agent's sandbox ref was set.
+// before its agent's sandbox ref was set, and clears the run from the cut set.
 func TestKillCascadeKillsMCPSandboxes(t *testing.T) {
 	for _, ref := range []string{"sbx", ""} {
 		srv, st, rows, fake, audit := mcpTailFixture(t, types.RunKilled)
 		run := st.run
 		run.SandboxRef = ref
+		srv.lostCuts.Store(run.ID, 0)
 		srv.killTeardownTail(context.Background(), run, types.ActorHuman, "alice@example.com", nil, false)
 		assertMCPRowsEnded(t, audit, run.ID, rows, fake, mcpEndKilled)
+		if _, held := srv.lostCuts.Load(run.ID); held {
+			t.Errorf("ref %q: the kill left the run in the cut set", ref)
+		}
+	}
+}
+
+// TestKillConfirmWaitsForMCPSandboxes: the kill's background confirm (tryKillConfirm) reaches the agent's
+// sandbox only once every MCP sandbox is gone: while one's kill fails it answers busy with the rows up.
+func TestKillConfirmWaitsForMCPSandboxes(t *testing.T) {
+	srv, st, rows, fake, _ := mcpTailFixture(t, types.RunKilled)
+	ctx := context.Background()
+	fake.killErr = errors.New("the daemon did not answer")
+	if err := srv.tryKillConfirm(ctx, st.run); !errors.Is(err, errKillConfirmBusy) {
+		t.Fatalf("confirm with a failing MCP kill = %v, want errKillConfirmBusy", err)
+	}
+	for _, r := range rows.all() {
+		if !mcpRowUp(r) {
+			t.Errorf("row %s = %s while its kill fails, want it up", r.ServerKey, r.State)
+		}
+	}
+	fake.killErr = nil
+	if err := srv.tryKillConfirm(ctx, st.run); err != nil {
+		t.Fatalf("confirm once every MCP kill succeeds = %v, want nil", err)
+	}
+	for _, r := range rows.all() {
+		if r.State != store.MCPSandboxStopped || r.LastCause != mcpEndKilled {
+			t.Errorf("row %s = %s (%q), want stopped (killed)", r.ServerKey, r.State, r.LastCause)
+		}
 	}
 }
 

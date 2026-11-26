@@ -544,3 +544,53 @@ func TestReviveEndsErasedComponentsMCPRow(t *testing.T) {
 		t.Errorf("files row %s creates %d: want the live server untouched", row.State, f.sbx.count("create"))
 	}
 }
+
+// mcpReviveStore and mcpReviveRunner are the revive fixture's store and runner with MCP sandboxes in memory.
+type (
+	mcpReviveStore struct {
+		*reviveStore
+		*mcpRowsMem
+	}
+	mcpReviveRunner struct {
+		*reviveRunner
+		*mcpSandboxerFake
+	}
+)
+
+// TestReviveRunRunsTheMCPPhaseLast: reviveRunProxy runs its MCP phase after the revive recorded itself (the
+// proxy release set and the run.revive success row written) and after it cleared this replica's cut, so the
+// phase's first kill sees all three; the phase ends a row whose server the run's snapshot no longer has.
+func TestReviveRunRunsTheMCPPhaseLast(t *testing.T) {
+	f := newReviveFixture(t)
+	rows := newMCPRowsMem(f.run.ID, "files") // no snapshot row names it
+	fake := newMCPSandboxerFake()
+	fake.startAll(rows.all())
+	f.srv.cfg.Store = mcpReviveStore{reviveStore: f.rs, mcpRowsMem: rows}
+	f.srv.cfg.Runner = mcpReviveRunner{reviveRunner: f.rr, mcpSandboxerFake: fake}
+	f.srv.lostCuts.Store(f.run.ID, 0) // an unwritten mark's cut, which only a revive that succeeded clears
+	var seen, revived, cut bool
+	var release string
+	fake.killFn = func(runner.MCPSandboxID) {
+		if seen {
+			return
+		}
+		seen = true
+		f.rs.mu.Lock()
+		release = f.rs.release
+		f.rs.mu.Unlock()
+		revived = f.audit.has(f.run.ID, "run.revive", "success")
+		_, cut = f.srv.lostCuts.Load(f.run.ID)
+	}
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	if !seen {
+		t.Fatal("the revive's MCP phase killed nothing: it never ran")
+	}
+	if release == "" || !revived || cut {
+		t.Errorf("at the phase's first kill: release %q, run.revive success %v, cut held %v; want set, written, cleared", release, revived, cut)
+	}
+	if row := rows.get(0); mcpRowUp(row) || fake.left() != 0 {
+		t.Errorf("row %s (%q) left %d: want the server the snapshot no longer has ended", row.State, row.LastCause, fake.left())
+	}
+}
