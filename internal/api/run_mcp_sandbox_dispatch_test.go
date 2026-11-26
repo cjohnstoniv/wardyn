@@ -45,6 +45,7 @@ type mcpDispatchStore struct {
 	pending   bool
 	cfgMu     sync.Mutex
 	proxyCfg  []byte
+	putErr    func() error // when set, PutRunProxyConfig fails with what it answers
 	site      types.SiteConfig
 }
 
@@ -69,6 +70,11 @@ func (s *mcpDispatchStore) GetRun(ctx context.Context, id uuid.UUID) (types.Agen
 func (s *mcpDispatchStore) PutRunProxyConfig(_ context.Context, _ uuid.UUID, sealed []byte) error {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
+	if s.putErr != nil {
+		if err := s.putErr(); err != nil {
+			return err
+		}
+	}
 	s.proxyCfg = slices.Clone(sealed)
 	return nil
 }
@@ -381,15 +387,39 @@ func TestCreateFailureLeavesNoMCPSandbox(t *testing.T) {
 	}
 }
 
-// TestDispatchReturnLeavesNoMCPSandbox (I8): the agent's create failing after the servers started ends them.
+// TestDispatchReturnLeavesNoMCPSandbox (I8): every return of a dispatch after the servers were created and
+// before the run is RUNNING ends them: the final proxy config not kept, the agent's create failing, and the
+// run killed between the servers' start and its move to RUNNING (the lost CAS). The admission and recording
+// returns are TestRefusedAtAdmissionStartsNoMCPServer's.
 func TestDispatchReturnLeavesNoMCPSandbox(t *testing.T) {
-	f := newMCPDispatchFixture(t)
-	f.fr.createErr = errors.New("driver refused")
-	f.dispatch()
-	if f.sbx.count("start") != 1 || f.sbx.left() != 0 {
-		t.Fatalf("calls %v left %d: want started, then ended", f.sbx.calls, f.sbx.left())
+	for name, set := range map[string]func(*mcpDispatchFixture){
+		"final config not kept": func(f *mcpDispatchFixture) {
+			f.st.putErr = func() error {
+				if f.sbx.count("create") > 0 {
+					return errors.New("store down")
+				}
+				return nil
+			}
+		},
+		"agent create fails": func(f *mcpDispatchFixture) { f.fr.createErr = errors.New("driver refused") },
+		"killed before RUNNING": func(f *mcpDispatchFixture) {
+			f.sbx.statusFn = func() {
+				f.st.dispatchTestStore.mu.Lock()
+				f.st.dispatchTestStore.state = types.RunKilled
+				f.st.dispatchTestStore.mu.Unlock()
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMCPDispatchFixture(t)
+			set(f)
+			f.dispatch()
+			if f.sbx.count("create") != 1 || f.sbx.left() != 0 || f.state() == types.RunRunning {
+				t.Fatalf("calls %v left %d run %s: want the server created, then ended, and the run not RUNNING", f.sbx.calls, f.sbx.left(), f.state())
+			}
+			f.assertRowsEnded(t)
+		})
 	}
-	f.assertRowsEnded(t)
 }
 
 // TestKillDuringMCPCreateLeavesNoSandbox (I8): a kill's own row end, or a person's Stop, that runs between
