@@ -40,6 +40,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"approvals_reauth.go:canSeeApproval":                       {1, "authz-only: approval read reach"},
 	"approvals_takeover.go:loadTakeover":                       {1, "authz-only: a takeover's reach and the deny_interactive door, as refuseAttachEntry's ticket lane"},
 	"assistant_actor.go:assistantEffectiveRole":                {2, "authz-only: the tier an assistant tool call acts at, the security tier only when the snapshot and the fresh role both hold it; the tool context is the person's, never the operator"},
+	"assistant_tools_checks.go:assistantReviewCaller":          {1, "authz-only: whether reviewFor's caller may set a mount's host path, asked on the capped person context, so false under the security-tier cap; it admits no run policy"},
+	"assistant_tools.go:assistantUnitTier":                     {1, "authz-only: the unit tier a session on a new unit is held to, as requireUnitScope holds POST /governance/units; it admits no run policy"},
 	"assistant_context.go:assistantResolveTarget":              {1, "authz-only: whether the person may read a run they did not start as the assistant's target, as the run read door does; it admits no run policy"},
 	"attach.go:refuseAttachEntry":                              {1, "authz-only: a session door; traffic in the session is the dispatched proxy config"},
 	"attach_authority.go:attachAuthority":                      {1, "authz-only: an open terminal's deny_interactive re-check, with refuseNoTicketAttach's exemption; it admits no run policy"},

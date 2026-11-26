@@ -66,6 +66,8 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/gateway-identity":               false, // placement refuses a gateway route on a person's runner
 	"GET /api/v1/internal/assistant/turns":                 false, // an assistant run is placed remote, never on a person's runner
 	"POST /api/v1/internal/assistant/events":               false,
+	"GET /api/v1/internal/assistant/tools":                 false,
+	"POST /api/v1/internal/assistant/tools/{name}":         false,
 }
 
 type relayRunnerKey struct{}

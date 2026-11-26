@@ -93,10 +93,11 @@ var auditStrictRoutes = map[string]bool{
 
 	"PUT /api/v1/assistant/settings": true,
 
-	"POST /api/v1/assistant/sessions":               true,
-	"POST /api/v1/assistant/sessions/{id}/messages": true,
-	"POST /api/v1/assistant/sessions/{id}/edits":    true,
-	"DELETE /api/v1/assistant/sessions/{id}":        true,
+	"POST /api/v1/assistant/sessions":                          true,
+	"POST /api/v1/assistant/sessions/{id}/messages":            true,
+	"POST /api/v1/assistant/sessions/{id}/edits":               true,
+	"POST /api/v1/assistant/sessions/{id}/build-files/confirm": true,
+	"DELETE /api/v1/assistant/sessions/{id}":                   true,
 
 	"PUT /api/v1/agent-rules/{harness}":    true,
 	"DELETE /api/v1/agent-rules/{harness}": true,

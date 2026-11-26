@@ -110,7 +110,7 @@ func TestAssistantLongPollAnswersOnTheWake(t *testing.T) {
 	srv, _ := assistantSessionServer(t, f)
 	person := "sub-wake-" + uuid.NewString()
 	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
-	s := assistantLiveSession(person, nil, bind)
+	s := assistantStartedNoRun(assistantLiveSession(person, nil, bind))
 	f.seed(s)
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- doSSO(t, srv, http.MethodGet, assistantPath(s.ID, "/events"), cookie, "") }()

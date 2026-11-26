@@ -432,8 +432,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/assistant/sessions":               {class: classMember},
 	"POST /api/v1/assistant/sessions/{id}/messages": {class: classMember},
 	"POST /api/v1/assistant/sessions/{id}/edits":    {class: classMember},
-	"GET /api/v1/assistant/sessions/{id}/events":    {class: classMember},
-	"DELETE /api/v1/assistant/sessions/{id}":        {class: classMember},
+	// The person's last confirmation of a repository draft's files: the session's owner's own, another's {id} is 404.
+	"POST /api/v1/assistant/sessions/{id}/build-files/confirm": {class: classMember},
+	"GET /api/v1/assistant/sessions/{id}/events":               {class: classMember},
+	"DELETE /api/v1/assistant/sessions/{id}":                   {class: classMember},
+	// The checks strip and the replay: the signed-in person's own checks, with no session and no model.
+	"POST /api/v1/assistant/checks": {class: classMember},
+	"POST /api/v1/assistant/replay": {class: classMember},
 	// Model providers (0.8): gateway addresses, the AWS access portal and
 	// account pins. SUPER for the agent roster's reason; the member tier is
 	// served SetupStatus.model_providers instead, which carries none of them.
@@ -1093,6 +1098,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},
 	"GET /api/v1/internal/assistant/turns":                 {class: classInternal},
 	"POST /api/v1/internal/assistant/events":               {class: classInternal},
+	"GET /api/v1/internal/assistant/tools":                 {class: classInternal},
+	"POST /api/v1/internal/assistant/tools/{name}":         {class: classInternal},
 	"GET /api/v1/internal/injection/{grantID}":             {class: classInternal},
 	"GET /api/v1/internal/via-org/{grantID}/*":             {class: classInternal},
 	"HEAD /api/v1/internal/via-org/{grantID}/*":            {class: classInternal},

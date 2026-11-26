@@ -1,0 +1,15 @@
+lockfileVersion: '9.0'
+
+packages:
+
+  left-pad-sample@1.0.0:
+    resolution: {integrity: sha512-Wjs4JZ20OaMy5+9AjdYlQDzWo8x6AERqQUlL4iL55cUyp0imOQZd0esPZ/HVDDj/BdvVE1kbrN+0m/fW1iIm8A==}
+
+  example-lib@1.1.0:
+    resolution: {integrity: sha512-CmZ1IHvVbe1WPrqJrg5kO0K/3pvthO7s+rAgD1VFblwBULA5paalazt8Adt5M0S/TubJ/0z5Hoo1bfcwhkN5cA==}
+
+  fixture-core@1.2.0:
+    resolution: {integrity: sha512-E7x57vvscwppxuxxhu6/Gb4Gn8a5D+hugevYfS/Q9uMMzOb6NjxsFTdIiTGnA9M4vEP72Q02xTw2FBNkY4dj5A==}
+
+  demo-utils@1.3.0:
+    resolution: {integrity: sha512-E8IOKBYHPIOqsy19JYX3gRDPenIphZEIMJP2EBapw4XNcqZWZWWrmqCpM+JV6Inx2u5Wee0IOB9cOksatPcWyQ==}

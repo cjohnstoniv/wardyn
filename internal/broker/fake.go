@@ -55,6 +55,12 @@ type FakeGitHubMinter struct {
 	BranchesErr       error
 	LastListedRepos   []string
 
+	// RootFiles/RootFilesErr drive ReadRootFiles; LastReadRepos records every repo it was asked about, so a
+	// test can assert that nothing was read.
+	RootFiles     []File
+	RootFilesErr  error
+	LastReadRepos []string
+
 	// AppPermissions is the App's own grant InstallationPermissions answers
 	// with; AppPermissionsErr, if set, is returned instead.
 	AppPermissions    map[string]string
@@ -75,6 +81,30 @@ func (f *FakeGitHubMinter) ListBranches(_ context.Context, repo string, _ int) (
 		return nil, "", false, f.BranchesErr
 	}
 	return f.Branches, f.DefaultBranch, f.BranchesTruncated, nil
+}
+
+// ReadRootFiles answers the files RootFiles holds whose names are asked for, in the order they are asked, with the
+// real read's byte cap: a larger one comes back named and without text.
+func (f *FakeGitHubMinter) ReadRootFiles(_ context.Context, repo string, names []string, maxBytes int) ([]File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.LastReadRepos = append(f.LastReadRepos, repo)
+	if f.RootFilesErr != nil {
+		return nil, f.RootFilesErr
+	}
+	var out []File
+	for _, name := range names {
+		for _, file := range f.RootFiles {
+			if file.Name != name {
+				continue
+			}
+			if file.Size = max(file.Size, len(file.Text)); file.Size > maxBytes {
+				file.Text, file.TooLarge = "", true
+			}
+			out = append(out, file)
+		}
+	}
+	return out, nil
 }
 
 func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []string, permissions map[string]string, ttl time.Duration) (string, time.Time, error) {
