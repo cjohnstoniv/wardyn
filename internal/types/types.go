@@ -220,6 +220,9 @@ type AgentRun struct {
 	// ImageAdmission is the image admission verdict for the member's image (ImageAdmissionVerdict); nil when
 	// admission was off, the run named no member image, an operator started it, or the run predates it.
 	ImageAdmission *ImageAdmissionVerdict `json:"image_admission,omitempty"`
+	// Containers are the run's extra containers (run_containers). Set on the row create returns and on the
+	// 201; a read of the run does not load them (store.RunContainers does).
+	Containers []RunExtraContainer `json:"containers,omitempty"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;

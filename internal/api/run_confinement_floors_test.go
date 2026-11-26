@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // TestConfinementTraitsFireOnTheirSignal: each trait the confinement floors read is true on its own signal and
@@ -31,6 +32,9 @@ func TestConfinementTraitsFireOnTheirSignal(t *testing.T) {
 		{"no trait", func(*runFold) {}, composer.ConfinementTraits{}},
 		{"the request's image", func(f *runFold) { f.req.Image = "registry.example/team/tool:1" }, composer.ConfinementTraits{OwnImage: true}},
 		{"a policy-carried workspace's image", func(f *runFold) { f.carriedImage = "registry.example/team/base:2" }, composer.ConfinementTraits{OwnImage: true}},
+		{"an extra container's image", func(f *runFold) {
+			f.req.Containers = []client.RunContainer{{Name: "db", Image: "registry.example/team/db:1"}}
+		}, composer.ConfinementTraits{OwnImage: true}},
 		{"a devcontainer build", func(f *runFold) { f.req.DevcontainerRepo = "https://git.example/team/repo" }, composer.ConfinementTraits{OwnImage: true}},
 		{"a workspace built from its repository's own devcontainer", func(f *runFold) { f.wsRefs = []types.Workspace{devcontainerRepoWorkspace(t, true)} }, composer.ConfinementTraits{OwnImage: true}},
 		{"a workspace whose image Wardyn generates", func(f *runFold) { f.wsRefs = []types.Workspace{devcontainerRepoWorkspace(t, false)} }, composer.ConfinementTraits{}},
@@ -96,6 +100,11 @@ func TestConfinementFloorHoldsTheRunToTheTraitFloor(t *testing.T) {
 	}
 	if by := raisedBy(); !slices.Equal(by, []string{"own_image"}) {
 		t.Errorf("raised by %v, want [own_image]", by)
+	}
+	// A member who names no image of their own but adds an extra container is raised the same way.
+	f.req = &createRunRequest{Containers: []client.RunContainer{{Name: "db", Image: "registry.example/team/db:1"}}}
+	if got, by := floorOf().MinConfinementClass, raisedBy(); got != types.CC3 || !slices.Equal(by, []string{"own_image"}) {
+		t.Errorf("a run with an extra container: floor %q raised by %v, want CC3 raised by [own_image]", got, by)
 	}
 	f.ceiling.Limits.ConfinementFloors = nil
 	if got := floorOf().MinConfinementClass; got != types.CC1 || raisedBy() != nil {

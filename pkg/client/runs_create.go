@@ -310,6 +310,10 @@ type CreateRunRequest struct {
 	// wardynd check the port itself too, through the sandbox's exec path; any other value is 400
 	// run_mode_invalid with field service.health.probe.
 	Service *types.RunService `json:"service,omitempty"`
+	// Containers run beside the agent in the same sandbox, sharing its network, work folder and drives,
+	// each confined as the agent is. Each image is pinned by digest and needs what `image` needs. Each
+	// container's cpu_millis and memory_mib come out of the run's own size. At most 4; Kubernetes only.
+	Containers []RunContainer `json:"containers,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title, CorrelationID,
@@ -561,4 +565,19 @@ func (c *Client) Preflight(ctx context.Context, req CreateRunRequest) (Preflight
 	var out PreflightResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/runs/preflight", req, &out)
 	return out, err
+}
+
+// RunContainer is one extra container of a run (CreateRunRequest.Containers).
+type RunContainer struct {
+	Name      string                `json:"name"`
+	Image     string                `json:"image"`
+	Command   []string              `json:"command,omitempty"`
+	Ports     []int                 `json:"ports,omitempty"`
+	Resources RunContainerResources `json:"resources"`
+}
+
+// RunContainerResources is an extra container's share of the run's size; both are required.
+type RunContainerResources struct {
+	CPUMillis int `json:"cpu_millis"`
+	MemoryMiB int `json:"memory_mib"`
 }

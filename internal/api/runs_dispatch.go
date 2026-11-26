@@ -399,6 +399,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image, p.SigninImageUngranted)
 	p.Image = image
 
+	extras, xerr := s.dispatchContainers(ctx, run.ID)
+	if xerr != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's extra containers could not be read")
+		return
+	}
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            p.Image,
@@ -420,6 +425,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// started harness's approval credential; nil for a run with neither, or
 		// on a runner that cannot deliver them.
 		ManagedFiles: slices.Concat(agentPolicy.files, codexFiles, credFiles, mcp.files),
+		Containers:   extras,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against

@@ -13,14 +13,15 @@ import (
 )
 
 // confinementTraits are the run facts a governance profile's confinement floors read, each from the field the
-// gate that owns it reads: the image the digest rule holds (createDigestInput), a devcontainer build, or a
-// workspace built from its repository's own devcontainer (buildsOwnDevcontainer), a component the launcher
+// gate that owns it reads: the image the digest rule holds (createDigestInput), an extra container (each names an
+// image its launcher chose, and runs at the pod's class), a devcontainer build, or a workspace built from its
+// repository's own devcontainer (buildsOwnDevcontainer), a component the launcher
 // defined (runComponents.selfDefined, as the autonomy posture counts it), and a data_out rule that lets content
 // leave (stepComputerFolderDataOut's reading). Like createDigestInput, this and the functions below take the
 // fold's facts, not the fold: only runFoldSteps steps take the fold.
 func confinementTraits(req createRunRequest, carried string, wsRefs []types.Workspace, comps runComponents, spec types.RunPolicySpec) composer.ConfinementTraits {
 	return composer.ConfinementTraits{
-		OwnImage:             createDigestInput(req, carried) != "" || req.DevcontainerRepo != "" || buildsOwnDevcontainer(wsRefs),
+		OwnImage:             createDigestInput(req, carried) != "" || len(req.Containers) > 0 || req.DevcontainerRepo != "" || buildsOwnDevcontainer(wsRefs),
 		SelfDefinedComponent: comps.selfDefined > 0,
 		DataOutOpen:          spec.DataOut.DataOut() == types.TransferAllowed,
 	}

@@ -166,6 +166,9 @@ const (
 	// The policy overlay (run_policy_overlay.go): a document's partial policy laid onto the caller's default.
 	reasonPolicyOverlayInvalid  = "policy_overlay_invalid"  // policy_overlay is not a non-empty object of carried policy keys with usable values
 	reasonPolicyOverlayConflict = "policy_overlay_conflict" // policy_overlay was sent beside policy_id or inline_policy
+	// Extra containers (run_containers.go): the request's containers, refused by their shape or the run's size.
+	reasonRunContainersInvalid    = "run_containers_invalid"     // a containers entry is malformed: name, image pin, command, ports or resources
+	reasonRunContainersOverBudget = "run_containers_over_budget" // the extra containers leave the agent less than its floor of the run's size
 	// The 0.9 run-mode contract (run_mode.go): what a person is starting. The
 	// sentences are run_mode_refusals.go's, with a TypeScript twin.
 	reasonRunModeRequired    = "run_mode_required"    // a new client's mode or background workload is unset, and is never inferred

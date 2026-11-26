@@ -109,6 +109,25 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}
+	if refusal := containersCountRefusal(req); refusal != nil {
+		return governanceCeiling{}, refusal
+	}
+	for i, c := range req.Containers {
+		if !containerImageOK(c.Image) { // this door runs before the shape checks; never echo an unbounded ref
+			return governanceCeiling{}, containerImageRefusal(i)
+		}
+		if refusal := s.imageDigestRefusal(r.Context(), c.Image, false); refusal != nil {
+			return governanceCeiling{}, refusal
+		}
+		granted, err := s.capGranted(r.Context(), capImage, c.Image)
+		if err != nil {
+			return governanceCeiling{}, runServerError("resolve capability", err)
+		}
+		if !granted {
+			return governanceCeiling{}, runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image", fmt.Sprintf(
+				"containers[%d]: image %s is not granted to you — ask an admin for an image grant that covers it", i, c.Image)))
+		}
+	}
 	// Every workspace the request selects, workspace_id first, each once and in
 	// request order, so the refusal names the first one not granted.
 	ids := attachedWorkspaceIDs(req)
@@ -172,6 +191,13 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.interactive_start", fmt.Sprintf(
 			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy).
 			OnKnob(ceiling.lockOf("deny_task_mode_exec")))
+	}
+	// An extra container runs what the agent sends it over the sandbox's loopback, outside tool approvals: the
+	// same unsupervised door as exec.
+	if ceiling.Limits.DenyTaskModeExec && len(req.Containers) > 0 {
+		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.containers", fmt.Sprintf(
+			"extra containers are not allowed by your governance profile %q — an extra container runs what the agent sends it inside the sandbox, outside tool approvals, unattended the way exec does. Launch without containers.", name)).
+			WithPolicy(policy).OnKnob(ceiling.lockOf("deny_task_mode_exec")))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
