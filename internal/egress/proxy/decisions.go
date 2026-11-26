@@ -64,6 +64,13 @@ type decisionSink struct {
 	// appending counts admitted records whose append runs without mu (emitLocal); close waits for them.
 	appending sync.WaitGroup
 
+	// spool keeps batches the control plane could not take (decisions_spool.go); nil when it is off, which is
+	// also how a runner-hosted proxy and the tests run. drainStop, drainKick and drainWG are the drain's.
+	spool     *decisionSpool
+	drainStop chan struct{}
+	drainKick chan struct{}
+	drainWG   sync.WaitGroup
+
 	// outMu serialises writes to out: a single Write over PIPE_BUF is not
 	// atomic at the OS level, so concurrent mirror() calls could interleave
 	// into a corrupted record without it.
@@ -74,6 +81,11 @@ type decisionSink struct {
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
+	return newRunDecisionSink(uuid.Nil, controlPlaneURL, token, bufferSize, client, out)
+}
+
+// newRunDecisionSink is newDecisionSink for the sidecar of run runID, whose spool file is named for the run.
+func newRunDecisionSink(runID uuid.UUID, controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
 	s := &decisionSink{
 		endpoint: controlPlaneEndpoint(controlPlaneURL, "/api/v1/internal/decisions"),
 		token:    token,
@@ -82,6 +94,8 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 		ch:       make(chan queuedDecision, bufferSize),
 	}
 	s.lastOK.Store(time.Now().UnixNano())
+	s.openSpool(runID)
+	s.startSpoolDrain()
 	s.wg.Add(1)
 	go s.run()
 	return s
@@ -296,6 +310,7 @@ func (s *decisionSink) close(ctx context.Context) error {
 		// A decision emitted once the sink closed is counted (emit), and one counted after the worker's final
 		// summary would be in no summary: post one more for those, once the worker is gone, even when close
 		// has stopped waiting.
+		s.stopSpool(func() bool { return ctx.Err() != nil }) // replays what it can within the close budget; the rest is dropped and counted
 		s.reportDropped(&s.reported)
 		close(done)
 	}()

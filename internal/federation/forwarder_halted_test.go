@@ -20,9 +20,9 @@ type countingStore struct {
 	reads int
 }
 
-func (c *countingStore) ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error) {
+func (c *countingStore) ListFederatedAuditRowsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditRow, error) {
 	c.reads++
-	return c.memStore.ListAuditEventsAfterSeq(ctx, seq, limit)
+	return c.memStore.ListFederatedAuditRowsAfterSeq(ctx, seq, limit)
 }
 
 func TestForwarder_HaltedAtCursorZeroReadsNoRows(t *testing.T) {

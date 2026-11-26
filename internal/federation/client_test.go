@@ -61,7 +61,7 @@ func TestClient_RefusesToFollowARedirect(t *testing.T) {
 	}))
 	defer org.Close()
 
-	_, err := NewClient(org.URL).Push(t.Context(), Credential{DeviceID: uuid.New(), Token: "wdd_secret"}, []types.FederatedAuditEvent{})
+	_, err := NewClient(org.URL).Push(t.Context(), Credential{DeviceID: uuid.New(), Token: "wdd_secret"}, []types.FederatedAuditRow{})
 	var se *StatusError
 	if !errors.As(err, &se) || se.Code != http.StatusTemporaryRedirect {
 		t.Fatalf("Push = %v, want the 307 as a StatusError", err)

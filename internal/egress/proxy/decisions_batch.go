@@ -88,7 +88,9 @@ func (s *decisionSink) noteAnswer(resp *http.Response) {
 	switch {
 	case resp.StatusCode/100 == 2:
 		s.lastOK.Store(time.Now().UnixNano())
-		s.failing.Store(false)
+		if s.failing.Swap(false) {
+			s.kickDrain() // the control plane is back: replay what the spool holds
+		}
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode/100 == 5:
 		s.failing.Store(true)
 	}
@@ -213,9 +215,17 @@ func (s *decisionSink) sendBatch(recs []batchRecord, relayed bool, summaryAt uin
 	if summaryAt > 0 {
 		decisions--
 	}
+	// The last attempt goes without the final mark when the spool will keep the records should it fail: the
+	// spool, not a drop, is then where an undelivered batch goes. A relayed batch is never spooled, since the
+	// relayed mark is not kept with a record.
+	spooled := recs
+	if summaryAt > 0 {
+		spooled = recs[1:]
+	}
+	toSpool := !relayed && len(spooled) > 0 && s.spoolHasRoom(spooled)
 	for attempt := 0; ; attempt++ {
 		final := attempt == len(decisionBatchBackoff)
-		code, advertised, err := s.postBatchBody(body.Bytes(), relayed, final)
+		code, advertised, err := s.postBatchBody(body.Bytes(), relayed, final && !toSpool)
 		switch {
 		case err == nil && !advertised:
 			// The control plane did not read a batch: post each record as the single path does.
@@ -250,6 +260,13 @@ func (s *decisionSink) sendBatch(recs []batchRecord, relayed bool, summaryAt uin
 			return
 		}
 		if final {
+			if toSpool {
+				if err := s.spool.append(spooled); err != nil {
+					slog.Warn("egress proxy: the decision spool refused a batch", slog.String("err", err.Error()))
+					s.dropped.Add(decisions) // the summary that goes with the next final mark reports them
+				}
+				return
+			}
 			s.dropped.Add(decisions)
 			return
 		}
@@ -260,6 +277,11 @@ func (s *decisionSink) sendBatch(recs []batchRecord, relayed bool, summaryAt uin
 // postBatchBody sends one attempt of a batch. It answers the status and whether the answer advertised
 // batches, or the transport's error.
 func (s *decisionSink) postBatchBody(body []byte, relayed, final bool) (int, bool, error) {
+	return s.postBatchBodyWith(body, relayed, final, false)
+}
+
+// postBatchBodyWith is postBatchBody that also marks a replay from the proxy's spool (DecisionReplayHeader).
+func (s *decisionSink) postBatchBodyWith(body []byte, relayed, final, replay bool) (int, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
@@ -273,6 +295,9 @@ func (s *decisionSink) postBatchBody(body []byte, relayed, final bool) (int, boo
 	}
 	if final {
 		req.Header.Set(DecisionFinalHeader, "1")
+	}
+	if replay {
+		req.Header.Set(DecisionReplayHeader, "1")
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {

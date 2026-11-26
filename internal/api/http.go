@@ -965,7 +965,7 @@ func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 }
 
 func contextWithClaims(ctx context.Context, c *identity.Claims) context.Context {
-	return context.WithValue(audit.WithPolicyToken(ctx, c.RunID, c.JTI), claimsCtxKey{}, c) // rows it records carry the token's policy generation
+	return context.WithValue(audit.WithRunIdentity(audit.WithPolicyToken(ctx, c.RunID, c.JTI), c.Sub, c.Sponsor, c.SPIFFEID), claimsCtxKey{}, c) // rows it records carry the token's policy generation and run identity
 }
 
 // claimsFromContext returns the verified run claims placed by internalAuth.

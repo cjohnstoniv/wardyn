@@ -82,13 +82,13 @@ func (m *memStore) add(n int, chained bool) {
 	}
 }
 
-func (m *memStore) ListAuditEventsAfterSeq(_ context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error) {
+func (m *memStore) ListFederatedAuditRowsAfterSeq(_ context.Context, seq int64, limit int) ([]types.FederatedAuditRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []types.FederatedAuditEvent
+	var out []types.FederatedAuditRow
 	for _, r := range m.rows {
 		if r.Seq > seq && len(out) < limit {
-			out = append(out, r)
+			out = append(out, types.FederatedAuditRow{FederatedAuditEvent: r})
 		}
 	}
 	return out, nil
@@ -125,7 +125,7 @@ func (r *memRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 type orgStub struct {
 	mu         sync.Mutex
 	acked      int64
-	pushes     [][]types.FederatedAuditEvent
+	pushes     [][]types.FederatedAuditRow
 	heartbeats int
 	auth       string
 	answer     func(w http.ResponseWriter) bool
@@ -141,7 +141,7 @@ func (o *orgStub) serve(t *testing.T, id uuid.UUID) *httptest.Server {
 		}
 		switch r.URL.Path {
 		case "/api/v1/devices/" + id.String() + "/audit":
-			var rows []types.FederatedAuditEvent
+			var rows []types.FederatedAuditRow
 			if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
 				t.Errorf("decode push: %v", err)
 			}

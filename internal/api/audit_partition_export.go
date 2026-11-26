@@ -75,6 +75,11 @@ type partitionRawLine struct {
 	PrevHash   *string    `json:"prev_hash"`
 	RowHash    *string    `json:"row_hash"`
 	FoldHash   string     `json:"fold_hash,omitempty"`
+	// HashFormat is 2 on a row hashed with a per-row salt (absent on the original formula) and HashSalt that
+	// salt. Only the raw line carries it, and only while the line's data is as stored: a line whose data was
+	// projected has no salt, so its hash cannot be recomputed from what the line shows.
+	HashFormat int     `json:"hash_format,omitempty"`
+	HashSalt   *string `json:"hash_salt,omitempty"`
 }
 
 // exportAuditPartition serves GET /audit/export?partition=<name>: one closed partition, in seq order,
@@ -220,6 +225,8 @@ func partitionProjector(superAdmin bool, redacted *int64) func(action string, da
 }
 
 // projectedRawLine is rawPartitionLine with its data as project serves it; the hashes stay the stored ones.
+// A projected line gives up its salt, so no reader can recompute its hash from the visible fields and a list
+// of candidates for what was withheld; an unprojected line keeps it and verifies offline.
 func projectedRawLine(row store.AuditPartitionRow, project func(string, []byte) ([]byte, bool)) partitionRawLine {
 	l := rawPartitionLine(row)
 	if row.Data == nil {
@@ -228,6 +235,7 @@ func projectedRawLine(row store.AuditPartitionRow, project func(string, []byte) 
 	if d, ok := project(row.Action, []byte(*row.Data)); ok {
 		text := string(d)
 		l.Data = &text
+		l.HashSalt = nil
 	}
 	return l
 }
@@ -237,6 +245,10 @@ func rawPartitionLine(row store.AuditPartitionRow) partitionRawLine {
 		Type: "row", Seq: row.Seq, RecordedUS: row.RecordedUS, ID: row.ID, TimeUS: row.TimeUS, RunID: row.RunID,
 		ActorType: row.ActorType, Actor: row.Actor, Action: row.Action, Target: row.Target, Outcome: row.Outcome,
 		SourceIP: row.SourceIP, Data: row.Data, PrevHash: row.PrevHash, RowHash: row.RowHash,
+		HashSalt: row.HashSalt,
+	}
+	if row.HashFormat != 1 { // a format 1 line keeps the shape it always had
+		l.HashFormat = row.HashFormat
 	}
 	if row.RowHash == nil {
 		l.FoldHash = row.FoldHash

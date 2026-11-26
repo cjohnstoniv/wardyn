@@ -93,6 +93,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - With the SSH gateway off, `wardyn run forward` asks for a forward ticket for each connection, so it no longer counts against the run's terminal sessions.
 - With `WARDYN_START_AFTER_READBACK=on`, an interactive run with a task is no longer refused. Its starting prompt or startup command waits in the sandbox until the run's proxy confirms its policy, then starts, so an application can be served with the setting on. This needs a Wardyn agent image from 0.11.0 or later; with an older image the run fails with its sandbox stopped and a hint to rebuild it. An interactive VM run with a task is still refused.
 - Kubernetes: the fit warning and the start-time limit now judge a barrier run's agent pod with its RuntimeClass's scheduling and overhead.
+- Audit rows are now hashed with a per-row salt that Postgres makes and stores with the row (hash format 2), so a row exported with its fields projected away can no longer be matched against a list of guessed values. Rows from before keep their format and verify as they did. A device sends its rows' format and salt, and the organisation re-checks the claim with them.
+- Every audit row written under a run's token now names the run's owner and workload as `run_owner` and `run_workload`, and a service-owned run's sponsor as `sponsor`, taken from the verified token. A successful credential mint row carries only `run_workload`, because it is written without the audit sealer (a denied or failed mint goes through the recorders and carries the same keys as the run's other rows); a decision a runner spooled takes them from the stored run.
+- A server egress proxy that cannot reach the control plane now keeps up to 50,000 decisions (32 MiB) in its container's temporary directory and sends them when it can, with their own times, instead of dropping them.
 
 ### Fixed
 
@@ -113,6 +116,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - With the image builder on, the first pass after the upgrade removes reusable custom-image wraps (`wardyn-byoi/reuse:<key>`) built more than a week ago that no run has been started on for a week.
 - Migration `0400_run_history_tombstones` adds a table, grants the app role (every role granted `UPDATE` on `agent_runs`) `SELECT, INSERT, UPDATE` on it, and changes no row. On a split-role install, grant the app role `DELETE` on `agent_runs` before you set `WARDYN_RUN_HISTORY_RETENTION_DAYS`.
 - Kubernetes: Wardyn now refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. Before upgrading, add the selector and remove from `k8s.sandbox.tolerations` any toleration the RuntimeClass already carries; the 0.10.4 Kata recipe put one there.
+- There is no rolling upgrade across this release: stop every older replica before the first new one starts. An older replica that keeps running writes format 2 rows too, because the database makes the hash, but its verify sweep and checkpoint signer recompute every row with the old formula and report a chain break at the first format 2 row.
+- Upgrade the organisation before its devices.
+- An older `wardyn audit verify` reports every new row as altered and exits 1, because it ignores the row's format and salt: update the CLI before you verify a new export.
 
 ## [0.11.0-rc.3] — 2026-11-25
 

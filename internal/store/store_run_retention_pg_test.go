@@ -346,7 +346,7 @@ func TestRefuseOrgRunsRefusesATombstonedRunPG(t *testing.T) {
 		Data: json.RawMessage(`{"decision":"APPROVED"}`),
 	}
 	ev.RowHash = auditRowHash(t, pool, "", ev)
-	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}})
+	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{{FederatedAuditEvent: types.FederatedAuditEvent{AuditEvent: ev, Seq: 1}}})
 	if !errors.Is(err, store.ErrFederatedOrgRun) {
 		t.Fatalf("ingest of a row under deleted run %s: err = %v, want ErrFederatedOrgRun", run.ID, err)
 	}

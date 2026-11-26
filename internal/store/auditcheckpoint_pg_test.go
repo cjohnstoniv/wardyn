@@ -24,7 +24,7 @@ func receiptRow(r store.AuditPartitionRow) auditreceipt.Row {
 	target, sourceIP := r.Target, r.SourceIP
 	return auditreceipt.Row{Seq: r.Seq, ID: r.ID, TimeUS: r.TimeUS, RunID: r.RunID, ActorType: r.ActorType, Actor: r.Actor,
 		Action: r.Action, Target: &target, Outcome: r.Outcome, SourceIP: &sourceIP, Data: r.Data, PrevHash: r.PrevHash,
-		RowHash: r.RowHash}
+		RowHash: r.RowHash, HashFormat: r.HashFormat, HashSalt: r.HashSalt}
 }
 
 // TestRowHash_MatchesPostgres pins the Go port to audit_row_hash: rows written through the real path, covering
@@ -62,7 +62,7 @@ func TestRowHash_MatchesPostgres(t *testing.T) {
 			t.Fatalf("row %d has no row_hash", r.Seq)
 		}
 		if got := auditreceipt.RowHash(receiptRow(r)); got != *r.RowHash {
-			t.Errorf("seq %d: Go RowHash %s, Postgres %s (input %q)", r.Seq, got, *r.RowHash, auditreceipt.HashInput(receiptRow(r)))
+			t.Errorf("seq %d (format %d): Go RowHash %s, Postgres %s", r.Seq, r.HashFormat, got, *r.RowHash)
 		}
 	}
 

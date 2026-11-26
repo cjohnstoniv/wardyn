@@ -296,7 +296,7 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		coalescer.Inner = stamped
 		head = coalescer
 	}
-	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true, resealed: resealed}, nil
+	return audit.RunIdentityRecorder{Inner: audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true, resealed: resealed}, nil
 }
 
 // optionalFeatures groups the off-by-default subsystems run() wires into

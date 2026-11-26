@@ -50,6 +50,14 @@ type FederatedAuditEvent struct {
 	Seq int64 `json:"seq"`
 }
 
+// FederatedAuditRow is a FederatedAuditEvent as a device pushes it: with the hash format and salt
+// its row hash was made with, so the organisation can recompute the claim. Only federation carries it.
+type FederatedAuditRow struct {
+	FederatedAuditEvent
+	HashFormat int    `json:"hash_format,omitempty"`
+	HashSalt   string `json:"hash_salt,omitempty"`
+}
+
 // DeviceEnrolRequest/DeviceEnrolResponse are POST /devices/enrol's wire
 // shapes; DeviceAck is the ingest/heartbeat routes' recorded-cursor answer.
 type DeviceEnrolRequest struct {

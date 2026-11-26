@@ -492,7 +492,7 @@ func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client
 		}
 		return s, err
 	}
-	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
+	return newRunDecisionSink(cfg.RunID, cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
 }
 
 // preparedSpool refuses a spool directory wardyn-runnerd did not prepare. Only a wardyn-runnerd from 0.9.3-rc.2

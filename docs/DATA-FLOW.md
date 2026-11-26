@@ -49,6 +49,7 @@ the code that makes it true; there is no separate "trust us" layer.
 
 - Streams the append-only audit log to the operator's own SIEM.
 - Every event **whose Postgres write succeeded** carries its hash-chain `prev_hash`/`row_hash` (migration `0047`),
+  - from 0.11.0 the hash also covers a per-row salt that stays in the database and in an unprojected raw export, never in a sink stream,
   - so what the SIEM holds off-box is a head hash Wardyn cannot later disown —
   - that comparison, not anything in the database, is what detects a rewritten or truncated trail ([`docs/OPERATIONS.md`](OPERATIONS.md)).
 - The qualifier is load-bearing:

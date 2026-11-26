@@ -1234,6 +1234,19 @@ ADMIN pre-authorized** —
   action, target, outcome, source_ip, data))`, computed **inside Postgres** in a
   `BEFORE INSERT` trigger, so the writer cannot choose it and both in-tree insert
   paths (the store and the broker's in-tx `credential.mint`) inherit the chain.
+- A row written by this release is hashed in format 2: the formula above also covers a per-row salt, which
+  Postgres makes and stores with the row, so the hash of a row exported with its fields projected away cannot be
+  guessed from a list of candidate values. A row from before keeps format 1 and verifies as it always did.
+  - The control plane salts every row it stores itself.
+  - A device's claim salt is the device's choice, kept only to re-check its claim: the stored hash never uses it, so a
+    device that picks a constant salt weakens only the secrecy of claims it already holds.
+  - Rows written before this release keep format 1, so their projected lines stay recomputable from a candidate list.
+  - A projected export line carries no salt and cannot be recomputed; an unprojected one carries it and can.
+- A run's proxy keeps decisions the control plane did not take and sends them again as replays, and the door cannot tell
+  a replay from one a token holder forges. A holder of a run's token can therefore date a decision it posts back to
+  the later of 24 hours before the post and the run's start, where before the bound was ten minutes.
+  - It cannot suppress a row: a decision is matched by its id, time and run, and ids are random.
+  - The decision's content was already the holder's claim.
 - Editing one row breaks its own hash; deleting one breaks its neighbours' link; the
   operator-invoked sweep (`GET /api/v1/audit/chain/verify`, admin or `security_admin` — the
   `securityOps` tier, `requireSecurityOperator` / `isSecurityOperator` — never run at boot) names

@@ -204,7 +204,7 @@ func TestPG_LatestOrganisationAuditEventPassesOverForwardedRows(t *testing.T) {
 		prev = ev.RowHash
 		rows = append(rows, types.FederatedAuditEvent{AuditEvent: ev, Seq: int64(i + 1)})
 	}
-	res, err := pg.IngestDeviceAudit(ctx, d.ID, "10.9.9.9", rows)
+	res, err := ingestEvents(ctx, pg, d.ID, "10.9.9.9", rows)
 	if err != nil || res.Accepted != len(rows) {
 		t.Fatalf("a laptop forwarding this action: accepted %d, err %v; want all %d taken", res.Accepted, err, len(rows))
 	}

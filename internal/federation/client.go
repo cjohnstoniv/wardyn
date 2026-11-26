@@ -128,7 +128,7 @@ func (c *Client) Enrol(ctx context.Context, enrolmentToken string) (types.Device
 
 // Push sends one batch of this daemon's chained rows, oldest first, and
 // returns the organisation's recorded cursor for the device.
-func (c *Client) Push(ctx context.Context, cred Credential, rows []types.FederatedAuditEvent) (int64, error) {
+func (c *Client) Push(ctx context.Context, cred Credential, rows []types.FederatedAuditRow) (int64, error) {
 	var ack types.DeviceAck
 	err := c.post(ctx, "/api/v1/devices/"+cred.DeviceID.String()+"/audit", cred.Token, rows, http.StatusOK, &ack)
 	return ack.AckedSeq, err

@@ -107,7 +107,7 @@ func (s PG) AuditCheckpointRange(ctx context.Context, afterSeq int64, afterHash 
 		       prev_hash IS NULL,
 		       COALESCE(prev_hash,''),
 		       COALESCE(row_hash,''),
-		       COALESCE(audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
+		       COALESCE(audit_row_hash_any(hash_format, hash_salt, prev_hash, id, time, run_id, actor_type, actor,
 		                               action, target, outcome, source_ip, data), '')
 		FROM audit_events
 		WHERE seq > $1 AND seq <= $2
@@ -245,14 +245,15 @@ func (s PG) AuditReceiptRows(ctx context.Context, ids []uuid.UUID, runID *uuid.U
 		       id, run_id, actor_type, actor, action, target, outcome, source_ip, data::text,
 		       prev_hash, row_hash,
 		       COALESCE(row_hash, audit_row_hash(NULL, id, time, run_id, actor_type, actor, action, target,
-		                                         outcome, source_ip, data))
+		                                         outcome, source_ip, data)),
+		       hash_format, hash_salt
 		  FROM audit_events
 		 WHERE `+where+` AND seq > $2
 		 ORDER BY seq
 		 LIMIT $3`, []any{arg, afterSeq, limit}, func(row pgx.Row) (AuditPartitionRow, error) {
 		var r AuditPartitionRow
 		err := row.Scan(&r.Seq, &r.RecordedUS, &r.TimeUS, &r.ID, &r.RunID, &r.ActorType, &r.Actor, &r.Action,
-			&r.Target, &r.Outcome, &r.SourceIP, &r.Data, &r.PrevHash, &r.RowHash, &r.FoldHash)
+			&r.Target, &r.Outcome, &r.SourceIP, &r.Data, &r.PrevHash, &r.RowHash, &r.FoldHash, &r.HashFormat, &r.HashSalt)
 		return r, err
 	})
 }

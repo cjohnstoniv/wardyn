@@ -26,7 +26,7 @@ import (
 // target column. "sponsor" is checked on every row because the recorder chain stamps it on all of a
 // service request's rows, whichever writer made them.
 func sponsorFieldNames(ev types.AuditEvent) []string {
-	names := []string{"sponsor"}
+	names := []string{"sponsor", RunOwnerKey}
 	if strings.HasPrefix(ev.Action, "service_identity.") {
 		names = append(names, "sponsor_from", "sponsor_to")
 	}
@@ -42,7 +42,7 @@ func sponsorFieldNames(ev types.AuditEvent) []string {
 // sponsorsIn is ev's data object and the sponsor fields it holds as non-empty strings.
 func sponsorsIn(ev types.AuditEvent) (map[string]json.RawMessage, []string) {
 	if len(ev.Data) == 0 || !bytes.Contains(ev.Data, []byte(`"sponsor`)) && !bytes.Contains(ev.Data, []byte(`"target"`)) &&
-		!bytes.Contains(ev.Data, []byte(`"sub_unverified"`)) {
+		!bytes.Contains(ev.Data, []byte(`"run_owner"`)) && !bytes.Contains(ev.Data, []byte(`"sub_unverified"`)) {
 		return nil, nil
 	}
 	var m map[string]json.RawMessage

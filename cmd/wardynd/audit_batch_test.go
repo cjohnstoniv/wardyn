@@ -142,7 +142,7 @@ func TestAuditChainEveryStageBatches(t *testing.T) {
 		}
 	}
 	walk(reflect.ValueOf(&head).Elem())
-	want := []string{"audit.DelegationRecorder", "audit.DryRunRecorder", "*audit.DenialCoalescer", "audit.PolicyStampRecorder",
+	want := []string{"audit.RunIdentityRecorder", "audit.DelegationRecorder", "audit.DryRunRecorder", "*audit.DenialCoalescer", "audit.PolicyStampRecorder",
 		"main.maskingRecorder", "main.sealingRecorder", "main.spoolingRecorder", "main.fanoutRecorder", "store.Recorder"}
 	if !slices.Equal(seen, want) {
 		t.Fatalf("serving chain stages = %v, want %v", seen, want)
