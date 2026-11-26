@@ -51,7 +51,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `macos` (not required) | – | pending | pending | 30 |
 | `macos-xcode-27` (not required) | – | pending | pending | 10 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
-| `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
+| `test-pg-shard` (api-1, api-2, store, race-store, race-api) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |

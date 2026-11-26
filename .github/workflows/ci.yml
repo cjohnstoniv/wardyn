@@ -2589,19 +2589,21 @@ jobs:
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
   #
-  # Four shards, each with its OWN Postgres service, so the ~12-minute suite and
+  # Five shards, each with its OWN Postgres service, so the ~12-minute suite and
   # the ~5-minute race proofs stop queueing behind each other. -p 1 stays inside
   # each shard: its packages still share ONE database whose singleton state
   # (site_config) internal/api and test/apie2e both mutate. The shard package
   # lists are the old `make test-report-pg` list split in two; with
-  # `make test-race-pg` they run exactly what the single job ran.
+  # `make test-race-pg` (both race shards together) they run exactly what the single job ran.
   #   api-1, api-2 — the Postgres-gated tests of internal/api and test/apie2e, two
   #           slices balanced by the recorded seconds in test/pg-test-weights.tsv (make
   #           test-report-pg-api; scripts/pg-test-select.sh picks them, the go unit run proves the pick misses none). Each slice
   #           also runs every skip-floor probe. The ~4400 other tests run in `go`.
   #   store — the Postgres-gated tests of store, db, secretstore, broker, recording,
   #           cmd/wardynd, notify, livebus (make test-report-pg-store; same selector and guard)
-  #   race  — `make test-race-pg` (the three -race -p 1 passes)
+  #   race-store, race-api — `make test-race-pg-store` and `make test-race-pg-api`, the two halves of
+  #           `make test-race-pg` (the -race -p 1 passes). The store half imports no internal/api, so it
+  #           takes no api prebuild and runs beside the api half.
   # The required context `test-pg` is the aggregator below, which reports the
   # shards' combined result.
   test-pg-shard:
@@ -2612,7 +2614,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # 60: a shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e. The race shard runs its passes one after another (make test-race-pg) and has taken 40 to 45 minutes.
+    # 60: a shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e. The race shard ran every pass one after another and took 40 to 45 minutes; it is now two shards, race-store and race-api.
     timeout-minutes: 60
     # fail-fast: one red shard cancels the others, so a red run stops spending
     # about 48 runner-minutes on a result that is already a failure. test-pg
@@ -2645,9 +2647,13 @@ jobs:
           # therefore the tests most in need of the detector and the ones no gate
           # was pointing it at. This shard is that gate (F137). It writes no report
           # directory, so it uploads none.
-          - shard: race
+          - shard: race-store
             suite: ''
-            run: make test-race-pg
+            run: make test-race-pg-store
+            superuser: ''
+          - shard: race-api
+            suite: ''
+            run: make test-race-pg-api
             superuser: ''
             prebuild: race
     services:
