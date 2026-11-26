@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A web terminal whose sign-in stopped authorizing it, or whose writer seat was taken over, while its session was still opening now always closes with its code (4401, or the take-over's) instead of sometimes dropping without one, which the console read as a lost link to reconnect on.
+
 ## [0.11.0-rc.3] — 2026-11-25
 
 ### Fixed
