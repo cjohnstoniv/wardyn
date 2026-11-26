@@ -174,9 +174,30 @@ func authFailRows(h *harness, reason string) int {
 	return n
 }
 
+// mcpSandboxFiveRoutes is the spec's list, written out here so that a sixth entry in mcpSandboxRoutes fails
+// a test rather than passing the walk below, which would skip it as served.
+var mcpSandboxFiveRoutes = []string{
+	"POST /api/v1/internal/decisions",
+	"GET /api/v1/internal/injection/{grantID}",
+	"POST /api/v1/internal/token/renew",
+	"POST /api/v1/internal/approvals",
+	"GET /api/v1/internal/approvals/{id}",
+}
+
 // TestMCPTokenRefusedOnRunRoutes walks every /internal/ route, inside the internal group and outside it, and
-// refuses an MCP proxy's token on each one the MCP door does not serve.
+// refuses an MCP proxy's token on each one the MCP door does not serve. The door's table must equal the
+// spec's five exactly.
 func TestMCPTokenRefusedOnRunRoutes(t *testing.T) {
+	five := map[string]bool{}
+	for _, route := range mcpSandboxFiveRoutes {
+		five[route] = true
+		if _, ok := mcpSandboxRoutes[route]; !ok {
+			t.Errorf("the MCP door does not serve %s", route)
+		}
+	}
+	if len(mcpSandboxRoutes) != len(five) {
+		t.Errorf("the MCP door serves %d routes, want exactly the %d listed", len(mcpSandboxRoutes), len(five))
+	}
 	f := newMCPAuthFixture(t)
 	routes := map[string]bool{}
 	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -191,7 +212,7 @@ func TestMCPTokenRefusedOnRunRoutes(t *testing.T) {
 	params := regexp.MustCompile(`\{[^}]*\}`)
 	refused := 0
 	for route := range routes {
-		if _, served := mcpSandboxRoutes[route]; served {
+		if five[route] {
 			continue
 		}
 		method, pattern, _ := strings.Cut(route, " ")
@@ -204,7 +225,7 @@ func TestMCPTokenRefusedOnRunRoutes(t *testing.T) {
 		}
 		refused++
 	}
-	for route := range mcpSandboxRoutes {
+	for _, route := range mcpSandboxFiveRoutes {
 		if !routes[route] {
 			t.Errorf("the MCP door serves %s, which is not a route", route)
 		}
