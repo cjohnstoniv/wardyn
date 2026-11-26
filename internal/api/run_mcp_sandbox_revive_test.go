@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -458,5 +460,66 @@ func TestLiveEgressEditKeepsMCPSessions(t *testing.T) {
 	f.revive(t, false, true)
 	if f.sbx.count("create") != creates {
 		t.Errorf("an edit re-created a stopped row")
+	}
+}
+
+// mcpLookupNarrowerRow is a third server, "narrower" with an empty overlay.
+var mcpLookupNarrowerRow = func() types.RunComponent {
+	r := mcpRowInMode(mcpSearchRow, types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{}})
+	r.Ordinal, r.Name = 2, "Lookup"
+	return r
+}()
+
+// TestMCPLiveDeniesReachEveryMode: a restart's or a revive's policy takes the run's live deny set for every
+// mode, "own" included, so a host denied since launch is denied to each server and changes its digest, and
+// with the set as it was, each digest is the one its row records.
+func TestMCPLiveDeniesReachEveryMode(t *testing.T) {
+	f := newMCPReviveFixtureOf(t, mcpSearchOwnRow, mcpLookupNarrowerRow)
+	ctx := context.Background()
+	b, servers, _, err := f.srv.mcpLiveBase(ctx, f.current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := b
+	denied.deny = append(slices.Clone(b.deny), "denied.example.test")
+	for _, row := range f.st.mcpRowsMem.all() {
+		srv := servers[slices.IndexFunc(servers, func(m mcpServer) bool { return m.ordinal == row.Ordinal })]
+		mode := mcpPolicyModeOf(srv.def)
+		if pol, err := f.srv.mcpPolicyAgain(ctx, b, srv, row); err != nil || pol.spec.Digest() != row.PolicyDigest {
+			t.Errorf("%s (%s): policy %v, digest moved with no change: re-derive is not stable", row.ServerKey, mode, err)
+		}
+		pol, err := f.srv.mcpPolicyAgain(ctx, denied, srv, row)
+		if err != nil {
+			t.Fatalf("%s (%s): %v", row.ServerKey, mode, err)
+		}
+		if !slices.ContainsFunc(pol.spec.DeniedDomains, func(d string) bool { return strings.Contains(d, "denied.example.test") }) ||
+			pol.spec.Digest() == row.PolicyDigest {
+			t.Errorf("%s (%s): denies %v, digest kept %v: want the live deny in and the digest changed", row.ServerKey, mode,
+				pol.spec.DeniedDomains, pol.spec.Digest() == row.PolicyDigest)
+		}
+	}
+}
+
+// TestLiveEditStoppedEarlyFailsChangedServers: an edit's phase whose lock is lost during its first create
+// stops, and the server it did not reach, whose policy the edit changed, is killed and failed rather than
+// left running on the policy the edit narrowed.
+func TestLiveEditStoppedEarlyFailsChangedServers(t *testing.T) {
+	f := newMCPReviveFixture(t, true)
+	f.keepAgentPolicy(t, func(p *types.RunPolicySpec) { p.DeniedDomains = append(p.DeniedDomains, "api.other.test") })
+	lock, lose := context.WithCancelCause(context.Background())
+	f.sbx.createFn = func(ctx context.Context, _ runner.MCPSandboxSpec) error {
+		lose(db.ErrLockLost)
+		<-ctx.Done() // the phase's context ends with the lock
+		return nil
+	}
+	f.revivePhase(t, context.Background(), lock, false, true)
+	if row := f.st.mcpRowsMem.get(1); row.State != store.MCPSandboxFailed {
+		t.Fatalf("search row %s (%q), want failed: the edit changed its policy and never re-created it", row.State, row.LastCause)
+	}
+	f.sbx.mu.Lock()
+	held := f.sbx.held[1]
+	f.sbx.mu.Unlock()
+	if held || f.sbx.count("create") != 3 {
+		t.Errorf("search sandbox held %v, creates %d: want it killed and only files re-created", held, f.sbx.count("create"))
 	}
 }

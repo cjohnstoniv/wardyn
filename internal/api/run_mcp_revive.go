@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -91,6 +92,9 @@ func (s *Server) mcpRowLive(ctx context.Context, run types.AgentRun, row store.R
 	return err == nil && sb.Live
 }
 
+// errMCPEditStopped is why failMCPEditRest fails a server: the edit's phase stopped before re-creating it.
+var errMCPEditStopped = errors.New("the edit's MCP phase stopped before this server was re-created")
+
 // mcpSandboxReviveTimeout bounds a revive's MCP phase (MCP51-F2), on a bound of its own: never the claim's.
 const mcpSandboxReviveTimeout = killCascadeTimeout
 
@@ -121,15 +125,17 @@ func (s *Server) mcpReviveRecreates(ctx context.Context, run types.AgentRun, row
 }
 
 // reviveMCPSandboxes is a revive's MCP phase, once the revive has succeeded and recorded it: each
-// server's policy derived again with the current denies (only narrowing), and each row mcpReviveRecreates
+// server's policy derived again with the run's live deny set (liveWithholding's) unioned in for every mode,
+// "own" included, which only narrows, and each row mcpReviveRecreates
 // names killed, reopened to starting only while it is as read at the phase start and the run is live, created
 // and started, and kept starting for the watcher's settle. A false reopen skips that row; a reopen that
 // errors stops the phase; a policy it cannot derive again, a sandbox it cannot prepare, a failed create or
 // start, or a kept write that errors, fails that server alone and kills what ran of it; a
 // false keep ends that row (superseded); a cut on this replica at a generation not older than gen ends every
-// row (lost) and stops the phase, as does the phase's bound or a lost lock. The run and the revive's answer
-// are never changed by it. A server the dispatch re-check now refuses is not re-created: an edit that
-// narrowed it ends it, as no wider sandbox may keep running.
+// row (lost) and stops the phase, as does the phase's bound or a lost lock. An edit's phase that stops early
+// fails closed (failMCPEditRest). The run and the revive's answer are never changed by it. A server the
+// dispatch re-check now refuses is not re-created: an edit that narrowed it ends it, as no wider sandbox may
+// keep running.
 func (s *Server) reviveMCPSandboxes(mcpCtx context.Context, run types.AgentRun, gen int, rebooted, edit bool) {
 	st, _, ok := s.mcpSandboxSeams()
 	if !ok {
@@ -158,8 +164,9 @@ func (s *Server) reviveMCPSandboxes(mcpCtx context.Context, run types.AgentRun, 
 	}
 	site, siteErr := s.cfg.Store.GetSiteConfig(mcpCtx)
 	reason, _ := s.mcpDispatchRefusal(mcpCtx, run, len(rows), rows[0].ServerKey, site, siteErr)
-	for _, row := range rows {
+	for k, row := range rows {
 		if mcpCtx.Err() != nil {
+			s.failMCPEditRest(mcpCtx, run, rows[k:], servers, b, edit)
 			return
 		}
 		i := slices.IndexFunc(servers, func(m mcpServer) bool { return m.ordinal == row.Ordinal })
@@ -181,8 +188,38 @@ func (s *Server) reviveMCPSandboxes(mcpCtx context.Context, run types.AgentRun, 
 			continue
 		}
 		if !s.reviveMCPRow(mcpCtx, run, servers[i], row, b, grants, w, gen) {
+			s.failMCPEditRest(mcpCtx, run, rows[k:], servers, b, edit)
 			return
 		}
+	}
+}
+
+// failMCPEditRest is an edit's MCP phase that stopped before rest (its bound, a lost lock, a reopen that
+// errored or a cut): each row of rest still up, read again, whose policy the edit changed, or whose policy
+// cannot be derived now, is killed and failed (failMCPRecreate), so no server keeps running on the policy the
+// edit narrowed. A row the phase's own steps failed or ended is not up and is left. A revive's phase that
+// stops leaves the rows not reached as the loss left them.
+func (s *Server) failMCPEditRest(mcpCtx context.Context, run types.AgentRun, rest []store.RunMCPSandbox, servers []mcpServer, b mcpPolicyBase, edit bool) {
+	if !edit || len(rest) == 0 {
+		return
+	}
+	st, _, _ := s.mcpSandboxSeams()
+	wctx, cancel := mcpReviveWriteContext(mcpCtx)
+	defer cancel()
+	now, err := st.ListRunMCPSandboxes(wctx, run.ID)
+	for _, row := range rest {
+		if err == nil {
+			j := slices.IndexFunc(now, func(r store.RunMCPSandbox) bool { return r.Ordinal == row.Ordinal })
+			if j < 0 || !mcpRowUp(now[j]) {
+				continue
+			}
+		}
+		if i := slices.IndexFunc(servers, func(m mcpServer) bool { return m.ordinal == row.Ordinal }); i >= 0 {
+			if pol, perr := s.mcpPolicyAgain(wctx, b, servers[i], row); perr == nil && pol.spec.Digest() == row.PolicyDigest {
+				continue
+			}
+		}
+		s.failMCPRecreate(mcpCtx, run, row, mcpFailCreate, errMCPEditStopped)
 	}
 }
 
