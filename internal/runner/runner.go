@@ -440,7 +440,8 @@ type Sandbox struct {
 	// when its namespace's NetworkPolicy is proven enforced; otherwise why not ("netpol_not_enforced" and
 	// "netpol_ambient_acknowledged", which only an override admits, or "netpol_not_proven").
 	// Empty for any other run, and from a driver or runner that predates it.
-	NoNetworkProxyOnly string `json:",omitempty"`
+	NoNetworkProxyOnly string        `json:",omitempty"`
+	Where              *SandboxWhere `json:",omitempty"` // where it runs (sandbox_where.go); nil from other drivers and older runners
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
