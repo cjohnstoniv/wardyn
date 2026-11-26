@@ -368,6 +368,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	drives := len(locals) > 0
 	managed := len(locals) > 0
 	var enforcement types.StorageEnforcement
+	var mcpKinds []types.MachineKind // intersected: one executor without a kind takes it from all (mcp_sandbox.go)
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
 	for i, s := range locals {
@@ -400,12 +401,14 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.ExecOutputUncaptured = caps.ExecOutputUncaptured || cs.ExecOutputUncaptured
 		drives = drives && cs.UserDrives
 		managed = managed && cs.ManagedFiles
+		mcpKinds = intersectMCPKinds(i, mcpKinds, cs.MCPSandboxKinds)
 		if i == 0 || ephemeralRank(cs.EphemeralDiskEnforcement) < ephemeralRank(enforcement) {
 			enforcement = cs.EphemeralDiskEnforcement
 		}
 	}
 	caps.UserDrives = drives
 	caps.ManagedFiles = managed
+	caps.MCPSandboxKinds = mcpKinds
 	caps.EphemeralDiskEnforcement = enforcement
 	// Strongest last regardless of substrate order.
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Rank() < classes[j].Rank() })

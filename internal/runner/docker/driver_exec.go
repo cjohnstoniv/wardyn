@@ -150,6 +150,9 @@ func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Wri
 	if len(argv) == 0 {
 		return "", errors.New("docker: exec: empty argv")
 	}
+	if err := d.refuseMCPRef(ctx, ref); err != nil {
+		return "", err
+	}
 	if v, err := d.vmLookup(ctx, ref); err != nil {
 		return "", fmt.Errorf("docker: exec: %w", err)
 	} else if v != nil {

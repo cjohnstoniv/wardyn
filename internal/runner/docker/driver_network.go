@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
@@ -336,11 +337,16 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 // Both ways of picking the subnet create the same shape (runNetworkOptions), and the created network is
 // read back and checked (checkRunNetwork) before anything joins it.
 func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string, engineVersion string) (string, error) {
+	return d.createNamedRunNetwork(ctx, internalNetName(runID), labels, engineVersion)
+}
+
+// createNamedRunNetwork is createRunNetwork under the name given: the shape, the requested subnet and the check
+// are the same for an MCP sandbox's network and the run's relay link (mcp_sandbox.go).
+func (d *Driver) createNamedRunNetwork(ctx context.Context, name string, labels map[string]string, engineVersion string) (string, error) {
 	isolated, err := d.runNetworkIsolation(engineVersion)
 	if err != nil {
 		return "", err
 	}
-	name := internalNetName(runID)
 	var id string
 	if d.cfg.RunSubnetPool.IsValid() {
 		id, err = d.createPoolRunNetwork(ctx, name, runNetworkOptions(labels, isolated))
@@ -351,8 +357,11 @@ func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels m
 		return "", err
 	}
 	if err := d.checkRunNetwork(ctx, id, remedyDaemon); err != nil {
-		// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand it.
-		_, _ = d.cli.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand it. Bounded as the subnet
+		// probe's removal is (probeRemoveBound).
+		rmCtx, cancel := context.WithTimeout(context.Background(), probeRemoveBound)
+		defer cancel()
+		_, _ = d.cli.NetworkRemove(rmCtx, id, client.NetworkRemoveOptions{})
 		return "", err
 	}
 	return id, nil
@@ -643,6 +652,12 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) (tdErr error) {
 			}
 		}
 	}()
+	// The run's MCP sandboxes and its relay link go on every return too, the link once the agent's proxy is off it.
+	defer func() {
+		if id != uuid.Nil {
+			tdErr = errors.Join(tdErr, d.removeRunMCPSandboxes(ctx, id))
+		}
+	}()
 	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
@@ -812,7 +827,7 @@ func (d *Driver) sweepOrphans(ctx context.Context, minAge time.Duration, isOrpha
 	swept, errs := seeds+vms, []error{seedErr, vmErr}
 	seen := map[uuid.UUID]bool{}
 	for _, c := range res.Items {
-		if comp := c.Labels[labelComponent]; comp != componentAgent && comp != componentProxy && comp != componentDrivePin {
+		if comp := c.Labels[labelComponent]; !slices.Contains([]string{componentAgent, componentProxy, componentDrivePin, componentMCP, componentMCPProxy}, comp) {
 			continue
 		}
 		runID, perr := parseRunID(c.Labels[labelRun])
@@ -830,6 +845,10 @@ func (d *Driver) sweepOrphans(ctx context.Context, minAge time.Duration, isOrpha
 		}
 		seen[runID] = true
 		if keep(runID) && d.holdOrphan(ctx, runID) {
+			// A held machine keeps its agent's files, never a running MCP server: no row is left to end it.
+			if err := d.KillRunMCPSandboxes(ctx, runID); err != nil {
+				errs = append(errs, fmt.Errorf("docker: kill held run %s's MCP sandboxes: %w", runID, err))
+			}
 			heldN++
 			continue
 		}

@@ -51,6 +51,9 @@ type ClassSupport struct {
 	EphemeralDiskEnforcement types.StorageEnforcement
 	Freeze                   map[types.ConfinementClass]bool // per-class pause/resume support; absent/false = none
 	ExecOutputUncaptured     bool                            // an exec's output cannot be captured (runner.Capabilities.ExecOutputUncaptured)
+	// MCPSandboxKinds are the machine kinds whose runs can have MCP sandboxes here (runner.MCPSandboxer).
+	// INTERSECTED across substrates, like UserDrives: absent means none.
+	MCPSandboxKinds []types.MachineKind
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate.
