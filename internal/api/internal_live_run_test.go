@@ -400,28 +400,28 @@ func TestClaimDecisionRefusalHoldsUntilTheRunsTokensLapse(t *testing.T) {
 	s := &Server{cfg: Config{Now: func() time.Time { return now }}}
 	runID, other := uuid.New(), uuid.New()
 	const denied = "authz.denied"
-	if !s.claimDecisionRefusal(runID, denied) || s.claimDecisionRefusal(runID, denied) {
+	if !s.claimDecisionRefusal(context.Background(), runID, denied) || s.claimDecisionRefusal(context.Background(), runID, denied) {
 		t.Fatal("want the run's first refusal claimed and its second not")
 	}
-	if !s.claimDecisionRefusal(other, denied) {
+	if !s.claimDecisionRefusal(context.Background(), other, denied) {
 		t.Fatal("another run's first refusal was not claimed")
 	}
-	if !s.claimDecisionRefusal(runID, runReportLostAction) || s.claimDecisionRefusal(runID, runReportLostAction) {
+	if !s.claimDecisionRefusal(context.Background(), runID, runReportLostAction) || s.claimDecisionRefusal(context.Background(), runID, runReportLostAction) {
 		t.Fatal("want the run's first lost report claimed beside its refusal, and its second not")
 	}
 	now = now.Add(identity.RunTokenLapseAfter - time.Second)
-	if s.claimDecisionRefusal(runID, denied) {
+	if s.claimDecisionRefusal(context.Background(), runID, denied) {
 		t.Fatal("a refusal before the run's tokens lapse was claimed again")
 	}
 	now = now.Add(time.Second)
-	if !s.claimDecisionRefusal(runID, denied) {
+	if !s.claimDecisionRefusal(context.Background(), runID, denied) {
 		t.Fatal("a refusal once the run's tokens have lapsed was not claimed")
 	}
 	if len(s.doorRefusals.until) != 1 {
 		t.Fatalf("held claims = %d, want the spent ones dropped", len(s.doorRefusals.until))
 	}
-	s.releaseDecisionRefusal(runID, denied)
-	if !s.claimDecisionRefusal(runID, denied) {
+	s.releaseDecisionRefusal(context.Background(), runID, denied)
+	if !s.claimDecisionRefusal(context.Background(), runID, denied) {
 		t.Fatal("a claim given back was not taken again")
 	}
 }

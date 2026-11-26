@@ -178,6 +178,20 @@ func mcpRowsLabelled(h *harness, key string) int {
 	return n
 }
 
+// mcpActionRows counts the rows of action, and those of them labelled with the MCP server key.
+func mcpActionRows(h *harness, action, key string) (n, labelled int) {
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != action {
+			continue
+		}
+		n++
+		if audit.MCPSandboxOfData(ev.Data) == key {
+			labelled++
+		}
+	}
+	return n, labelled
+}
+
 func authFailRows(h *harness, reason string) int {
 	n := 0
 	for _, ev := range h.audit.snapshot() {
@@ -489,6 +503,22 @@ func TestMCPTokenRelayedRefused(t *testing.T) {
 	w := doVia(t, relayed, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision)
 	if w.Code < 400 || reasonOf(t, w) != string(placement.ReasonRelayRouteRefused) {
 		t.Fatalf("relayed: %d %s, want %s", w.Code, w.Body.String(), placement.ReasonRelayRouteRefused)
+	}
+}
+
+// TestMCPDropLeavesTheAgentsLostPost: an MCP proxy's post the decision door cannot take claims a row of its own
+// (claimDecisionRefusal), so the agent's lost post within that claim's span still writes the agent's
+// unlabelled run.report.drop, the row that fails its confined replay.
+func TestMCPDropLeavesTheAgentsLostPost(t *testing.T) {
+	f := newMCPAuthFixture(t)
+	for _, tok := range []string{f.tok, f.agent} {
+		if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, tok, `{"request":`); w.Code != http.StatusBadRequest ||
+			reasonOf(t, w) != reasonInternalDecisionLogInvalid {
+			t.Fatalf("a post that does not decode: %d %s, want 400 %s", w.Code, w.Body.String(), reasonInternalDecisionLogInvalid)
+		}
+	}
+	if n, labelled := mcpActionRows(f.h, runReportLostAction, "files"); n != 2 || labelled != 1 {
+		t.Fatalf("%s rows = %d (%d labelled files), want the MCP proxy's, labelled, and the agent's, unlabelled", runReportLostAction, n, labelled)
 	}
 }
 
