@@ -17,8 +17,8 @@ import (
 )
 
 // The run page's MCP server routes: the list, a person's Restart (the owner or a super admin, under the
-// run's lock and only on a live run) and a person's Stop (also a security admin, as the kill route; no
-// lock: the row is stopped first, then its sandbox killed).
+// run's lock and only on a live run) and a person's Stop (also a security admin, as the kill route, but not
+// the run's sponsor; no lock: the row is stopped first, then its sandbox killed).
 
 // mountRunMCPRoutes registers the three run-page routes of a run's MCP servers that start from a command.
 func (s *Server) mountRunMCPRoutes(r chi.Router) {
@@ -131,7 +131,8 @@ func (s *Server) handleRestartRunMCPServer(w http.ResponseWriter, r *http.Reques
 }
 
 // handleStopRunMCPServer is POST /api/v1/runs/{id}/mcp-servers/{key}/stop: the owner or an admin, a security
-// admin included, as the kill route. It takes no run lock (OP53-1): the row is stopped (person) first, so a
+// admin included, as the kill route, but not the run's sponsor, whom the kill route also admits. It takes no
+// run lock: the row is stopped (person) first, so a
 // revive's reopen or keep and a restart's ready write lose to it, then the sandbox is killed. An ended run
 // answers 409 mcp_sandbox_run_ended.
 func (s *Server) handleStopRunMCPServer(w http.ResponseWriter, r *http.Request) {
