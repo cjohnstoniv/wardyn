@@ -41,7 +41,7 @@ export const runSchedules = {
     (await asJson<RunSchedule[] | null>(await wfetch(admin ? "/run-schedules?view=admin" : "/run-schedules", { method: "GET" }))) ?? [],
   create: async (body: NewRunSchedule): Promise<RunSchedule> =>
     asJson<RunSchedule>(await wfetch("/run-schedules", { method: "POST", body: JSON.stringify(body), asPerson: true })),
-  pause: async (id: string): Promise<RunSchedule> => asJson<RunSchedule>(await wfetch(path(id, "pause"), { method: "POST" })),
+  pause: async (id: string): Promise<RunSchedule> => asJson<RunSchedule>(await wfetch(path(id, "pause"), { method: "POST", asPerson: true })),
   resume: async (id: string): Promise<RunSchedule> =>
     asJson<RunSchedule>(await wfetch(path(id, "resume"), { method: "POST", asPerson: true })),
   remove: async (id: string): Promise<void> => asNoContent(await wfetch(path(id), { method: "DELETE" })),
