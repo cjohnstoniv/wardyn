@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -402,7 +403,9 @@ func (s *Server) resolveMCPServerOwn(ctx context.Context, run types.AgentRun, sr
 		}
 	}
 	all := maps.Clone(own.env)
-	names, envResident, placed := s.resolveEnvSecretValues(ctx, run, types.RunPolicySpec{EligibleGrants: g.env}, rows, all)
+	// The resolve rows name the server they are for, so a run's trail tells its secrets from the agent's.
+	rctx := audit.WithMCPSandbox(ctx, srv.key)
+	names, envResident, placed := s.resolveEnvSecretValues(rctx, run, types.RunPolicySpec{EligibleGrants: g.env}, rows, all)
 	if len(envResident) > 0 {
 		return mcpOwn{}, "the MCP server " + srv.key + " has a secret kept on the runner, which its sandbox cannot be given"
 	}
@@ -412,7 +415,7 @@ func (s *Server) resolveMCPServerOwn(ctx context.Context, run types.AgentRun, sr
 	for _, v := range placed {
 		own.values = append(own.values, string(v))
 	}
-	files, _, fileResident, ok := s.resolveFileSecretValues(ctx, run, types.RunPolicySpec{EligibleGrants: g.files}, rows)
+	files, _, fileResident, ok := s.resolveFileSecretValues(rctx, run, types.RunPolicySpec{EligibleGrants: g.files}, rows)
 	if !ok {
 		return mcpOwn{}, "the run's runner cannot deliver a file to the MCP server " + srv.key
 	}

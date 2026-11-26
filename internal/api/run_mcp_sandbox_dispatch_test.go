@@ -424,6 +424,27 @@ func TestKillDuringMCPCreateLeavesNoSandbox(t *testing.T) {
 	}
 }
 
+// TestMCPSecretResolveRowsNameTheServer: the env secret resolve row of a server's own secret carries
+// mcp_sandbox, its key, and the agent's own secret's row carries none, so a run's trail tells them apart.
+func TestMCPSecretResolveRowsNameTheServer(t *testing.T) {
+	f := newMCPDispatchFixture(t)
+	f.dispatch()
+	got := map[string]any{}
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.env_secret.resolve") {
+		var data map[string]any
+		_ = json.Unmarshal(ev.Data, &data)
+		if name, _ := data["secret_name"].(string); name != "" {
+			got[name] = data["mcp_sandbox"]
+		}
+	}
+	if got["files-token"] != "files" {
+		t.Errorf("the server's secret row names %v, want mcp_sandbox files (rows %v)", got["files-token"], got)
+	}
+	if v, ok := got["agent-token"]; !ok || v != nil {
+		t.Errorf("the agent's secret row: present %v, mcp_sandbox %v; want present and unlabelled", ok, v)
+	}
+}
+
 // TestDispatchMCPReadinessWaitEndsWithItsContext: a dispatch whose context ends during the readiness wait
 // stops polling at once, rather than read the servers' status hot until the wait's deadline, and kills what
 // did not come up.
