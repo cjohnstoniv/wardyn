@@ -28,6 +28,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_mcp_sandboxes` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run with
+  an MCP server that starts from a command does not start.
 - The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
 - A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
 
