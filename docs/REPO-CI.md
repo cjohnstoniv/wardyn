@@ -44,6 +44,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `stop-early-notices` | – | pending | pending | 10 |
 | `stop-early-diagrams` | – | pending | pending | 10 |
 | `stop-early-dco` | – | pending | pending | 10 |
+| `cross-os` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 40 |
 | `conformance-k8s-agent-sandbox` (not required; train and main only) | – | pending | pending | 109 |
@@ -232,8 +233,8 @@ So:
 
 - `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the ten `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
 - `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. A required check.
-- `build` needs `go-lint`, `image-scope` and every `go` leg and runs with `if: always()`.
-  - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
+- `build` needs `go-lint`, `image-scope`, `cross-os` and every `go` leg and runs with `if: always()`.
+  - Its first step fails unless every leg passed, and its second unless `cross-os` (the Windows and macOS builds and vets, which need only the source) passed or skipped with `backend == 'false'`, so the `build` context is green only when all four legs, the cross builds and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
   - A failed or missing classification runs the full suites in the legs and requires the union.
 - `ui` always runs and narrows only vitest (above).

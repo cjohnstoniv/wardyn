@@ -10,7 +10,7 @@
 
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
-  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (not required; a matrix job: `1/2`, `2/2`),
+  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `cross-os`, `build`, `diagrams`, `ui`, `ui-e2e` (not required; a matrix job: `1/2`, `2/2`),
   - `macos` (not required) and `macos-xcode-27` (not required),
   - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`,
   - `conformance-k8s-agent-sandbox` (not required),

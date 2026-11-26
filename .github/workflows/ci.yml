@@ -564,41 +564,26 @@ jobs:
             ~/.cache/golangci-lint
           key: go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
-  # The required check. Branch protection requires a context named `build`, and
-  # this is it: green only when every `go` leg passed AND the union of the three
-  # coverage profiles clears the floor. `always()` so a failed leg, or a run a
-  # stop-early job cancelled, still runs this job, which then fails on the
-  # first step; with the default `success()` it would be SKIPPED, and a skipped
-  # required check can read as passing. On a docs- or console-only change (changes.outputs.backend ==
-  # 'false') the legs ran only the guard packages and wrote no profiles, so the
-  # union steps skip; any other value, including a missing one, requires the
-  # union.
-  build:
-    needs: [changes, go, go-lint, image-scope]
-    if: ${{ always() }}
+  # The release ships wardyn-runnerd for macOS and wardyn for Windows and macOS, and no other job builds or vets them
+  # there. They need only the source, so they run beside the go legs instead of after them; `build` needs this job,
+  # so the `build` context and the ci-full-tree marker still hold only when these passed. Skips with the go legs'
+  # docs- or console-only answer (changes.outputs.backend == 'false').
+  cross-os:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - name: Every go leg passed
-        env:
-          LEGS: ${{ needs.go.result }}
-          LINT: ${{ needs.go-lint.result }}
-        run: |
-          [ "$LEGS" = success ] && [ "$LINT" = success ] || { echo "::error::a go leg did not pass (go: $LEGS, go (lint): $LINT); see the go (…) checks"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       # The release ships wardyn-runnerd for macOS; nothing else builds it before a tag.
       - name: Cross-build wardyn-runnerd for macOS
-        if: needs.changes.outputs.backend != 'false'
         run: for a in amd64 arm64; do GOOS=darwin GOARCH=$a CGO_ENABLED=0 go build -tags docker -o /dev/null ./cmd/wardyn-runnerd || exit 1; done
       # The release ships a Windows wardyn; a unix-only symbol in a file with no build tag breaks it silently.
       - name: Cross-build and vet wardyn for Windows
-        if: needs.changes.outputs.backend != 'false'
         run: |
           for a in amd64 arm64; do GOOS=windows GOARCH=$a CGO_ENABLED=0 go build -o /dev/null ./cmd/wardyn || exit 1; done
           GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn/
@@ -610,8 +595,43 @@ jobs:
           GOOS=windows GOARCH=amd64 go vet ./internal/runner/
       # The release ships a macOS wardyn; a Linux-only symbol in a file tagged only !windows breaks its tests there.
       - name: Vet wardyn for macOS
-        if: needs.changes.outputs.backend != 'false'
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./cmd/wardyn/
+
+  # The required check. Branch protection requires a context named `build`, and
+  # this is it: green only when every `go` leg and `cross-os` passed AND the union of the three
+  # coverage profiles clears the floor. `always()` so a failed leg, or a run a
+  # stop-early job cancelled, still runs this job, which then fails on the
+  # first step; with the default `success()` it would be SKIPPED, and a skipped
+  # required check can read as passing. On a docs- or console-only change (changes.outputs.backend ==
+  # 'false') the legs ran only the guard packages and wrote no profiles, so the
+  # union steps skip; any other value, including a missing one, requires the
+  # union.
+  build:
+    needs: [changes, go, go-lint, cross-os, image-scope]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Every go leg passed
+        env:
+          LEGS: ${{ needs.go.result }}
+          LINT: ${{ needs.go-lint.result }}
+        run: |
+          [ "$LEGS" = success ] && [ "$LINT" = success ] || { echo "::error::a go leg did not pass (go: $LEGS, go (lint): $LINT); see the go (…) checks"; exit 1; }
+      # cross-os skips only with the go legs' explicit docs- or console-only answer; any other result but success fails here.
+      - name: The Windows and macOS builds passed
+        env:
+          CROSS: ${{ needs.cross-os.result }}
+          BACKEND: ${{ needs.changes.outputs.backend }}
+        run: |
+          [ "$CROSS" = success ] || { [ "$CROSS" = skipped ] && [ "$BACKEND" = false ]; } || { echo "::error::cross-os did not pass (result: $CROSS); see the cross-os check"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend != 'false'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: needs.changes.outputs.backend != 'false'
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
