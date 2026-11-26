@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -186,5 +187,41 @@ func TestInsertMCPSandboxRefusesEmptyServerKey(t *testing.T) {
 	}
 	if err := pg.InsertRunMCPSandbox(ctx, store.RunMCPSandbox{RunID: r.ID, ServerKey: "files", CPTokenJTI: "jti-1"}); err != nil {
 		t.Fatalf("control: insert keyed files: %v", err)
+	}
+}
+
+// TestMCPSandboxApprovalCapApartFromRun: the run's cap leaves an MCP server's holds out, a server's cap
+// counts only that server's holds, and the two counts split the rows the same way.
+func TestMCPSandboxApprovalCapApartFromRun(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	r := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, r)
+	pg := store.NewPG(pool)
+	hold := func(host, key string) types.ApprovalRequest {
+		return pendingApproval(r.ID, types.ApprovalEgressDomain, `{"host":"`+host+`","mcp_sandbox":"`+key+`"}`)
+	}
+	files := store.WithMCPSandboxAdmissionCap(ctx, 1, "files")
+	if _, err := pg.CreateApproval(files, hold("a.test", "files")); err != nil {
+		t.Fatalf("the server's first hold: %v", err)
+	}
+	if _, err := pg.CreateApproval(files, hold("b.test", "files")); !errors.Is(err, store.ErrApprovalMCPSandboxCap) {
+		t.Fatalf("the server past its cap = %v, want %v", err, store.ErrApprovalMCPSandboxCap)
+	}
+	if _, err := pg.CreateApproval(store.WithMCPSandboxAdmissionCap(ctx, 1, "other"), hold("a.test", "other")); err != nil {
+		t.Fatalf("another server's first hold: %v", err)
+	}
+	run := store.WithAdmissionCap(ctx, 1)
+	if _, err := pg.CreateApproval(run, pendingApproval(r.ID, types.ApprovalEgressDomain, `{"host":"a.test"}`)); err != nil {
+		t.Fatalf("the agent's first raise, with two servers' holds on the run: %v", err)
+	}
+	if _, err := pg.CreateApproval(run, pendingApproval(r.ID, types.ApprovalEgressDomain, `{"host":"b.test"}`)); !errors.Is(err, store.ErrApprovalRunCap) {
+		t.Fatalf("the agent past the run's cap = %v, want %v", err, store.ErrApprovalRunCap)
+	}
+	if n, err := pg.CountApprovalsForRun(ctx, r.ID); err != nil || n != 1 {
+		t.Errorf("the run's count = %d, %v; want the agent's one row", n, err)
+	}
+	if n, err := pg.CountMCPSandboxApprovals(ctx, r.ID, "files"); err != nil || n != 1 {
+		t.Errorf("the server's count = %d, %v; want its one hold", n, err)
 	}
 }
