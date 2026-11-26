@@ -423,7 +423,7 @@ export const CHANGES = {
   TAB_COUNT: (n: number) => `Changes · ${n}`,
   // The tab when the server cut the list (X-Wardyn-Truncated): more wait than the rows it sent.
   TAB_COUNT_CUT: (n: number) => `Changes · ${n}+`,
-  LEAD: "Changes and requests waiting for a second person. A change or request applies only when someone other than its proposer approves it.",
+  LEAD: "Changes and requests waiting for approval. A change applies when it has the approvals its kind needs, never counting its proposer. A request needs one person.",
   // Above the list when the server says it cut it (X-Wardyn-Truncated): the 500 newest the viewer may see.
   TRUNCATED: "Showing the first 500 matching changes.",
   COL_CHANGE: "Change",
@@ -431,6 +431,20 @@ export const CHANGES = {
   COL_BY: "Proposed by",
   COL_PROPOSED: "Proposed",
   COL_EXPIRES: "Expires",
+  COL_APPROVALS: "Approvals",
+  APPROVED: (have: number, required: number) => `${have} of ${required} approved`,
+  // The marks a row carries for the viewer, and the filters that keep the rows with each mark.
+  NEEDS_YOU: "Needs you",
+  WAITING_ON_OTHERS: "Waiting on others",
+  YOU_PROPOSED: "You proposed",
+  YOU_APPROVED: "You approved",
+  // A request, or a change with no minimum in force, has no count: one person decides.
+  ONE_PERSON_DECIDES: "One person decides",
+  FILTER_NEEDS_YOU: "Needs you",
+  FILTER_WAITING: "Waiting on others",
+  // PROPOSED: what an empty "Needs you" or "Waiting on others" filter says.
+  FILTER_EMPTY_NEEDS_YOU: "Nothing needs you right now",
+  FILTER_EMPTY_WAITING: "Nothing is waiting on others",
   // A held organization runner removal reads as a sentence, with who decides it under it.
   ORG_RUNNER_REMOVE: (runner: string, pool: string) => `Remove organization runner ${runner} from ${pool}`,
   SUPER_ADMIN_DECIDES: "A super admin decides this.",
@@ -466,6 +480,9 @@ export const CHANGES = {
     governance_unit_admin: "Unit admin",
     approval_rule: "Approval rule",
     agent_rules: "Agent rules",
+    governance_approval_counts: "Approvals needed",
+    // PROPOSED: the label for a held change to the assistant's settings.
+    assistant_settings: "Assistant settings",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {
@@ -476,8 +493,9 @@ export const CHANGES = {
     replace: "Replace",
     set: "Set",
   } as Record<string, string>,
-  EMPTY_TITLE: "Nothing is waiting for a second person",
-  EMPTY_BODY: "A covered governance change applies only when someone other than its proposer approves it. It waits here until then.",
+  // PROPOSED: the empty state's title and body.
+  EMPTY_TITLE: "Nothing is waiting for approval",
+  EMPTY_BODY: "A covered governance change applies when it has the approvals its kind needs, never counting its proposer. It waits here until then.",
   // The empty state's one door: the decided changes are in the audit trail (#2907, owner option B).
   EMPTY_CTA: "Open the audit trail →",
   META: (who: string, when: string, expires: string) => `Proposed by ${who} ${when} · expires ${expires}`,

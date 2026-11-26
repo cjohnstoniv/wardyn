@@ -34,6 +34,7 @@ vi.mock("../../../lib/api/assistant", () => ({
 }));
 
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { APPROVALS_NEEDED } from "../../../lib/approvals-needed-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
 
@@ -68,7 +69,7 @@ describe("GovernanceScreen — the Runner credentials tab", () => {
   it("sits between Profiles and Changes for a security operator, beside Baseline hosts", async () => {
     renderAt("/");
     await screen.findByText(GREENFIELD.name);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([GOV.PROFILES_TITLE, DELIVERY.TAB, BASELINE.TAB, CHANGES.TAB]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([GOV.PROFILES_TITLE, DELIVERY.TAB, BASELINE.TAB, APPROVALS_NEEDED.TITLE, CHANGES.TAB]);
   });
 
   it("is absent without the security tier, and a typed URL falls back to Profiles", async () => {

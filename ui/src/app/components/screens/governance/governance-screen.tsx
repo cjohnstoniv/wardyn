@@ -38,6 +38,7 @@ import { governance as api, type GovernanceChangeList, type GovernanceUnit, type
 import type { GovernanceChange, RunPolicySpec } from "../../../lib/types";
 import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
+import { APPROVALS_NEEDED } from "../../../lib/approvals-needed-copy";
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
@@ -64,6 +65,7 @@ import { HowItWorks } from "../../wardyn/how-it-works";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
+import { ApprovalsNeededTab } from "./approvals-needed";
 import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
 import { EgressBaselineTab } from "./egress-baseline";
@@ -106,13 +108,13 @@ export function GovernanceScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   // The Draft with AI door: a link only when the assistant is ready and the organisation does not keep profiles from it.
   const door = useAssistantDoor("compose");
-  // Runner credentials and Baseline hosts are the security operators' tabs: anyone else is on Profiles,
-  // whatever the URL says.
+  // Runner credentials, Baseline hosts and Approvals needed are the security operators' tabs: anyone else is on
+  // Profiles, whatever the URL says.
   const asked = searchParams.get("tab");
-  const tab: "profiles" | "runner-credentials" | "egress-baseline" | "changes" =
+  const tab: "profiles" | "runner-credentials" | "egress-baseline" | "approvals-needed" | "changes" =
     asked === "changes"
       ? "changes"
-      : (asked === "runner-credentials" || asked === "egress-baseline") && securityOperator
+      : (asked === "runner-credentials" || asked === "egress-baseline" || asked === "approvals-needed") && securityOperator
         ? asked
         : "profiles";
   // Mounted on first visit and then kept, hidden, so an edit in progress survives a look at another tab.
@@ -120,6 +122,8 @@ export function GovernanceScreen() {
   if (tab === "runner-credentials" && !deliveryVisited) setDeliveryVisited(true);
   const [baselineVisited, setBaselineVisited] = React.useState(false);
   if (tab === "egress-baseline" && !baselineVisited) setBaselineVisited(true);
+  const [approvalsVisited, setApprovalsVisited] = React.useState(false);
+  if (tab === "approvals-needed" && !approvalsVisited) setApprovalsVisited(true);
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -277,6 +281,7 @@ export function GovernanceScreen() {
               ? [
                   { value: "runner-credentials", label: DELIVERY.TAB },
                   { value: "egress-baseline", label: BASELINE.TAB },
+                  { value: "approvals-needed", label: APPROVALS_NEEDED.TITLE },
                 ]
               : []),
             { value: "changes", label: changes.length === 0 ? CHANGES.TAB : changes.truncated ? CHANGES.TAB_COUNT_CUT(changes.length) : CHANGES.TAB_COUNT(changes.length) },
@@ -295,6 +300,12 @@ export function GovernanceScreen() {
       {status !== "forbidden" && status !== "error" && baselineVisited && securityOperator && (
         <div hidden={tab !== "egress-baseline"}>
           <EgressBaselineTab onSubmitted={load} />
+        </div>
+      )}
+
+      {status !== "forbidden" && status !== "error" && approvalsVisited && securityOperator && (
+        <div hidden={tab !== "approvals-needed"}>
+          <ApprovalsNeededTab onSubmitted={load} />
         </div>
       )}
 
