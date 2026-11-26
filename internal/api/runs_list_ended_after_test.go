@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,12 +46,14 @@ func endedAfterFixture(t *testing.T) (*Server, *countFilterStore) {
 func TestListRunsFiltered_EndedAfterReachesTheEndedArm(t *testing.T) {
 	srv, rec := endedAfterFixture(t)
 	sess := ssoSession(t, "sub-cut", "cut@corp.example", oidc.RoleUser)
+	base := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	cut := strings.TrimSuffix(base.Format(time.RFC3339), "Z") + ".5Z"
 
-	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user&ended_after=2026-11-25T10:00:00.5Z", sess, "")
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user&ended_after="+cut, sess, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("ended_after: status = %d, body=%s", w.Code, w.Body.String())
 	}
-	want := time.Date(2026, 11, 25, 10, 0, 0, 5e8, time.UTC)
+	want := base.Add(500 * time.Millisecond)
 	listed := rec.seen()
 	if len(listed) != 1 || !listed[0].EndedAfter.Equal(want) {
 		t.Errorf("the list read saw %+v, want one filter with EndedAfter %v", listed, want)
@@ -61,8 +64,8 @@ func TestListRunsFiltered_EndedAfterReachesTheEndedArm(t *testing.T) {
 	if len(counted) != 1 || !counted[0].EndedAfter.IsZero() {
 		t.Errorf("the hidden-count read saw %+v, want one filter with a zero EndedAfter", counted)
 	}
-	if got := w.Header().Get("X-Wardyn-Ended-After"); got != "2026-11-25T10:00:00.5Z" {
-		t.Errorf("X-Wardyn-Ended-After = %q, want 2026-11-25T10:00:00.5Z", got)
+	if got := w.Header().Get("X-Wardyn-Ended-After"); got != cut {
+		t.Errorf("X-Wardyn-Ended-After = %q, want %q", got, cut)
 	}
 
 	plain := doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user", sess, "")
@@ -82,7 +85,7 @@ func TestListRunsFiltered_EndedAfterReachesTheEndedArm(t *testing.T) {
 func TestListRunsFiltered_EndedAfterRefusesAMalformedTime(t *testing.T) {
 	srv, _ := endedAfterFixture(t)
 	sess := ssoSession(t, "sub-cut", "cut@corp.example", oidc.RoleUser)
-	for _, v := range []string{"yesterday", "2026-11-25"} {
+	for _, v := range []string{"yesterday", time.Now().Format(time.DateOnly)} {
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user&ended_after="+v, sess, "")
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("ended_after=%s: status = %d, want 400; body=%s", v, w.Code, w.Body.String())
@@ -100,7 +103,7 @@ func TestListRunsFiltered_EndedAfterRefusesAMalformedTime(t *testing.T) {
 func TestListRunsFiltered_NeedsIgnoresEndedAfter(t *testing.T) {
 	srv, rec := endedAfterFixture(t)
 	sess := ssoSession(t, "sub-cut", "cut@corp.example", oidc.RoleUser)
-	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user&status=needs&ended_after=2026-11-25T10:00:00Z", sess, "")
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user&status=needs&ended_after="+time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), sess, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}

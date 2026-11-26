@@ -68,8 +68,21 @@ func isNeedsStatus(statuses []string) bool {
 type parsedRunsListParams struct {
 	view       string // "" | "user" | "admin", already coerced fail-closed
 	filter     store.RunFilter
-	skipCounts bool      // ?counts=skip: leave both hidden-count headers out
-	endedAfter time.Time // ?ended_after=: only the ended rows whose end time is after it (RFC 3339)
+	skipCounts bool // ?counts=skip: leave both hidden-count headers out
+}
+
+// parseEndedAfter reads ?ended_after=: empty is no cut, anything else must be an RFC 3339 time. A refusal is
+// written and reported as false.
+func parseEndedAfter(w http.ResponseWriter, v string) (time.Time, bool) {
+	if v == "" {
+		return time.Time{}, true
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidEndedAfterParam, "invalid ended_after")
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // parseRunsListParams reads and validates the opt-in params, resolving
@@ -204,16 +217,6 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		return parsedRunsListParams{}, false
 	}
 
-	var endedAfter time.Time
-	if v := q.Get("ended_after"); v != "" {
-		t, err := time.Parse(time.RFC3339Nano, v)
-		if err != nil {
-			writeErrorReason(w, http.StatusBadRequest, reasonInvalidEndedAfterParam, "invalid ended_after")
-			return parsedRunsListParams{}, false
-		}
-		endedAfter = t
-	}
-
 	searchQuery := q.Get("q")
 	if len(searchQuery) > maxRunsListQueryLen {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunsSearchQueryTooLong, "q is too long")
@@ -223,7 +226,6 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	return parsedRunsListParams{
 		view:       view,
 		skipCounts: skipCounts,
-		endedAfter: endedAfter,
 		filter: store.RunFilter{
 			Owner:         resolvedOwner,
 			WithSponsored: withSponsored,
@@ -252,6 +254,10 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, page store.Page) {
 	principal := principalFromRequest(r)
 	params, ok := s.parseRunsListParams(w, r, principal)
+	if !ok {
+		return
+	}
+	endedAfter, ok := parseEndedAfter(w, r.URL.Query().Get("ended_after"))
 	if !ok {
 		return
 	}
@@ -320,9 +326,9 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 	}
 	// ended_after: the ended arm reads only the rows that ended after it, and the answer echoes it, so a client keeps
 	// the ended rows it holds from at or before it. Set after the counts, which never read it.
-	if !params.endedAfter.IsZero() {
-		params.filter.EndedAfter = params.endedAfter
-		w.Header().Set("X-Wardyn-Ended-After", params.endedAfter.UTC().Format(time.RFC3339Nano))
+	if !endedAfter.IsZero() {
+		params.filter.EndedAfter = endedAfter
+		w.Header().Set("X-Wardyn-Ended-After", endedAfter.UTC().Format(time.RFC3339Nano))
 	}
 	servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
 		runs, err := pager.ListRunsFiltered(r.Context(), params.filter, p)

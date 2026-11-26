@@ -159,7 +159,7 @@ describe("runs.listRunsFiltered — counts", () => {
   });
 
   it("endedAfter sends ended_after and reads X-Wardyn-Ended-After back", async () => {
-    const cut = "2026-11-25T10:00:00.000Z";
+    const cut = new Date(Date.now() - 3_600_000).toISOString();
     fetchMock.mockResolvedValueOnce(
       new Response("[]", { status: 200, headers: { "Content-Type": "application/json", "X-Wardyn-Ended-After": cut } }),
     );

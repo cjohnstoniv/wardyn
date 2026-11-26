@@ -8,7 +8,7 @@ import type { RunsListFilteredResult } from "../../../lib/api/runs";
 import type { AgentRun } from "../../../lib/types";
 import { boardCut, DELTA_OVERLAP_MS, mergeBoardDelta, runEndTime } from "./board-delta";
 
-const T0 = Date.parse("2026-11-25T12:00:00Z");
+const T0 = Math.floor(Date.now() / 1000) * 1000;
 const at = (secondsBefore: number) => new Date(T0 - secondsBefore * 1000).toISOString();
 const live = (id: string): AgentRun => ({ id, state: "RUNNING" }) as AgentRun;
 const ended = (id: string, secondsBefore: number): AgentRun =>
@@ -38,7 +38,7 @@ describe("boardCut", () => {
     const last = answer([live("a"), ended("b", 600), { id: "c", state: "COMPLETED", ended_at: newest } as AgentRun]);
     const cut = boardCut(last);
     expect(cut).toBe(new Date(Math.floor((Date.parse(newest) - DELTA_OVERLAP_MS) / 1000) * 1000).toISOString());
-    expect(cut).toBe("2026-11-25T11:57:55.000Z");
+    expect(cut).toBe(new Date(T0 - 5000 - DELTA_OVERLAP_MS).toISOString());
   });
 
   it("is undefined with no ended run, and for the live rows of status=needs", () => {
