@@ -99,7 +99,12 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	}
 
 	// (a) A target exists that runs the pg lane under -race.
-	raceTarget := makeTargetBody(t, makefile, "test-race-pg")
+	// test-race-pg runs test-race-pg-store then test-race-pg-api (CI runs them as two shards), so the
+	// recipe lines are the two halves together.
+	raceTarget := makeTargetBody(t, makefile, "test-race-pg-store") + makeTargetBody(t, makefile, "test-race-pg-api")
+	if umbrella := makeTargetBody(t, makefile, "test-race-pg"); !strings.HasPrefix(umbrella, "test-race-pg: test-race-pg-store test-race-pg-api ") {
+		t.Errorf("test-race-pg must run exactly its two halves, test-race-pg-store and test-race-pg-api:\n%s", umbrella)
+	}
 	if !strings.Contains(raceTarget, "-race") {
 		t.Errorf("the Makefile's test-race-pg recipe does not pass -race:\n%s", raceTarget)
 	}
@@ -165,7 +170,7 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	}
 	build := ciJobBlock(t, string(wf), "build")
 	for _, want := range []string{
-		"needs: [changes, go, go-lint, image-scope]",
+		"needs: [changes, go, go-lint, cross-os, image-scope]",
 		"LEGS: ${{ needs.go.result }}",
 		"LINT: ${{ needs.go-lint.result }}",
 		"        if: needs.changes.outputs.backend != 'false'\n        run: make cover-union\n",
@@ -179,8 +184,8 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	// (c) CI actually runs it, in a shard of the test-pg-shard matrix, which has
 	// a Postgres service and sets the DSN. A target nothing invokes is not a gate.
 	job := ciJobBlock(t, string(wf), "test-pg-shard")
-	if !strings.Contains(job, "run: make test-race-pg\n") {
-		t.Errorf("ci.yml's test-pg-shard job has no race shard running `make test-race-pg`, so the broker's "+
+	if !strings.Contains(job, "run: make test-race-pg-store\n") || !strings.Contains(job, "run: make test-race-pg-api\n") {
+		t.Errorf("ci.yml's test-pg-shard job must run both race halves, `make test-race-pg-store` and `make test-race-pg-api`, so the broker's "+
 			"exactly-once concurrency proofs are still never race-checked by any gate:\n%s", job)
 	}
 	if !strings.Contains(job, "WARDYN_TEST_PG:") {
