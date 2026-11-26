@@ -215,6 +215,9 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 	if decision.Rule != nil {
 		data["rule"] = decision.Rule
 	}
+	if decision.DecidersUnreadable { // a security caller decided while the deciders could not be read
+		data["deciders_unreadable"] = true
+	}
 	auditData, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
