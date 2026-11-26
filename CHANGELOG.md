@@ -46,6 +46,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the
   migration has run. Until then a drive reclaim is refused, and so is a run that names a Docker volume or claim drive.
 
+### Changed
+
+- A super admin's drive reclaim now keeps that person's drive storage from being attached until the storage confirms it is gone: a reclaim that times out or fails after asking the storage leaves the drive refused to runs (`409` `reclaiming`) until a later reclaim answers `deleted` or `already_absent`, and a reclaim is refused while any run that has not ended was started with that storage, whoever started it (#4137).
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
