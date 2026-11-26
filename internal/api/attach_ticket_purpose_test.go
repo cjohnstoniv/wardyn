@@ -157,6 +157,8 @@ func TestAttachTicketPurpose_Mint(t *testing.T) {
 	gatewayOff := func(c *Config) { c.SSHListenAddr = "" }
 	sftpOff := func(c *Config) { c.SSHChannels = map[string]bool{"shell": true, "exec": true, "forward": true} }
 	forwardOff := func(c *Config) { c.SSHChannels = map[string]bool{"shell": true, "exec": true, "sftp": true} }
+	shellOff := func(c *Config) { c.SSHChannels = map[string]bool{"exec": true, "sftp": true, "forward": true} }
+	execOff := func(c *Config) { c.SSHChannels = map[string]bool{"shell": true, "sftp": true, "forward": true} }
 	seventeen := make([]string, 17)
 	for i := range seventeen {
 		seventeen[i] = fmt.Sprint(3000 + i)
@@ -167,6 +169,16 @@ func TestAttachTicketPurpose_Mint(t *testing.T) {
 		{name: "ssh-exec", query: "purpose=ssh-exec", status: 200, purpose: ticketPurposeSSHExec},
 		{name: "ssh-editor", query: "purpose=ssh-editor", status: 200, purpose: ticketPurposeSSHEditor},
 		{name: "ssh-editor with sftp off", query: "purpose=ssh-editor", configure: sftpOff, status: 409, reason: reasonSSHTicketChannelOff},
+		{name: "ssh-shell", query: "purpose=ssh-shell", status: 200, purpose: ticketPurposeSSHShell},
+		{name: "ssh-shell with shell off", query: "purpose=ssh-shell", configure: shellOff, status: 409, reason: reasonSSHTicketChannelOff},
+		{name: "ssh-shell with ports", query: "purpose=ssh-shell&ports=22", status: 400, reason: reasonAttachTicketPortsInvalid},
+		{name: "ssh-sync", query: "purpose=ssh-sync", status: 200, purpose: ticketPurposeSSHSync},
+		{name: "ssh-sync with sftp off", query: "purpose=ssh-sync", configure: sftpOff, status: 409, reason: reasonSSHTicketChannelOff},
+		{name: "ssh-sync with exec off", query: "purpose=ssh-sync", configure: execOff, status: 200, purpose: ticketPurposeSSHSync},
+		{name: "ssh-sync with ports", query: "purpose=ssh-sync&ports=22", status: 400, reason: reasonAttachTicketPortsInvalid},
+		{name: "ssh-sync-git", query: "purpose=ssh-sync-git", status: 200, purpose: ticketPurposeSSHSyncGit},
+		{name: "ssh-sync-git with exec off", query: "purpose=ssh-sync-git", configure: execOff, status: 409, reason: reasonSSHTicketChannelOff},
+		{name: "ssh-sync-git with sftp off", query: "purpose=ssh-sync-git", configure: sftpOff, status: 409, reason: reasonSSHTicketChannelOff},
 		{name: "ssh-forward with forward off", query: "purpose=ssh-forward&ports=3000", configure: forwardOff, status: 409, reason: reasonSSHTicketChannelOff},
 		{name: "ssh-forward without ports", query: "purpose=ssh-forward", status: 400, reason: reasonAttachTicketPortsInvalid},
 		{name: "ssh-forward with ports", query: "purpose=ssh-forward&ports=3000,5000", status: 200, purpose: ticketPurposeSSHForward, ports: []int{3000, 5000}},

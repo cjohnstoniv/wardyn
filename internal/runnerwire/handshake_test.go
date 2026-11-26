@@ -45,7 +45,7 @@ func TestHandshakeStoredOrgBinding(t *testing.T) {
 					t.Error("clock did not preserve server time and monotonic receipt")
 				}
 				return nil
-			})
+			}, 0)
 			close(clientDone)
 			serverErr := <-done
 			want := stored == federation.OrgURLSHA256("https://org.example")

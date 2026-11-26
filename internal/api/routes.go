@@ -270,6 +270,7 @@ func (s *Server) routes() chi.Router {
 			// already-long function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
 			s.mountInboundTicketRoutes(r)   // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountRunPreviewRoutes(r)      // a run's preview URLs: list, create or change, revoke, and the ticket that opens one (run_previews.go)
 			s.mountBackgroundWatchRoutes(r) // the ticket to watch a background macOS run's desktop, view only (run_background_watch.go)
 			s.mountSupportRoutes(r)         // an admin's request to help in a run, and its owner's answer (support_grant.go)
 			// Approvals: reading the queue is a member act (own runs only — see
@@ -684,7 +685,8 @@ func (s *Server) routes() chi.Router {
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
 		s.mountRunnerRegistrationRoutes(r)
-		s.mountCLISignInRoutes(r) // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
+		s.mountInboundExchangeRoute(r) // a provider token swapped for an inbound token, no credential (inbound_exchange.go)
+		s.mountCLISignInRoutes(r)      // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
 		s.mountRunnerStreamRoutes(r)
 		s.mountDelegationRoutes(r)   // a portal acting for a person (delegation*.go, #1142)
 		s.mountPortalIssuerRoutes(r) // the issuer-portal registry's admin routes (portal_issuer_*.go)

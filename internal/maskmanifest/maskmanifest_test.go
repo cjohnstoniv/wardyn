@@ -299,7 +299,7 @@ func TestAnEvictionUnholdsTheRunBeforeItsValuesGoAndTheSinkStopsAddingTheID(t *t
 	var got []types.AuditEvent
 	fan := sinks.NewFanout(sinkFunc(func(ev types.AuditEvent) { mu.Lock(); got = append(got, ev); mu.Unlock() }))
 	fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
-		sinks.Witnessed(func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) }, m.Held, reg.Generation), m.Held)
+		sinks.Witnessed(func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) }, m.Held, reg.RunGeneration), m.Held)
 	emit := func() {
 		ev := types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}
 		if err := fan.Emit(context.Background(), ev); err != nil {
@@ -362,7 +362,7 @@ func TestAnEvictionAndAReloadAroundTheMaskingLeaveTheIDOff(t *testing.T) {
 		close(inMask)
 		<-releaseMask
 		return out
-	}, m.Held, reg.Generation), m.Held)
+	}, m.Held, reg.RunGeneration), m.Held)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

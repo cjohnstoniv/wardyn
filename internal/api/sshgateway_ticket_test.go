@@ -806,3 +806,79 @@ func TestSSHTicketDoor_Healthz(t *testing.T) {
 		t.Errorf("healthz ssh with tickets off = %v, want no host_key", off)
 	}
 }
+
+// TestSSHTicketDoor_ShellPurpose: an ssh-shell ticket serves a terminal, its pty-req included, and no command.
+func TestSSHTicketDoor_ShellPurpose(t *testing.T) {
+	rig := newTicketDoorRig(t)
+	client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHShell), rig.run.ID.String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.RequestPty("xterm", 24, 80, ssh.TerminalModes{}); err != nil {
+		t.Fatalf("pty-req: %v", err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	_ = sess.Close()
+	if err := execRuns(t, client, "true"); err == nil {
+		t.Error("an ssh-shell ticket ran a command")
+	}
+	if row := rig.waitRow(t, "ssh.channel.reject", "failure", "ticket_purpose"); row["purpose"] != ticketPurposeSSHShell {
+		t.Errorf("row = %v, want purpose ssh-shell", row)
+	}
+}
+
+// ticketPurposeRows is how many ssh.channel.reject rows name reason ticket_purpose for purpose.
+func (rig *ticketDoorRig) ticketPurposeRows(purpose string) int {
+	n := 0
+	for _, r := range rig.rows("ssh.channel.reject", "failure") {
+		if r["reason"] == "ticket_purpose" && r["purpose"] == purpose {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSSHTicketDoor_SyncPurposes: an ssh-sync ticket opens no sftp subsystem and no command; an ssh-sync-git
+// ticket runs commands, more than one on its connection, as git needs.
+func TestSSHTicketDoor_SyncPurposes(t *testing.T) {
+	t.Run("ssh-sync", func(t *testing.T) {
+		rig := newTicketDoorRig(t)
+		client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHSync), rig.run.ID.String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.RequestSubsystem("sftp"); err == nil {
+			_ = sess.Wait()
+		}
+		_ = sess.Close()
+		if err := execRuns(t, client, "true"); err == nil {
+			t.Error("an ssh-sync ticket ran a command")
+		}
+		waitFor(t, "two ticket_purpose rows", func() bool { return rig.ticketPurposeRows(ticketPurposeSSHSync) == 2 })
+	})
+	t.Run("ssh-sync-git", func(t *testing.T) {
+		rig := newTicketDoorRig(t)
+		client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHSyncGit), rig.run.ID.String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		for i := 1; i <= 2; i++ {
+			if err := execRuns(t, client, "git --version"); err != nil {
+				t.Fatalf("command %d: %v", i, err)
+			}
+		}
+		if n := len(rig.rows("ssh.channel.reject", "failure")); n != 0 {
+			t.Errorf("channel rejects = %d, want none", n)
+		}
+	})
+}

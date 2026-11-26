@@ -15,13 +15,14 @@ const recordingSweepInterval = time.Hour
 // sweepInstall is what decides which sweeps this install runs: the conditions
 // startBackgroundWorkers starts them under, which registerSweepHealth mirrors.
 type sweepInstall struct {
-	runner                 bool          // a runner is wired
-	autoStop               time.Duration // WARDYN_AUTOSTOP_INTERVAL; the idle reaper runs when above 0
-	approvalExpiry         time.Duration // the approval expiry sweep runs when above 0
-	recordingSweepable     bool          // the recording store can sweep
-	recordingRetentionDays int           // WARDYN_RECORDING_RETENTION_DAYS; default 0 is off
-	runOutputPersist       bool          // WARDYN_RUN_OUTPUT_PERSIST; the run output retention sweep runs when on
-	api                    []sweephealth.Sweep
+	runner                  bool          // a runner is wired
+	autoStop                time.Duration // WARDYN_AUTOSTOP_INTERVAL; the idle reaper runs when above 0
+	approvalExpiry          time.Duration // the approval expiry sweep runs when above 0
+	recordingSweepable      bool          // the recording store can sweep
+	recordingRetentionDays  int           // WARDYN_RECORDING_RETENTION_DAYS; default 0 is off
+	runHistoryRetentionDays int           // WARDYN_RUN_HISTORY_RETENTION_DAYS; default 0 is off
+	runOutputPersist        bool          // WARDYN_RUN_OUTPUT_PERSIST; the run output retention sweep runs when on
+	api                     []sweephealth.Sweep
 }
 
 // registerSweepHealth registers, on every replica, every sweep whose start
@@ -45,6 +46,9 @@ func registerSweepHealth(t *sweephealth.Tracker, in sweepInstall) {
 	}
 	if in.recordingSweepable && in.recordingRetentionDays > 0 {
 		sweeps = append(sweeps, sweephealth.Sweep{Name: sweephealth.RecordingRetention, Interval: recordingSweepInterval})
+	}
+	if in.runHistoryRetentionDays > 0 {
+		sweeps = append(sweeps, sweephealth.Sweep{Name: sweephealth.RunRetention, Interval: runRetentionSweepInterval})
 	}
 	if in.runner {
 		sweeps = append(sweeps, sweephealth.Sweep{Name: sweephealth.TerminalSandbox, Interval: terminalSandboxSweepInterval})

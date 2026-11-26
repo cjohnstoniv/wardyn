@@ -66,6 +66,9 @@ type PeerConfig struct {
 	// Callers fail offline; their late, replayed replies are still legitimate.
 	NextID         uint32
 	AbandonedCalls []uint32
+	// StreamWindow is the per-stream window agreed in AUTH_OK for this connection; 0 means StreamWindow. The
+	// connection window follows it (connWindowFor). Both peers of a link must use the same value.
+	StreamWindow int64
 }
 
 // Peer multiplexes calls, events and byte streams over one established Conn
@@ -81,7 +84,8 @@ type Peer struct {
 	wmu    sync.Mutex
 	replay *ReplayBuffer
 
-	connSend *Credit
+	connSend           *Credit
+	streamWin, connWin int64 // this connection's windows (PeerConfig.StreamWindow)
 
 	// prior is how many sessions this process had completed before this one (Client.prior); 0 for a peer made
 	// any other way.
@@ -128,9 +132,13 @@ func NewPeer(conn Conn, cfg PeerConfig) *Peer {
 	if replay == nil {
 		replay = NewReplayBuffer()
 	}
+	streamWin := int64(StreamWindow)
+	if cfg.StreamWindow > 0 {
+		streamWin = cfg.StreamWindow
+	}
 	p := &Peer{
 		conn: conn, cfg: cfg, ctx: ctx, cancel: cancel, recvSeq: cfg.LastReceived,
-		replay: replay, connSend: NewConnCredit(), ids: NewIDAllocator(cfg.Org),
+		replay: replay, connSend: newCredit(connWindowFor(streamWin), nil), streamWin: streamWin, connWin: connWindowFor(streamWin), ids: NewIDAllocator(cfg.Org),
 		calls: map[uint32]*pendingCall{}, inCalls: map[uint32]context.CancelFunc{},
 		streams: map[uint32]*Stream{}, parked: map[uint32]*Stream{}, byCall: map[uint32][]uint32{},
 		done: make(chan struct{}), stopped: make(chan struct{}),
@@ -709,13 +717,13 @@ func (p *Peer) grant(s *Stream, n int64) {
 }
 
 // consumed returns bytes a stream's reader took to the sender's connection
-// window in ConnWindow/4 batches. It counts every read on every stream, so
-// however many streams are live, at most ConnWindow/4-1 read bytes are withheld.
+// window in connWin/4 batches (this link's connection window). It counts every read on every stream, so
+// however many streams are live, at most connWin/4-1 read bytes are withheld.
 func (p *Peer) consumed(n int64) {
 	p.mu.Lock()
 	p.connPend += n
 	c := int64(0)
-	if p.connPend >= ConnWindow/4 {
+	if p.connPend >= p.connWin/4 {
 		c, p.connPend = p.connPend, 0
 	}
 	p.mu.Unlock()

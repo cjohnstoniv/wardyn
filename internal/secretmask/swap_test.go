@@ -133,8 +133,8 @@ func TestRegistry_JSONVariantMaskerGen(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, gen := reg.JSONVariantMaskerGen(run)
-	if gen != reg.Generation() {
-		t.Fatalf("generation = %d, registry is at %d", gen, reg.Generation())
+	if gen != reg.RunGeneration(run) {
+		t.Fatalf("generation = %d, registry is at %d", gen, reg.RunGeneration(run))
 	}
 	if got := string(m.Mask([]byte("a first-secret-value b"))); got != "a <secret-hidden> b" {
 		t.Fatalf("masked = %q", got)
@@ -146,8 +146,8 @@ func TestRegistry_JSONVariantMaskerGen(t *testing.T) {
 		t.Fatal(err)
 	}
 	m2, gen2 := reg.JSONVariantMaskerGen(run)
-	if gen2 == gen || gen2 != reg.Generation() {
-		t.Fatalf("generation after a registration = %d, before %d, registry %d", gen2, gen, reg.Generation())
+	if gen2 == gen || gen2 != reg.RunGeneration(run) {
+		t.Fatalf("generation after a registration = %d, before %d, registry %d", gen2, gen, reg.RunGeneration(run))
 	}
 	escaped := []byte(`"o","second\nsecret-value"`)
 	if got := string(m2.Mask(escaped)); got != `"o","<secret-hidden>"` {

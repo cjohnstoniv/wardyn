@@ -439,9 +439,13 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 // label had already counted as covered. It tries again, then labels the row globals_only, which says less.
 func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 	var out types.AuditEvent
+	var run uuid.UUID // uuid.Nil for a run-less event: the masker maskOnce derives for it
+	if ev.RunID != nil {
+		run = *ev.RunID
+	}
 	for range 3 {
-		g := m.reg.Generation()
-		if out = m.maskOnce(ev); ev.RunID == nil || m.reg.Generation() == g {
+		g := m.reg.RunGeneration(run)
+		if out = m.maskOnce(ev); ev.RunID == nil || m.reg.RunGeneration(run) == g {
 			return out
 		}
 	}
@@ -511,7 +515,7 @@ func runValueMasker(reg *secretmask.Registry, covers sinks.RunCoverage) sinks.Ru
 	if reg == nil {
 		return nil
 	}
-	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }, covers, reg.Generation)
+	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }, covers, reg.RunGeneration)
 }
 
 // enrichCoverage is the gate on the correlation id the sinks add: the serving boot's maskScope, the same

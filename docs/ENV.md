@@ -166,6 +166,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory; `fs` store only, **ignored by `pg`** (flag `-recording-dir`). An EMPTY value keeps the default (0.7, like every env var here) — it disables nothing; turn recording off with `WARDYN_RECORDING_STORE=off` |
 | `WARDYN_RECORDING_RETENTION_DAYS` | int | `0` | delete stored session recordings older than N days; `0` (the default) keeps them forever (flag `-recording-retention-days`). Nothing is deleted unless you set a window. [Details](#wardyn_recording_retention_days) |
 | `WARDYN_AUDIT_RETENTION_DAYS` | int | `0` | the audit log's retention window in days; `0` (the default) keeps it forever (flag `-audit-retention-days`). An **increase** applies at once; a **decrease** takes effect **30 days after the boot that first saw it**. [Details](#wardyn_audit_retention_days) |
+| `WARDYN_RUN_HISTORY_RETENTION_DAYS` | int | `0` | delete ended runs, with their approvals and usage, older than N days; `0` (the default) keeps them forever, otherwise at least `30` (flag `-run-history-retention-days`). See the section below. |
 | `WARDYN_AUDIT_RETENTION_AUTODROP` | bool | `false` | let the leader sweeper drop eligible oldest audit partitions itself (flag `-audit-retention-autodrop`). **Unattested**: no operator exported or checked the partition first. [Details](#wardyn_audit_retention_autodrop) |
 | `WARDYN_EXEC_OUTPUT_TAIL` | bool | `true` | keep the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of every non-interactive run's combined stdout/stderr, readable through `GET /api/v1/runs/{id}/output` by the run's owner or an admin (flag `-exec-output-tail`). [Details](#wardyn_exec_output_tail) |
 | `WARDYN_RUN_OUTPUT_TAIL_BYTES` | int | `65536` | size of each non-interactive run's in-memory output tail, and the cap on `GET /api/v1/runs/{id}/output?tail=` (flag `-run-output-tail-bytes`). Boot refuses a value below `1024` or above `1048576`. Memory bound: see OPERATIONS.md "Run output" |
@@ -384,7 +385,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
 | `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `8` | most concurrent SSH channels one run may hold, a `POST /runs/{id}/exec` command counting as one, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
 | `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset (or empty) serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
-| `WARDYN_SSH_TICKETS` | bool | off | lets a person reach a run over the SSH gateway with no registered key: `GET /runs/{id}/ssh` takes a 30-second single-use ticket from `POST /runs/{id}/attach/ticket` (flag `-ssh-tickets`); needs `WARDYN_SSH_LISTEN`; boot refuses it without. [Details](#wardyn_ssh_tickets) |
+| `WARDYN_SSH_TICKETS` | bool | off | lets a person reach a run over the SSH gateway with no registered key: the CLI's SSH commands and `wardyn sync` take a 30-second single-use ticket for `GET /runs/{id}/ssh` (flag `-ssh-tickets`); needs `WARDYN_SSH_LISTEN`; boot refuses it without. [Details](#wardyn_ssh_tickets) |
+| `WARDYN_SSH_TICKET` | string | (unset) | not daemon env: the CLI sets it only in ssh(1)'s child environment for `wardyn run ssh-proxy`, which unsets it at once, before it dials; never set it yourself; see [SSH.md](SSH.md#ssh-tickets) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`), and `--git` refuses a branch whose history holds a matching path. [Details](#wardyn_sync_deny) |
@@ -702,6 +704,19 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The window only makes the oldest closed monthly partition *eligible*: it is removed by an attested, digest-checked drop (`POST /audit/retention/drop`, `wardyn audit retention drop`) or by the autodrop below, never by this setting alone.
 - Set the same value on every replica.
 - 0..36500; see [`docs/OPERATIONS.md`](OPERATIONS.md), "Audit retention".
+
+### `WARDYN_RUN_HISTORY_RETENTION_DAYS`
+
+- Delete runs that ended more than N days ago; `0` (the default) keeps every run forever. A value from 1 to 29 is refused at startup.
+- A deleted run takes its approvals, model usage and other per-run rows with it. Its audit rows stay, under the audit log's own retention.
+- Kept whatever their age: a run with a held push's path list or an MCP call send, or one a runner retirement, a watermark or a resident-values row names.
+- Kept too: a terminal run with no end time, a run whose sandbox was never recorded gone or whose containment is pending, and the replacement run an owed workload end waits for.
+- A run dispatched to an enrolled runner since 0.9.3 is kept: its output watermark holds it. On an install whose runs go to runners, the sweep deletes only server-local runs.
+- Also kept: a run another run's pending action names (an action with no run holds it while it exists), a kept machine's run or fresh start, a workload's current run, a teardown hold's run.
+- The leader sweeps hourly, at most 10,000 runs an hour. A sweep that deleted anything writes a `run.retention.sweep` audit row.
+- A deleted run's recordings are not deleted with it; `WARDYN_RECORDING_RETENTION_DAYS` governs them. Erasing the run's creator still deletes them: the run's tombstone keeps its creator until then, and the erasure blanks the creator on the tombstones that exist then. Set it no longer than this window, or a recording outlives the run page it plays on.
+- A unit's model usage report and its opaque tunnel count (`llm.scan.bypass` rows) count only the runs still kept: a period that reaches before the window reads part of its data.
+- An audit query by a deleted run's id (`run_id`) answers empty, for its owner and a unit admin alike. The unit admin's audit feed still shows the run's rows.
 
 ### `WARDYN_AUDIT_RETENTION_AUTODROP`
 
@@ -2028,9 +2043,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_SSH_TICKETS`
 
-- Off by default (flag `-ssh-tickets`). On, a person can reach a run over SSH with no registered key: a client mints a single-use ticket that lives 30 s at `POST /runs/{id}/attach/ticket`, and `GET /runs/{id}/ssh` carries the SSH connection over a WebSocket.
+- Off by default (flag `-ssh-tickets`). On, a person can reach a run over SSH with no registered key: `wardyn run ssh`, `exec`, `forward` and `editor` and `wardyn sync` mint a single-use ticket that lives 30 s at `POST /runs/{id}/attach/ticket`, and `GET /runs/{id}/ssh` carries the SSH connection over a WebSocket. `--key` on each keeps the registered key.
 - The TCP listener stays public key only.
-- A ticket opens only the channel kinds its purpose names: `ssh-exec` one command, `ssh-forward` the ports it was minted for, `ssh-editor` a terminal, commands, file transfer and port forwarding. `wardyn sync` stays on keys.
+- A ticket opens only the channel kinds its purpose names: `ssh-shell` a terminal, `ssh-exec` one command, `ssh-forward` the ports it was minted for, `ssh-editor` a terminal, commands, file transfer and port forwarding, `ssh-sync` the `wardyn sync` subsystem, and `ssh-sync-git` that subsystem and commands.
 - `WARDYN_SSH_CHANNELS` and the run's `data_out` rule apply to a ticket connection as they do to a key's.
 - A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
 - It needs the SSH gateway on (`WARDYN_SSH_LISTEN`); boot refuses it without.
@@ -2038,7 +2053,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Turn it on only after every replica runs this release.
 - A ticket for SSH asks the `ssh_key` capability, as adding a key does: a person denied `ssh_key` gets `403` `capability_feature` and no ticket.
 - Behind a reverse proxy, set `WARDYN_TRUSTED_PROXIES`; without it the door's per-source handshake bound (16 at once) counts the proxy as one source for every ticket user.
-- See [SSH over an attach ticket](sdk.md#ssh-over-an-attach-ticket).
+- See [SSH over an attach ticket](sdk.md#ssh-over-an-attach-ticket) and [SSH tickets](SSH.md#ssh-tickets).
 
 ### `WARDYN_SYNC_DENY`
 

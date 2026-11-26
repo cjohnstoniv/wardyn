@@ -59,6 +59,26 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the
   migration has run. Until then a drive reclaim is refused, and so is a run that names a Docker volume or claim drive.
 - `GET /runs` takes `ended_after` (RFC 3339): the ended runs listed are only those whose end time is after it, every live run is still listed, and the answer carries `X-Wardyn-Ended-After`.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, UPDATE` on `inbound_federation` to every role
+  that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `inbound_trust_tokens` to every role
+  that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `inbound_trusts` to every role
+  that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `run_previews` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- `wardyn run ssh`, `run exec`, `run forward`, `run editor` and `wardyn sync` connect with no registered SSH key when the operator turns on `WARDYN_SSH_TICKETS`: each connection takes a 30-second single-use ticket, never written to the command line, a URL or a file. `--key` keeps the registered key (#3280).
+- A runner and the organisation now agree a larger per-stream window on the runner link (4 MiB instead of 256 KiB), so a long-distance link relays faster; each side holds at most 16 MiB (four streams' worth) of unread data per runner, up from 4 MiB. An older runner or organisation keeps the old window (#4070).
+- `WARDYN_RUN_HISTORY_RETENTION_DAYS` (default `0`, keep forever) deletes runs that ended more than N days ago (at least 30), with their approvals and model usage; audit rows stay, and runs that held push or MCP evidence are kept. Runs dispatched to an enrolled runner since 0.9.3 are kept too (their output watermark holds them), so on an install whose runs go to runners it deletes only server-local runs. Each sweep that deleted anything writes a `run.retention.sweep` audit row (#4068).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `run_history_tombstones` to every role that was granted UPDATE on the runs table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then the unit admins' audit view, the device audit ingest and erasing a person's recordings fail.
 
 ### Changed
 
@@ -68,6 +88,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A super admin's drive reclaim now keeps that person's drive storage from being attached until the storage confirms it is gone: a reclaim that times out or fails after asking the storage leaves the drive refused to runs (`409` `reclaiming`) until a later reclaim answers `deleted` or `already_absent`, and a reclaim is refused while any run that has not ended was started with that storage, whoever started it (#4137).
 - An open run page reads only its newest audit rows on each refresh, and reads its recording lists again only when a new recording row appears. Each audit read for one run skips the months of the audit log from before the run was created.
 - Between its once-a-minute full read, the Runs board reads only the live runs and the runs that ended in the last few minutes, and keeps the older ended runs it already shows. A change to a run that ended earlier, such as a new title, shows within a minute.
+- With the SSH gateway off, `wardyn run forward` asks for a forward ticket for each connection, so it no longer counts against the run's terminal sessions.
 
 ### Fixed
 
@@ -83,6 +104,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Rolling back to an earlier release with keep off leaves the Service and EndpointSlice of each run started on this one when that run ends. Delete them per ended run by its `wardyn.run-id` label, as docs/operations/kubernetes-agent-sandbox.md says; never delete a live run's Service.
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
 - With the image builder on, the first pass after the upgrade removes reusable custom-image wraps (`wardyn-byoi/reuse:<key>`) built more than a week ago that no run has been started on for a week.
+- Migration `0400_run_history_tombstones` adds a table, grants the app role (every role granted `UPDATE` on `agent_runs`) `SELECT, INSERT, UPDATE` on it, and changes no row. On a split-role install, grant the app role `DELETE` on `agent_runs` before you set `WARDYN_RUN_HISTORY_RETENTION_DAYS`.
 
 ## [0.11.0-rc.3] — 2026-11-25
 

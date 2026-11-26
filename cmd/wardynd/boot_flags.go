@@ -203,6 +203,8 @@ type bootFlags struct {
 	approvalNotify     *string
 	auditSpool         *string
 	auditSource        *string
+	// runHistoryRetention is WARDYN_RUN_HISTORY_RETENTION_DAYS (0 = keep forever); see run_retention.go.
+	runHistoryRetention *int
 	// auditSeal is WARDYN_AUDIT_SEAL (off|fields|full): whether personal audit fields are stored sealed under the person's own key.
 	auditSeal *string
 	// auditStrict is WARDYN_AUDIT_STRICT: a covered change is refused if its audit intent row cannot be written first.
@@ -593,6 +595,8 @@ func parseBootFlags() *bootFlags {
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 		auditSeal:          flagEnv("audit-seal", "WARDYN_AUDIT_SEAL", "off", "off|fields|full: with fields, the personal fields of an audit row (docs/AUDIT-ACTIONS.md, Sealed fields) are stored, spooled and sent to sinks only as ciphertext under the person's own key, so erasing the person makes them unreadable everywhere they were copied. Rows written before it was turned on stay plaintext. full also stores a human actor as subject:<uuid>, so SIEM rules keyed on actor see subject ids (default off)"),
 		auditStrict:        flagBool("audit-strict", "WARDYN_AUDIT_STRICT", false, "strict audit: a covered policy, governance, approval or grant change is refused (503 audit_unavailable) if its audit intent row cannot be written to the store first; the handler's own detailed row can still spool (default false)"),
+		// OFF by default (0 = keep forever): a run's row is what its approvals, usage and audit trail hang from.
+		runHistoryRetention: flagIntEnv("run-history-retention-days", "WARDYN_RUN_HISTORY_RETENTION_DAYS", 0, "delete ended runs, with their approvals and usage, whose end is older than N days (default 0, keep forever; otherwise 30 or more)"),
 
 		// OFF by default (0 = keep forever), like recordingRetention above and for the same reason; unlike
 		// it, the audit log is only ever trimmed a whole closed partition at a time, through an attested drop.
@@ -768,7 +772,7 @@ func parseBootFlags() *bootFlags {
 
 		sshBindEarly:           flagBool("ssh-bind-early", "WARDYN_SSH_BIND_EARLY", false, "bind the SSH gateway before the background workers start; if its port is taken, keep booting and stop advertising SSH on /healthz instead of only logging at accept time (default false)"),
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
-		sshTickets:             flagBool("ssh-tickets", "WARDYN_SSH_TICKETS", false, "let a person reach a run over the SSH gateway with no registered key, through GET /runs/{id}/ssh and a 30-second single-use ticket minted at POST /runs/{id}/attach/ticket; needs the gateway on (WARDYN_SSH_LISTEN). Off (default): SSH needs a registered key"),
+		sshTickets:             flagBool("ssh-tickets", "WARDYN_SSH_TICKETS", false, "let a person reach a run over the SSH gateway with no registered key: wardyn run ssh, exec, forward and editor and wardyn sync take a 30-second single-use ticket minted at POST /runs/{id}/attach/ticket and connect through GET /runs/{id}/ssh; needs the gateway on (WARDYN_SSH_LISTEN). Off (default): SSH needs a registered key"),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),
 		outage:                 registerOutageFlags(),

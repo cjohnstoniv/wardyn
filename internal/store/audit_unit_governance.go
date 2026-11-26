@@ -24,8 +24,9 @@ var unitGovernanceActions = []string{
 	"governance.image_request.request", "governance.image_request.approve", "governance.image_request.reject",
 }
 
-// unitRunRowsClause is the rows of the runs frozen to $1's units.
-const unitRunRowsClause = "run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1))"
+// unitRunRowsClause is the rows of the runs frozen to $1's units, a run the run-history retention sweep deleted
+// included (its tombstone keeps the unit).
+const unitRunRowsClause = "run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1) UNION ALL SELECT run_id FROM run_history_tombstones WHERE unit_id = ANY($1))"
 
 // unitGovernanceArmClause is the rows with no run that are listed governance rows naming a unit of $3
 // (the unit ids as text): by target, by data.unit_id, or inside data.units when that is an array. The

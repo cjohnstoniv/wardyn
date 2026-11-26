@@ -128,6 +128,17 @@ describe("an elevation request in the list", () => {
   });
 });
 
+describe("a request in the Approvals column", () => {
+  it("reads One person decides, marks another's request Needs you and the viewer's own You proposed", () => {
+    renderTab([elevation(), elevation({ id: "e2", proposed_by: "bo@example.com" })]);
+    const cells = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[4]);
+    expect(cells[0]).toHaveTextContent(CHANGES.ONE_PERSON_DECIDES);
+    expect(cells[0]).toHaveTextContent(CHANGES.NEEDS_YOU);
+    expect(cells[1]).toHaveTextContent(CHANGES.ONE_PERSON_DECIDES);
+    expect(cells[1]).toHaveTextContent(CHANGES.YOU_PROPOSED);
+  });
+});
+
 describe("an elevation request's page", () => {
   it("shows Person, Unit and Length rows, the target in the title, and keeps the full diff", async () => {
     renderPage(elevation());

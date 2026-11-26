@@ -30,6 +30,9 @@ type (
 		Version  int     `json:"version"`
 		Sig      []byte  `json:"sig"`
 		Resume   *Resume `json:"resume,omitempty"`
+		// StreamWindow is the per-stream window the runner offers to receive (StreamWindowLarge). Absent (an
+		// older runner): the organisation keeps StreamWindow; an older organisation ignores the field.
+		StreamWindow uint32 `json:"stream_window,omitempty"`
 	}
 	Resume struct {
 		SessionID string `json:"session_id"`
@@ -59,6 +62,10 @@ type (
 		// runner ignores them.
 		PerRunCPUMillis int64 `json:"per_run_cpu_millis,omitempty"`
 		PerRunMemoryMiB int64 `json:"per_run_memory_mib,omitempty"`
+		// StreamWindow is the per-stream window both sides use on this connection: the runner's offer, at most
+		// StreamWindowLarge. 0 or absent (an older organisation, or a runner that offered none) means
+		// StreamWindow and ConnWindow; an older runner ignores the field.
+		StreamWindow uint32 `json:"stream_window,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {

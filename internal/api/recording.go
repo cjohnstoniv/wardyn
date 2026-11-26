@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -38,7 +39,8 @@ import (
 // truly-missing cast gets. The one answer written here is the data_out refusal
 // to a reader who passed the ownership gate (403, or 503 for a rule that cannot
 // be read): it names the run's own rule to its own reader, so it leaks nothing.
-// auditRecordingRead is an operator's replay of a recording of a run someone else created.
+// auditRecordingRead is an operator's replay of a recording of a run someone else created, or of a run whose
+// row is gone (run_deleted).
 const auditRecordingRead = "recording.read"
 
 func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, runIDPrefix string) (bool, func()) {
@@ -49,15 +51,21 @@ func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, run
 	// An operator reads every recording (recordingReader). Replaying another person's session is
 	// audited, as attaching to it live is; an owner's own replay is not. The row is the receipt
 	// recording.Handler calls once the recording has opened, before any of it is sent, so a replay
-	// that finds no recording writes none. A run whose owner cannot be read is audited as another
-	// person's, marked owner_unknown: a failed read never serves a replay without its receipt.
+	// that finds no recording writes none. A recording whose run row is gone (the run history
+	// retention sweep deleted it; the recording stays) has no owner to compare, so its replay is
+	// always audited, marked run_deleted. A run whose owner cannot be read for any other reason is
+	// audited as another person's, marked owner_unknown: a failed read never serves a replay
+	// without its receipt.
 	if s.isOperator(r.Context()) {
 		run, err := s.cfg.Store.GetRun(r.Context(), id)
 		if err == nil && run.CreatedBy == principalFromRequest(r) {
 			return true, nil
 		}
 		var data []byte
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			data = mustJSON(map[string]bool{"run_deleted": true})
+		case err != nil:
 			data = mustJSON(map[string]bool{"owner_unknown": true})
 		}
 		actorType, actor := actorFromRequest(r)
@@ -530,7 +538,7 @@ func (r *recordingMaskReader) refresh(arrived time.Time) error {
 		if r.guard != nil && !r.guard() {
 			return errMaskUncovered
 		}
-		if r.reg.Generation() != gen {
+		if r.reg.RunGeneration(r.runID) != gen {
 			continue
 		}
 		if gen != r.gen {

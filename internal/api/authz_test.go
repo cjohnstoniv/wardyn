@@ -232,6 +232,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
 	"POST /api/v1/devices/enrol":         {class: classAnonymous},
 	"POST /api/v1/runners/register":      {class: classAnonymous},
+	"POST /api/v1/inbound/exchange":      {class: classAnonymous}, // a provider token is the credential, read from the body; rate-limited per address
 	"POST /api/v1/runners/tokens":        {class: classAdmin},
 	"POST /api/v1/me/runners/tokens":     {class: classMember},
 	"POST /api/v1/me/runners/{id}/claim": {class: classMember},
@@ -819,10 +820,20 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/service-identities/{name}":                   {class: classSecurity},
 	"PATCH /api/v1/service-identities/{name}":                 {class: classSecurity},
 	"DELETE /api/v1/service-identities/{name}":                {class: classSecurity},
+	"GET /api/v1/inbound-federation":                          {class: classSecurity},
+	"PUT /api/v1/inbound-federation":                          {class: classSecurity},
+	"POST /api/v1/inbound-trusts":                             {class: classSecurity},
+	"GET /api/v1/inbound-trusts":                              {class: classSecurity},
+	"GET /api/v1/inbound-trusts/{id}":                         {class: classSecurity},
+	"DELETE /api/v1/inbound-trusts/{id}":                      {class: classSecurity},
 	"GET /api/v1/me/service-identities":                       {class: classMember},
 	"POST /api/v1/me/service-identities/{name}/tokens":        {class: classMember},
 	"GET /api/v1/me/service-identities/{name}/tokens":         {class: classMember},
 	"DELETE /api/v1/me/service-identities/{name}/tokens/{id}": {class: classMember},
+	// Inbound federation: the sponsor's view, veto and confirm of an identity's trusts (#3787).
+	"GET /api/v1/me/service-identities/{name}/inbound-trusts":               {class: classMember},
+	"DELETE /api/v1/me/service-identities/{name}/inbound-trusts/{id}":       {class: classMember},
+	"POST /api/v1/me/service-identities/{name}/inbound-trusts/{id}/confirm": {class: classMember},
 	// /me/capabilities is the member-safe twin of GET /permissions above: it
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
@@ -1011,6 +1022,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// list names reaches it without owning the run, and no role does. The handler is the gate: anyone it
 	// does not admit gets the foreign-run 404, which the member probe's random id meets too.
 	"POST /api/v1/runs/{id}/apps/{app}/ticket": {class: classMember},
+
+	// A run's preview URLs (run_previews.go). Listing and revoking are inspect-or-stop, as kill is; creating one is
+	// entry, as the attach ticket is. A preview's ticket is classMember, as an app's ticket is: a console person
+	// opens an org preview without owning the run, and the handler answers anyone it does not admit with the
+	// foreign-run 404.
+	"GET /api/v1/runs/{id}/previews":                {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"PUT /api/v1/runs/{id}/previews/{port}":         {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"DELETE /api/v1/runs/{id}/previews/{port}":      {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/previews/{port}/ticket": {class: classMember},
 
 	// Support sessions (support_grant.go): classMember, NOT classOwner — the helper is a super admin the owner
 	// rule would refuse, and each handler is its own gate (supportCaller, the run's owner, the grant's helper
@@ -1258,7 +1278,8 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
 // row for claude-code. The attended macOS window's site switch is on, so the
 // owner of a run reaches POST /runs/{id}/desktop/window's handler; the switch
-// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer.
+// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer. Preview URLs are on, up to org, so
+// the owner of a run reaches the preview routes' own rows (authzMatrixFeatureHooks makes the key available).
 func authzMatrixSiteConfig() types.SiteConfig {
 	on := true
 	return types.SiteConfig{
@@ -1266,7 +1287,30 @@ func authzMatrixSiteConfig() types.SiteConfig {
 			ID: "claude-code",
 		}}},
 		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+		FeatureSwitches: &types.SiteFeatureSwitches{
+			PreviewURLs: &types.PreviewURLsFeature{Enabled: &on, MaxVisibility: "org"},
+		},
 	}
+}
+
+// authzMatrixFeatureHooks installs the registered site feature hooks with the keys below available, so the
+// matrix's owner probe reaches a route's own answer while its key is still unavailable to the release. Each
+// feature's last commit, which makes its key available, deletes its line. Callers never run in parallel
+// (withSiteFeatureHooks).
+func authzMatrixFeatureHooks(t *testing.T) {
+	t.Helper()
+	hooks := map[siteFeatureKey]siteFeatureHook{}
+	for k, h := range siteFeatureHooks {
+		hooks[k] = h
+	}
+	for _, k := range []siteFeatureKey{
+		featurePreviewURLs,
+	} {
+		h := hooks[k]
+		h.available = func() bool { return true }
+		hooks[k] = h
+	}
+	withSiteFeatureHooks(t, hooks)
 }
 
 // TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
@@ -1336,6 +1380,7 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	// On, so a folder-only runner's folders answer on ownership rather than on the deployment's gate.
 	cfg.ComputerFolders = true
 	ast.siteCfg = authzMatrixSiteConfig()
+	authzMatrixFeatureHooks(t)
 	for _, f := range shape {
 		f(&cfg)
 	}
@@ -1381,6 +1426,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
+	authzMatrixFeatureHooks(t)
 	cfg.UIDir = dir
 	return matrixServer(cfg)
 }
@@ -1972,9 +2018,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
 		// /runs/{id}/egress (tierSuper, as revive); 57 since the Walls view added
-		// GET /runs/{id}/walls and its stream.
-		if probed != 57 {
-			t.Errorf("probed %d classOwner routes, want 57 — a route that left classOwner takes its tier "+
+		// GET /runs/{id}/walls and its stream; 60 since 0.11 added GET
+		// /runs/{id}/previews and DELETE .../previews/{port} (tierSecurity) and
+		// PUT .../previews/{port} (tierEntry).
+		if probed != 60 {
+			t.Errorf("probed %d classOwner routes, want 60 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -2162,8 +2210,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// The assistant's settings add their read and write on the SUPER tier (= 84 SUPER, with the attach forward route above).
 	// The approval counts add their read and write on the security tier (= 111 SEC).
 	// Agent rules add GET /agent-rules and PUT and DELETE /agent-rules/{harness} on the security tier (= 114 SEC).
-	if sec != 114 || super != 84 {
-		t.Errorf("tier split = %d security / %d admin, want 114 / 84 (PLUS the 3 /agent-rules routes, PLUS the 2 /governance/approval-counts routes, PLUS the 2 /assistant/settings routes, PLUS the attach forward route, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// Inbound federation (#3787) adds its switch read and write and the four trust routes on the security tier (= 120 SEC, with the approval counts and agent rules above).
+	if sec != 120 || super != 84 {
+		t.Errorf("tier split = %d security / %d admin, want 120 / 84 (PLUS inbound federation's 6 switch and trust routes, PLUS the 3 /agent-rules routes, PLUS the 2 /governance/approval-counts routes, PLUS the 2 /assistant/settings routes, PLUS the attach forward route, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 
