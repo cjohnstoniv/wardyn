@@ -60,6 +60,9 @@ const (
 	guardMCPOnly = "MCP servers only, unfenced: availability only"
 )
 
+// mcpOnlyCalls are the calls guardMCPOnly may label: each ends a run's MCP servers and nothing else.
+var mcpOnlyCalls = map[string]bool{"KillMCPSandbox": true, "KillRunMCPSandboxes": true, "endRunMCPSandboxes": true, "endMCPSandbox": true}
+
 // destructiveKnownIssues are the Known issues lines an unguarded site may name, by their id in the release's
 // planned changelog, with each line's first words.
 var destructiveKnownIssues = map[string]string{
@@ -241,6 +244,9 @@ func destructiveCensusProblems(found map[destructiveSite]int, table map[destruct
 		if err := destructiveGuardProblem(row.guard); err != "" {
 			out = append(out, fmt.Sprintf("%s %s %s: %s", site.file, site.fn, site.call, err))
 		}
+		if row.guard == guardMCPOnly && !mcpOnlyCalls[site.call] {
+			out = append(out, fmt.Sprintf("%s %s %s: guard %q is for a call that ends only MCP servers", site.file, site.fn, site.call, row.guard))
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -372,6 +378,18 @@ func (s *Server) nestedStop(ref string) {
 		want := destructiveSite{"tmp/sub/nested.go", "Server.nestedStop", "StopSandbox"}
 		if len(found) != 1 || found[want] != 1 {
 			t.Errorf("found %v, want only %v once", found, want)
+		}
+	})
+
+	t.Run("the MCP-only guard on another call fails", func(t *testing.T) {
+		table := map[destructiveSite]destructiveRow{}
+		for k, v := range destructiveCallCensus {
+			table[k] = v
+		}
+		site := destructiveSite{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopProxy"}
+		table[site] = destructiveRow{table[site].n, guardMCPOnly}
+		if problems := destructiveCensusProblems(found, table); len(problems) != 1 || !strings.Contains(problems[0], "stopLostSandbox StopProxy: guard") {
+			t.Errorf("problems %q, want the one row's", problems)
 		}
 	})
 
