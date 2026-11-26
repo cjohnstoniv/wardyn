@@ -529,7 +529,13 @@ func sshServed(c *ssh.Client) bool {
 	case ok := <-answered:
 		return ok
 	case <-closed:
-		return false
+		// An answer read before the close is still delivered: prefer it when it comes just after.
+		select {
+		case ok := <-answered:
+			return ok
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
 	}
 }
 
@@ -546,8 +552,8 @@ func rejectRows(a *sshTestRecorder) int {
 
 // sshGoroutines counts the goroutines running ssh code: the gateway's own and the ssh library's. Other
 // tests' leftover goroutines start and end on their own clock, so a process-wide count is noise here.
-// A test client's OpenChannel parked for good on a connection the server closed (see sshServed) is
-// not counted: the gateway opens no channels, so that goroutine is the client's, never the server's.
+// A test client's OpenChannel (sshServed's or sshFlood's) parked for good on a connection the server
+// closed (see sshServed) is not counted: that goroutine is the client's, never the server's.
 func sshGoroutines() int {
 	buf := make([]byte, 1<<20)
 	for {
@@ -560,7 +566,8 @@ func sshGoroutines() int {
 	}
 	n := 0
 	for _, g := range strings.Split(string(buf), "\n\n") {
-		if strings.Contains(g, "golang.org/x/crypto/ssh.(*mux).openChannel") {
+		if strings.Contains(g, "golang.org/x/crypto/ssh.(*mux).openChannel") &&
+			(strings.Contains(g, "internal/api.sshServed") || strings.Contains(g, "internal/api.sshFlood")) {
 			continue
 		}
 		if strings.Contains(g, "golang.org/x/crypto/ssh") || strings.Contains(g, "/internal/api/sshgateway") {
