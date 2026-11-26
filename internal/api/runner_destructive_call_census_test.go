@@ -16,13 +16,18 @@ import (
 	"testing"
 )
 
-// destructiveRunnerCalls are the runner methods that stop or cut what a run's sandbox runs, and the runner's cut
-// helpers (internal/runner/mcp_sandbox.go) that make StopProxy, StopProxyAt, FenceProxy, EndSandbox and
-// EndSandboxAt for internal/api. A reference to one, a call or a method value handed on, is a site of the census.
+// destructiveRunnerCalls are the runner methods that stop or cut what a run's sandbox runs. A reference to one, a
+// call or a method value handed on, is a site of the census.
 var destructiveRunnerCalls = map[string]bool{
 	"StopSandbox": true, "StopProxy": true, "KillSandbox": true, "EndSandbox": true,
 	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true,
-	"CutEgress": true, "CutEgressAt": true, "FenceEgress": true, "EndSandboxCut": true, "EndSandboxCutAt": true,
+}
+
+// cutHelperCalls are the runner's cut helpers (internal/runner/mcp_sandbox.go), each made over one of those
+// methods: a reference to one is a site of its method, so a call moved into a helper keeps its row and guard.
+var cutHelperCalls = map[string]string{
+	"CutEgress": "StopProxy", "CutEgressAt": "StopProxyAt", "FenceEgress": "FenceProxy",
+	"EndSandboxCut": "EndSandbox", "EndSandboxCutAt": "EndSandboxAt",
 }
 
 // destructiveWrappers are the functions that make one of those calls for their caller. A reference to one is a site
@@ -66,26 +71,26 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/reconcile.go", "Server.reconcileOrphanedRun", "KillSandbox"}: {2, guardNotReplaceable},
 	{"internal/api/reconcile.go", "Server.reconcileOrphanedRun", "StopSandbox"}: {1, guardNotReplaceable},
 	// The cut of an ended run's agent (refused for a run that is not terminal), and its proxy-stop fallback.
-	{"internal/api/run_agent_cut.go", "Server.cutAgent", "FenceEgress"}:    {2, guardNotReplaceable},
-	{"internal/api/run_agent_cut.go", "Server.stopProxyOnly", "CutEgress"}: {1, guardNotReplaceable},
+	{"internal/api/run_agent_cut.go", "Server.cutAgent", "FenceProxy"}:     {2, guardNotReplaceable},
+	{"internal/api/run_agent_cut.go", "Server.stopProxyOnly", "StopProxy"}: {1, guardNotReplaceable},
 	// A RUNNING run's quiesce before its pass back: under the end's held lock, the run read under it.
-	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "CutEgress"}: {1, guardHeldReread},
+	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "StopProxy"}: {1, guardHeldReread},
 	// The containment loop's stop of an ended run: the lock's loss is asked inside the call's own step.
 	{"internal/api/run_contain_d1.go", "Server.d1Stop", "StopSandbox"}: {1, guardChecked},
 	// The sign-in sweep's retry of a KILLED run's failed teardown (a stuck sign-in's kill owed, signinKillOwed).
 	{"internal/api/run_desktop_signin_sweep.go", "Server.sweepDesktopSignins", "KillSandbox"}: {1, guardNotReplaceable},
 	// The lease sweep's re-stop of a kept run on every pass (leaseRun), and an ended lost run's (stopLostSandbox):
 	// the lock taken and the run re-read can be lost after.
-	{"internal/api/run_lease.go", "Server.endSandbox", "EndSandboxCut"}: {1, "unguarded: K11"},
+	{"internal/api/run_lease.go", "Server.endSandbox", "EndSandbox"}: {1, "unguarded: K11"},
 	// The unfenced lost-run stops: a failed revive or edit (endUnconfirmedRun's callers, reloseRun), the fence-0
 	// sweeps (sweepLapsedRunTokens, keepRebootedRun, the gone-runner end), the lease sweep's re-stop; and the stop
 	// after a lost mark that could not be written (loseWriteFailed).
-	{"internal/api/run_lost.go", "Server.stopLostSandbox", "CutEgress"}: {1, "unguarded: K11, K14"},
+	{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopProxy"}: {1, "unguarded: K11, K14"},
 	// The lost-run stops that name a policy generation: the runner refuses a call for an older proxy generation.
-	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "CutEgressAt"}:     {1, guardFenced},
-	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "EndSandboxCutAt"}: {1, guardFenced},
+	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "StopProxyAt"}:  {1, guardFenced},
+	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "EndSandboxAt"}: {1, guardFenced},
 	// The headless proxy stop of a run whose revive or edit failed (stopUnconfirmedProxyAt).
-	{"internal/api/run_proxy_readback.go", "Server.stopProxyOrAudit", "CutEgress"}: {1, "unguarded: K12"},
+	{"internal/api/run_proxy_readback.go", "Server.stopProxyOrAudit", "StopProxy"}: {1, "unguarded: K12"},
 	// The end's stop: the lock's loss and the end hold's deadline are asked before the call, not during it.
 	{"internal/api/run_terminal_effects.go", "Server.finalizeRunEffects", "StopSandbox"}: {1, "unguarded: K16"},
 	// Handed to teardownOrAudit by the lost-run stops of a failed revive or edit, and by dispatch's failures.
@@ -153,8 +158,12 @@ func destructiveCallSites(files map[string]*ast.File) map[destructiveSite]int {
 			ast.Inspect(d, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.SelectorExpr:
-					if destructiveRunnerCalls[x.Sel.Name] || destructiveWrappers[x.Sel.Name] {
-						out[destructiveSite{path, fn, x.Sel.Name}]++
+					name := x.Sel.Name
+					if method, ok := cutHelperCalls[name]; ok {
+						name = method
+					}
+					if destructiveRunnerCalls[name] || destructiveWrappers[name] {
+						out[destructiveSite{path, fn, name}]++
 					}
 				case *ast.CallExpr:
 					if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "teardown" {
@@ -328,7 +337,7 @@ func (s *Server) nestedStop(ref string) {
 			for k, v := range destructiveCallCensus {
 				table[k] = v
 			}
-			site := destructiveSite{"internal/api/run_lost.go", "Server.stopLostSandbox", "CutEgress"}
+			site := destructiveSite{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopProxy"}
 			table[site] = destructiveRow{table[site].n, guard}
 			if problems := destructiveCensusProblems(found, table); len(problems) != 1 || !strings.Contains(problems[0], "stopLostSandbox") {
 				t.Errorf("guard %q: problems %q, want the one row's", guard, problems)
