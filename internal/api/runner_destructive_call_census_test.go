@@ -21,6 +21,7 @@ import (
 var destructiveRunnerCalls = map[string]bool{
 	"StopSandbox": true, "StopProxy": true, "KillSandbox": true, "EndSandbox": true,
 	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true, "StopLostProxyAt": true,
+	"KillMCPSandbox": true, "KillRunMCPSandboxes": true,
 }
 
 // cutHelperCalls are the runner's cut helpers (internal/runner/mcp_sandbox.go), each made over one of those
@@ -34,6 +35,7 @@ var cutHelperCalls = map[string]string{
 // of the census too, so a new caller of a wrapper must be listed with its guard, as a new direct call must.
 var destructiveWrappers = map[string]bool{
 	"stopSandboxOrAudit": true, "stopLostSandbox": true, "endSandbox": true, "cutAgent": true, "finalizeRunEffects": true,
+	"endRunMCPSandboxes": true, "endMCPSandbox": true,
 }
 
 // destructiveSite is one function's references to one destructive call. "teardown" is a call of a teardown verb
@@ -52,6 +54,10 @@ const (
 	guardHeldReread     = "under a held lock with re-read" // the run's lock is held and the run read again under it
 	guardFenced         = "generation-fenced"              // the runner refuses a call for an older proxy generation
 	guardNotReplaceable = "not replaceable"                // the kill path, or a ref no revive can take (a terminal run)
+	// guardMCPOnly is a call that ends only a run's MCP servers, never its agent or its proxy, and is not fenced: a
+	// slower attempt, or one that lands after its lock was lost, may end a newer revive's servers by name, which
+	// costs their availability (the relay answers -32002) and never widens what anything can reach.
+	guardMCPOnly = "MCP servers only, unfenced: availability only"
 )
 
 // destructiveKnownIssues are the Known issues lines an unguarded site may name, by their id in the release's
@@ -135,6 +141,44 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_tail_owner.go", "Server.tailFinalize", "finalizeRunEffects"}:                                  {1, "unguarded: K16"},
 	{"internal/api/runner_exits.go", "Server.applyRunnerExit", "finalizeRunEffects"}:                                 {1, "unguarded: K16"},
 	{"internal/api/runs_lifecycle.go", "Server.finalizeRunTailOrdered", "finalizeRunEffects"}:                        {1, "unguarded: K16"},
+
+	// A run's MCP servers (run_mcp_sandbox*.go, run_mcp_revive.go). The two ends: endRunMCPSandboxes runs on a bound
+	// of its own, so whatever its caller holds it may land after a lost lock, and endMCPSandbox is reached from it.
+	{"internal/api/run_mcp_sandbox.go", "Server.endRunMCPSandboxes", "KillMCPSandbox"}:      {1, guardMCPOnly},
+	{"internal/api/run_mcp_sandbox.go", "Server.endRunMCPSandboxes", "KillRunMCPSandboxes"}: {1, guardMCPOnly},
+	{"internal/api/run_mcp_sandbox.go", "Server.endRunMCPSandboxes", "endMCPSandbox"}:       {1, guardMCPOnly},
+	{"internal/api/run_mcp_sandbox.go", "Server.endMCPSandbox", "KillMCPSandbox"}:           {1, guardMCPOnly},
+	// Dispatch's create, start and unstarted end: the run is STARTING, which no revive takes.
+	{"internal/api/run_mcp_sandbox.go", "Server.createRunMCPSandboxes", "KillMCPSandbox"}:        {2, guardNotReplaceable},
+	{"internal/api/run_mcp_sandbox.go", "Server.startRunMCPSandboxes", "KillMCPSandbox"}:         {3, guardNotReplaceable},
+	{"internal/api/run_mcp_sandbox.go", "Server.endUnstartedMCPSandboxes", "endRunMCPSandboxes"}: {1, guardNotReplaceable},
+	{"internal/api/runs_lifecycle.go", "Server.killTeardownTail", "endRunMCPSandboxes"}:          {1, guardNotReplaceable},
+	{"internal/api/run_terminal_effects.go", "Server.finalizeRunEffects", "endRunMCPSandboxes"}:  {1, guardNotReplaceable},
+	// The kill confirm's MCP step, under the run's lock with the run read again.
+	{"internal/api/run_mcp_sandbox.go", "Server.confirmMCPSandboxesGone", "KillMCPSandbox"}: {1, guardHeldReread},
+	{"internal/api/run_mcp_sandbox.go", "Server.confirmMCPSandboxesGone", "endMCPSandbox"}:  {1, guardHeldReread},
+	// The watcher's pass and settle, and a restart's create, each on the run's lock's context with the run read
+	// again under it.
+	{"internal/api/run_mcp_sandbox_restart.go", "Server.mcpWatchPass", "KillMCPSandbox"}:      {1, guardHeldReread},
+	{"internal/api/run_mcp_sandbox_restart.go", "Server.settleMCPSandbox", "KillMCPSandbox"}:  {2, guardHeldReread},
+	{"internal/api/run_mcp_sandbox_restart.go", "Server.createAndStartMCP", "KillMCPSandbox"}: {3, guardHeldReread},
+	{"internal/api/run_mcp_sandbox_restart.go", "Server.restartMCPSandbox", "endMCPSandbox"}:  {2, guardHeldReread},
+	// A restart's and a revive's ends after their create: on a bound of their own, so they may land after a lost lock.
+	{"internal/api/run_mcp_sandbox_restart.go", "Server.restartMCPSandbox", "KillMCPSandbox"}:     {6, guardMCPOnly},
+	{"internal/api/run_mcp_sandbox_restart.go", "Server.restartMCPSandbox", "endRunMCPSandboxes"}: {1, guardMCPOnly},
+	{"internal/api/run_mcp_revive.go", "Server.reviveMCPSandboxes", "endMCPSandbox"}:              {2, guardHeldReread},
+	{"internal/api/run_mcp_revive.go", "Server.reviveMCPRow", "KillMCPSandbox"}:                   {4, guardMCPOnly},
+	{"internal/api/run_mcp_revive.go", "Server.reviveMCPRow", "endMCPSandbox"}:                    {1, guardMCPOnly},
+	{"internal/api/run_mcp_revive.go", "Server.reviveMCPRow", "endRunMCPSandboxes"}:               {1, guardMCPOnly},
+	{"internal/api/run_mcp_revive.go", "Server.failMCPRecreate", "KillMCPSandbox"}:                {1, guardMCPOnly},
+	// A person's Stop takes no run lock: the row is stopped first, then the sandbox killed.
+	{"internal/api/run_mcp_sandbox_routes.go", "Server.handleStopRunMCPServer", "KillMCPSandbox"}: {1, guardMCPOnly},
+	// The lost and lease-ended paths end the run's MCP servers unfenced.
+	{"internal/api/run_lease.go", "Server.endRun", "endRunMCPSandboxes"}:                            {1, guardMCPOnly},
+	{"internal/api/run_lost.go", "Server.loseRunAs", "endRunMCPSandboxes"}:                          {1, guardMCPOnly},
+	{"internal/api/run_policy_generation.go", "Server.reviveLostHoldRestore", "endRunMCPSandboxes"}: {1, guardMCPOnly},
+	{"internal/api/run_proxy_readback.go", "Server.loseUnconfirmedRun", "endRunMCPSandboxes"}:       {1, guardMCPOnly},
+	{"internal/api/run_revive_after_claim.go", "Server.containUnwrittenLoss", "endRunMCPSandboxes"}: {1, guardMCPOnly},
 }
 
 // destructiveCallSites counts each function's destructive references in files, keyed by their path.
@@ -204,7 +248,7 @@ func destructiveCensusProblems(found map[destructiveSite]int, table map[destruct
 
 func destructiveGuardProblem(guard string) string {
 	switch guard {
-	case guardChecked, guardHeldReread, guardFenced, guardNotReplaceable:
+	case guardChecked, guardHeldReread, guardFenced, guardNotReplaceable, guardMCPOnly:
 		return ""
 	}
 	ids, ok := strings.CutPrefix(guard, "unguarded: ")
