@@ -82,6 +82,13 @@ type fakeEnvbuilderDocker struct {
 	buildLabels map[string]map[string]string
 	imageBuilds int
 
+	// created maps an image tag to the Unix time ImageList reports for it; unset is 0.
+	created map[string]int64
+	// removeForced records whether any ImageRemove asked for a forced removal.
+	removeForced bool
+	// removePruned records whether any ImageRemove asked to prune the image's parents.
+	removePruned bool
+
 	// lastDockerfile is the Dockerfile of the last ImageBuild context.
 	lastDockerfile string
 	// noAuxID, when true, makes ImageBuild's stream carry no {"aux":{"ID":...}} message.
@@ -209,7 +216,9 @@ func (f *fakeEnvbuilderDocker) ImageList(ctx context.Context, _ client.ImageList
 		if !present {
 			continue
 		}
-		out = append(out, summaryForRef(ref))
+		s := summaryForRef(ref)
+		s.Labels, s.Created = f.buildLabels[ref], f.created[ref]
+		out = append(out, s)
 	}
 	return client.ImageListResult{Items: out}, nil
 }
@@ -481,9 +490,11 @@ func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, containerID st
 // ImageRemove untags ref, the way `docker rmi <tag>` does: the tag stops
 // resolving, every OTHER tag on the same image keeps resolving. Recorded so a
 // test can assert WHICH ref was reclaimed, not merely that something was.
-func (f *fakeEnvbuilderDocker) ImageRemove(_ context.Context, ref string, _ client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+func (f *fakeEnvbuilderDocker) ImageRemove(_ context.Context, ref string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.removeForced = f.removeForced || options.Force
+	f.removePruned = f.removePruned || options.PruneChildren
 	f.removedImages = append(f.removedImages, ref)
 	if !f.imagesPresent[ref] {
 		return client.ImageRemoveResult{}, errdefs.ErrNotFound
