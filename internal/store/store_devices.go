@@ -475,7 +475,8 @@ func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAudit
 }
 
 // refuseOrgRuns answers ErrFederatedOrgRun when any row's run_id names a run in this organisation's
-// agent_runs (audit_events.run_id has no foreign key, so nothing else would stop it).
+// agent_runs, or one the run-history retention sweep deleted (audit_events.run_id has no foreign key,
+// so nothing else would stop it).
 func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEvent) error {
 	var ids []string
 	for _, r := range rows {
@@ -487,7 +488,7 @@ func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEv
 		return nil
 	}
 	var hit bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = ANY($1::uuid[]))`, ids).Scan(&hit); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = ANY($1::uuid[])) OR EXISTS (SELECT 1 FROM run_history_tombstones WHERE run_id = ANY($1::uuid[]))`, ids).Scan(&hit); err != nil {
 		return fmt.Errorf("store: check federated run ids: %w", err)
 	}
 	if hit {

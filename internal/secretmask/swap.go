@@ -13,7 +13,7 @@ func (r *Registry) JSONVariantMaskerGen(runID uuid.UUID) (Masker, uint64) {
 		return Masker{}, 0
 	}
 	r.mu.RLock()
-	if c := r.cached[runID]; c != nil && c.gen == r.gen && c.haveVariant {
+	if c := r.cached[runID]; c != nil && c.gen == r.runGen(runID) && c.haveVariant {
 		m, gen := c.variant, c.gen
 		r.mu.RUnlock()
 		return m, gen

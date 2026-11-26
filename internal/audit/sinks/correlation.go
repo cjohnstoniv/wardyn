@@ -30,14 +30,15 @@ type RunCorrelationLookup func(ctx context.Context, runID uuid.UUID) (id string,
 // after the recorder's masking has run, so it passes through here on every emit; false leaves it off.
 type RunValueMasker func(runID uuid.UUID, b []byte) ([]byte, bool)
 
-// Witnessed is the RunValueMasker over mask: it reads generation before masking and reports ok only if
-// covers still holds afterwards and generation has not moved, so a corpus that was emptied, evicted or
-// reloaded while mask ran is never vouched for by a coverage answer given before or after it.
-func Witnessed(mask func(runID uuid.UUID, b []byte) []byte, covers RunCoverage, generation func() uint64) RunValueMasker {
+// Witnessed is the RunValueMasker over mask: it reads the run's generation before masking and reports ok
+// only if covers still holds afterwards and that generation has not moved. The generation moves on any
+// change to the run's own values or to the shared values, so a corpus that was emptied, evicted or reloaded
+// while mask ran is never vouched for by a coverage answer given before or after it.
+func Witnessed(mask func(runID uuid.UUID, b []byte) []byte, covers RunCoverage, generation func(runID uuid.UUID) uint64) RunValueMasker {
 	return func(runID uuid.UUID, b []byte) ([]byte, bool) {
-		g := generation()
+		g := generation(runID)
 		out := mask(runID, b)
-		return out, covers(runID) && generation() == g
+		return out, covers(runID) && generation(runID) == g
 	}
 }
 
@@ -94,9 +95,10 @@ func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) ty
 		return ev
 	}
 	if c.mask != nil {
-		// The masker also vouches that the run stayed covered with its corpus unchanged while it masked: an
-		// erasure or eviction that emptied the corpus during the read or the masking, and a reload that
-		// refilled it and held the run again, both move the registry's generation.
+		// The masker also vouches that the run stayed covered and that this run's generation did not move
+		// while it masked. That generation moves on any change to the run's own values or to the shared
+		// values: an erasure or eviction that emptied the corpus during the read or the masking, and a reload
+		// that refilled it and held the run again, both move it.
 		var whole bool
 		if id, whole = c.masked(*ev.RunID, id); !whole || id == "" {
 			return ev

@@ -59,6 +59,20 @@ type PersonErasureStore interface {
 
 var _ PersonErasureStore = PG{}
 
+// RetainedRunErasureStore is what erasing a person's recordings reads once the run history retention sweep may
+// have deleted some of their runs: a recording outlives its run, and the run's tombstone keeps its creator until
+// the erasure has reached it.
+type RetainedRunErasureStore interface {
+	// PersonRunIDs lists the runs created_by createdBy: those still kept, and those the retention sweep deleted
+	// (by their tombstones). One statement reads both, so a run the sweep moves meanwhile is in one of the lists.
+	PersonRunIDs(ctx context.Context, createdBy string) (kept, deleted []uuid.UUID, err error)
+	// BlankRunTombstoneCreators empties created_by on the tombstones of runIDs that still name createdBy, keeping
+	// their unit, and returns how many it changed.
+	BlankRunTombstoneCreators(ctx context.Context, createdBy string, runIDs []uuid.UUID) (int, error)
+}
+
+var _ RetainedRunErasureStore = PG{}
+
 // PrincipalDirectoryStore answers who a name an admin typed is, from every place
 // a principal is recorded: the identity directory (principal_identities and its
 // aliases), the people an admin pre-created, API tokens and workspace owners.
@@ -182,6 +196,43 @@ func (s PG) RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID,
 		return nil, fmt.Errorf("store: list a person's runs: %w", err)
 	}
 	return ids, nil
+}
+
+func (s PG) PersonRunIDs(ctx context.Context, createdBy string) (kept, deleted []uuid.UUID, err error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, false FROM agent_runs WHERE created_by = $1
+		UNION ALL SELECT run_id, true FROM run_history_tombstones WHERE created_by = $1 ORDER BY 1`, createdBy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: list a person's kept and deleted runs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var gone bool
+		if err := rows.Scan(&id, &gone); err != nil {
+			return nil, nil, fmt.Errorf("store: list a person's kept and deleted runs: %w", err)
+		}
+		if gone {
+			deleted = append(deleted, id)
+		} else {
+			kept = append(kept, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: list a person's kept and deleted runs: %w", err)
+	}
+	return kept, deleted, nil
+}
+
+func (s PG) BlankRunTombstoneCreators(ctx context.Context, createdBy string, runIDs []uuid.UUID) (int, error) {
+	if len(runIDs) == 0 {
+		return 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `UPDATE run_history_tombstones SET created_by = '' WHERE created_by = $1 AND run_id = ANY($2)`,
+		createdBy, runIDs)
+	if err != nil {
+		return 0, fmt.Errorf("store: blank deleted runs' creator: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {

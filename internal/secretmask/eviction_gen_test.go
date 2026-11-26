@@ -34,9 +34,7 @@ func TestEvict_GenerationBumpsOnlyOnARealDelete(t *testing.T) {
 		r.Evict(uuid.New()) // ids that never held a per-run secret
 	}
 
-	r.mu.RLock()
-	cur, gen := r.cached[live], r.gen
-	r.mu.RUnlock()
+	cur, gen := r.cached[live], r.RunGeneration(live)
 	if cur == nil || cur.gen != before || gen != before {
 		t.Fatalf("cache-only evictions moved the generation (cached=%v, registry gen=%d, want %d) — "+
 			"every live run's Masker would be re-derived", cur, gen, before)
@@ -45,9 +43,7 @@ func TestEvict_GenerationBumpsOnlyOnARealDelete(t *testing.T) {
 	// A real per-run eviction still bumps, because it must: the corpus the
 	// cached Masker was built from is gone.
 	r.Evict(live)
-	r.mu.RLock()
-	after := r.gen
-	r.mu.RUnlock()
+	after := r.RunGeneration(live)
 	if after == before {
 		t.Error("a real eviction must bump the generation")
 	}

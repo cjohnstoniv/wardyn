@@ -245,7 +245,7 @@ func TestEnrichRuns_AFenceDuringTheReadOrTheMaskingExportsNothing(t *testing.T) 
 					wait()
 				}
 				return reg.JSONVariantMasker(id).Mask(b) // read after the eviction below
-			}, func(uuid.UUID) bool { return covered.Load() }, reg.Generation), func(uuid.UUID) bool { return covered.Load() })
+			}, func(uuid.UUID) bool { return covered.Load() }, reg.RunGeneration), func(uuid.UUID) bool { return covered.Load() })
 
 			if tc.warm {
 				emitFor(t, f, run)
@@ -301,7 +301,7 @@ func TestEnrichRuns_ADropAppliedFromAnotherReplicaUnholdsBeforeTheValueGoes(t *t
 				<-release
 				return v, ok, err
 			}, Witnessed(func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) },
-				func(uuid.UUID) bool { return covered.Load() }, reg.Generation),
+				func(uuid.UUID) bool { return covered.Load() }, reg.RunGeneration),
 				func(uuid.UUID) bool { return covered.Load() })
 
 			done := make(chan struct{})
@@ -352,7 +352,7 @@ func TestEnrichRuns_AnEvictionAndAReloadAroundTheMaskingExportNothing(t *testing
 		close(inMask)
 		<-releaseMask
 		return out
-	}, func(uuid.UUID) bool { return covered.Load() }, reg.Generation),
+	}, func(uuid.UUID) bool { return covered.Load() }, reg.RunGeneration),
 		func(uuid.UUID) bool { return covered.Load() })
 
 	done := make(chan struct{})

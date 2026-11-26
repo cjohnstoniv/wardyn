@@ -115,7 +115,7 @@ func TestPG_ALoadInFlightWhenTheCorpusIsDroppedCannotVouchForItAgain(t *testing.
 			sink := &lastSink{}
 			fan := sinks.NewFanout(sink)
 			fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
-				sinks.Witnessed(func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held, regB.Generation), mB.Held)
+				sinks.Witnessed(func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held, regB.RunGeneration), mB.Held)
 			if err := fan.Emit(ctx, types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}); err != nil {
 				t.Fatal(err)
 			}
@@ -233,7 +233,7 @@ func TestPG_ALoadDuringARemovalCannotVouchForTheRun(t *testing.T) {
 			sink := &lastSink{}
 			fan := sinks.NewFanout(sink)
 			fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
-				sinks.Witnessed(func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held, regB.Generation), mB.Held)
+				sinks.Witnessed(func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held, regB.RunGeneration), mB.Held)
 			emit := func() string {
 				if err := fan.Emit(ctx, types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}); err != nil {
 					t.Fatal(err)
