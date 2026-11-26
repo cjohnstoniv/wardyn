@@ -110,7 +110,8 @@ func mcpReviveWriteContext(mcpCtx context.Context) (context.Context, context.Can
 
 // mcpReviveRecreates reports whether a revive re-creates row: a rebooted revive, a changed policy digest, or a
 // row not ready with a live sandbox. A live egress edit is not a revive: it re-creates only a row that is up
-// and whose digest changed.
+// and whose digest changed, so every "same" or "narrower" server whose run egress the edit changed (each
+// copies the run's), and never an "own" server for a run deny, which its own policy does not take.
 func (s *Server) mcpReviveRecreates(ctx context.Context, run types.AgentRun, row store.RunMCPSandbox, digest string, rebooted, edit bool) bool {
 	changed := digest != row.PolicyDigest
 	if edit {

@@ -23,13 +23,30 @@ var mcpSearchRow = types.RunComponent{Ordinal: 1, Name: "Search", MCPHarnesses: 
 	Definition: types.ComponentDefinition{Hosts: []string{"api.search.test"}, MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
 		Launch: &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "@example/mcp-search@2.0.0"}}}}}
 
+// mcpSearchOwnRow is mcpSearchRow under a policy of its own, which a run's egress edit does not reach.
+var mcpSearchOwnRow = mcpRowInMode(mcpSearchRow, types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn,
+	Spec: &types.RunPolicySpec{AllowedDomains: []string{"api.search.test"}}})
+
+// mcpRowInMode is row with its sandbox policy set to pol; row's own definition is not written.
+func mcpRowInMode(row types.RunComponent, pol types.ComponentMCPSandboxPolicy) types.RunComponent {
+	mcp := *row.Definition.MCP
+	mcp.Sandbox = &types.ComponentMCPSandbox{Policy: pol}
+	row.Definition.MCP = &mcp
+	return row
+}
+
 // newMCPReviveFixture is a run dispatched with its servers ready; two when two is set.
 func newMCPReviveFixture(t *testing.T, two bool) *mcpDispatchFixture {
 	t.Helper()
-	var extra []types.RunComponent
 	if two {
-		extra = append(extra, mcpSearchRow)
+		return newMCPReviveFixtureOf(t, mcpSearchRow)
 	}
+	return newMCPReviveFixtureOf(t)
+}
+
+// newMCPReviveFixtureOf is a run dispatched with the files server and extra, every one ready.
+func newMCPReviveFixtureOf(t *testing.T, extra ...types.RunComponent) *mcpDispatchFixture {
+	t.Helper()
 	f := newMCPDispatchFixture(t, extra...)
 	f.dispatch()
 	want := 1 + len(extra)
@@ -416,10 +433,12 @@ func (f *mcpDispatchFixture) keepAgentPolicy(t *testing.T, fn func(p *types.RunP
 	}
 }
 
-// TestLiveEgressEditKeepsMCPSessions (OP53-2): an edit that changes no server's digest touches no row; one
-// that denies the files server's host re-creates that server only, and the other keeps its session.
+// TestLiveEgressEditKeepsMCPSessions: an edit that changes no server's digest touches no row. A "same"
+// server copies the run's egress, so an edit that denies a host changes its digest and re-creates it, which
+// replaces its session; an "own" server holds a policy of its own, which a run's deny does not reach, so the
+// edit leaves it, and its session, as they were. An edit never re-creates a stopped row.
 func TestLiveEgressEditKeepsMCPSessions(t *testing.T) {
-	f := newMCPReviveFixture(t, true)
+	f := newMCPReviveFixtureOf(t, mcpSearchOwnRow)
 	f.revive(t, false, true)
 	if f.sbx.count("kill") != 0 || f.sbx.count("create") != 2 {
 		t.Fatalf("an edit that changed no digest: kills %d creates %d", f.sbx.count("kill"), f.sbx.count("create"))
@@ -428,10 +447,10 @@ func TestLiveEgressEditKeepsMCPSessions(t *testing.T) {
 	f.keepAgentPolicy(t, func(p *types.RunPolicySpec) { p.DeniedDomains = append(p.DeniedDomains, "api.files.test") })
 	f.revive(t, false, true)
 	if f.sbx.count("create") != 3 || f.st.mcpRowsMem.get(0).State != store.MCPSandboxStarting {
-		t.Fatalf("creates %d, files row %s: want files re-created", f.sbx.count("create"), f.st.mcpRowsMem.get(0).State)
+		t.Fatalf("creates %d, files row %s: want the same server re-created", f.sbx.count("create"), f.st.mcpRowsMem.get(0).State)
 	}
 	if got := f.st.mcpRowsMem.get(1); !got.UpdatedAt.Equal(search.UpdatedAt) || got.State != store.MCPSandboxReady || f.sbx.left() != 2 {
-		t.Errorf("search row %+v left %d: want it untouched", got, f.sbx.left())
+		t.Errorf("own server row %+v left %d: want it and its session untouched", got, f.sbx.left())
 	}
 	f.srv.endRunMCPSandboxes(context.Background(), f.run.ID, mcpEndPerson)
 	f.keepAgentPolicy(t, func(p *types.RunPolicySpec) { p.DeniedDomains = append(p.DeniedDomains, "api.search.test") })
