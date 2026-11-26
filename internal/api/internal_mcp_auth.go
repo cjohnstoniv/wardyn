@@ -135,13 +135,23 @@ func (s *Server) refuseMCPSandboxToken(w http.ResponseWriter, r *http.Request, t
 // mcpSandboxKeyOfJTI is the key of runID's server row whose current or previous jti is jti, or "" when no row
 // holds it or the rows could not be read.
 func (s *Server) mcpSandboxKeyOfJTI(ctx context.Context, runID uuid.UUID, jti string) string {
+	rows, _ := s.mcpSandboxRowsOf(ctx, runID) // a failed read leaves the refusal's row unlabelled
+	return mcpSandboxKeyOfRows(rows, jti)
+}
+
+// mcpSandboxRowsOf reads runID's server rows: none when the store keeps no such rows.
+func (s *Server) mcpSandboxRowsOf(ctx context.Context, runID uuid.UUID) ([]store.RunMCPSandbox, error) {
 	st, ok := s.cfg.Store.(store.RunMCPSandboxStore)
 	if !ok {
-		return ""
+		return nil, nil
 	}
-	rows, _ := st.ListRunMCPSandboxes(ctx, runID) // a failed read leaves the refusal's row unlabelled
+	return st.ListRunMCPSandboxes(ctx, runID)
+}
+
+// mcpSandboxKeyOfRows is the key of the row in rows whose current or previous jti is jti, or "" when none is.
+func mcpSandboxKeyOfRows(rows []store.RunMCPSandbox, jti string) string {
 	for _, row := range rows {
-		if row.CPTokenJTI == jti || row.PrevCPTokenJTI == jti {
+		if jti != "" && (row.CPTokenJTI == jti || row.PrevCPTokenJTI == jti) {
 			return row.ServerKey
 		}
 	}
@@ -151,7 +161,10 @@ func (s *Server) mcpSandboxKeyOfJTI(ctx context.Context, runID uuid.UUID, jti st
 // mcpSandboxAuth serves an MCP proxy's token on its five routes. For that token on one of them it never calls
 // next: it verifies the token for the MCP audience, refuses a relayed request (no run reached through a
 // runner has an MCP sandbox), holds the run to internalAuth's liveness and relay gates, matches the token to
-// its server's row, then calls the route's handler with the claims, the run and the row's key in context.
+// its server's row, then calls the route's handler with the claims, the run and the row's key in context. The
+// run's server rows are read once, before the gates, so the rows the gates write are labelled with the key of
+// the row that holds the token's jti: they are the server's, not the agent's (record_evidence.go). When the
+// rows cannot be read the gates' rows stay unlabelled, which fails the agent's replay, the safe way.
 func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
@@ -175,11 +188,15 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 			s.denyRelayed(w, r, claims, placement.ReasonRelayRouteRefused, runner.String())
 			return
 		}
+		rows, rowsErr := s.mcpSandboxRowsOf(r.Context(), claims.RunID)
+		if key := mcpSandboxKeyOfRows(rows, claims.JTI); key != "" {
+			r = r.WithContext(audit.WithMCPSandbox(r.Context(), key))
+		}
 		run, ok := s.refuseTerminalRun(s.decisionGate(w, r, claims), r, claims)
 		if !ok || s.refuseRelayBinding(s.decisionGate(w, r, claims), r, claims, run) {
 			return
 		}
-		row, ok := s.mcpSandboxRowFor(w, r, claims)
+		row, ok := s.mcpSandboxRowFor(w, r, claims, rows, rowsErr)
 		if !ok {
 			return
 		}
@@ -191,19 +208,17 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 // mcpSandboxRowFor is the run's server row the token names: the one whose current jti it is, or whose previous
 // jti it is while that token has not lapsed. A stopped row is refused, except at the decision door within
 // terminalUploadGrace of its stop, so the rows its proxy flushes as it stops still land; a row with no server
-// key is refused as no row (the table refuses one too). It writes its own
-// refusal and returns false once it has.
-func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims *identity.Claims) (store.RunMCPSandbox, bool) {
+// key is refused as no row (the table refuses one too). rows and err are the run's server rows as
+// mcpSandboxRowsOf read them. It writes its own refusal and returns false once it has.
+func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims *identity.Claims, rows []store.RunMCPSandbox, err error) (store.RunMCPSandbox, bool) {
 	unknown := func() (store.RunMCPSandbox, bool) {
 		s.auditAuthFailedAs(r, internalAuthActor, reasonMCPSandboxUnknown)
 		writeErrorReason(w, http.StatusForbidden, reasonMCPSandboxUnknown, "no MCP server of this run holds this token")
 		return store.RunMCPSandbox{}, false
 	}
-	st, ok := s.cfg.Store.(store.RunMCPSandboxStore)
-	if !ok || claims.JTI == "" {
+	if _, ok := s.cfg.Store.(store.RunMCPSandboxStore); !ok || claims.JTI == "" {
 		return unknown()
 	}
-	rows, err := st.ListRunMCPSandboxes(r.Context(), claims.RunID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "api: read the run's MCP servers for its proxy's token",
 			slog.String("run_id", claims.RunID.String()), slog.Any("err", err))

@@ -403,6 +403,45 @@ func TestMCPDoorHoldsRunGates(t *testing.T) {
 	}
 }
 
+// mcpRunReadFailStore is an MCP door store whose run read fails.
+type mcpRunReadFailStore struct{ mcpAuthStore }
+
+func (mcpRunReadFailStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("store: get run: connection reset")
+}
+
+// TestMCPDoorGateRowsNameTheServer: the rows the MCP door's run gates write at the decision door (the refusal of
+// a run that ended or of a post off its relay, and the note of a 503 for a run it could not read) are the
+// server's, labelled with its key. The agent's post through the same gate still writes its own, unlabelled.
+func TestMCPDoorGateRowsNameTheServer(t *testing.T) {
+	runner := uuid.New()
+	ended := types.AgentRun{State: types.RunCompleted, UpdatedAt: time.Now().UTC().Add(-time.Hour)}
+	bound := types.AgentRun{State: types.RunRunning, Placement: types.PlacementLocal, RunnerID: &runner, UpdatedAt: time.Now().UTC()}
+	for _, c := range []struct {
+		name, action string
+		code         int
+		store        func(mcpAuthStore) store.Store
+	}{
+		{"ended", authz.AuditAction, http.StatusForbidden, func(s mcpAuthStore) store.Store { return mcpRunStateStore{s, ended} }},
+		{"relay bound", authz.AuditAction, http.StatusForbidden, func(s mcpAuthStore) store.Store { return mcpRunStateStore{s, bound} }},
+		{"run unreadable", runReportLostAction, http.StatusServiceUnavailable, func(s mcpAuthStore) store.Store { return mcpRunReadFailStore{s} }},
+	} {
+		f := newMCPAuthFixtureWith(t, func(cfg *Config, _ *mcpAuthFixture) { cfg.Store = c.store(cfg.Store.(mcpAuthStore)) })
+		if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision); w.Code != c.code {
+			t.Fatalf("%s: the MCP proxy's post = %d %s, want %d", c.name, w.Code, w.Body.String(), c.code)
+		}
+		if n, labelled := mcpActionRows(f.h, c.action, "files"); n != 1 || labelled != 1 {
+			t.Errorf("%s: %s rows = %d (%d labelled files), want one, labelled", c.name, c.action, n, labelled)
+		}
+		if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.agent, mcpAllowDecision); w.Code != c.code {
+			t.Fatalf("%s: control: the agent's post = %d %s, want %d", c.name, w.Code, w.Body.String(), c.code)
+		}
+		if n, labelled := mcpActionRows(f.h, c.action, "files"); n != 2 || labelled != 1 {
+			t.Errorf("%s: control: %s rows = %d (%d labelled files), want the agent's, unlabelled, beside it", c.name, c.action, n, labelled)
+		}
+	}
+}
+
 // TestMCPRowWithEmptyKeyRefused: a row whose server key is empty would label its proxy's rows as the agent's,
 // so the door refuses its token on every one of the five routes as it refuses an unknown one.
 func TestMCPRowWithEmptyKeyRefused(t *testing.T) {
