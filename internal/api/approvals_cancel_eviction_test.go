@@ -176,6 +176,10 @@ func (a evictionApprovals) ExpireOne(ctx context.Context, id uuid.UUID, actor, r
 	return approval.ExpireOne(ctx, a.st, id, actor, reason)
 }
 
+func (a evictionApprovals) CountForMCPSandbox(context.Context, uuid.UUID, string) (int, error) {
+	return 0, nil // this fixture raises no MCP server's hold
+}
+
 func (a evictionApprovals) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	rows, err := a.st.ListApprovals(ctx, "")
 	if err != nil {

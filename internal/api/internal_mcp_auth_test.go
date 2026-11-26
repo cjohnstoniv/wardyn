@@ -487,6 +487,43 @@ func TestMCPFirstUseHoldReachesApprovals(t *testing.T) {
 	}
 }
 
+// TestMCPHoldFloodLeavesAgentRaise: an MCP server's holds have a cap of their own, 1024 for its server and
+// answered with mcp_sandbox_approval_cap, and are left out of the run's cap, so a server that has filled its
+// cap, or the run's, leaves the agent's raise working. The run's own cap still refuses the agent.
+func TestMCPHoldFloodLeavesAgentRaise(t *testing.T) {
+	f := newMCPAuthFixture(t)
+	seed := func(n int, key string) {
+		f.h.approvals.mu.Lock()
+		defer f.h.approvals.mu.Unlock()
+		for range n {
+			id := uuid.New()
+			f.h.approvals.byID[id] = types.ApprovalRequest{ID: id, RunID: f.runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+				RequestedScope: json.RawMessage(`{"host":"h` + id.String() + `.test","mcp_sandbox":"` + key + `"}`)}
+		}
+	}
+	raise := func(tok, host string) *httptest.ResponseRecorder {
+		return do(t, f.srv, http.MethodPost, mcpApprovalsPath, tok, `{"kind":"egress_domain","requested_scope":{"host":"`+host+`","mode":"wait_for_review"}}`)
+	}
+	seed(maxMCPHoldsPerServer-1, "files")
+	seed(maxMCPHoldsPerServer, "other") // another server's holds are not this one's
+	if w := raise(f.tok, "last.files.test"); w.Code != http.StatusCreated {
+		t.Fatalf("the server's last free slot: %d %s, want 201", w.Code, w.Body.String())
+	}
+	if w := raise(f.tok, "over.files.test"); w.Code != http.StatusTooManyRequests || reasonOf(t, w) != reasonMCPSandboxApprovalCap {
+		t.Fatalf("past the server's cap: %d %s, want 429 %s", w.Code, w.Body.String(), reasonMCPSandboxApprovalCap)
+	}
+	seed(maxApprovalsPerRun, "files")
+	if w := raise(f.agent, "agent.test"); w.Code != http.StatusCreated {
+		t.Fatalf("the agent's raise after the flood: %d %s, want 201", w.Code, w.Body.String())
+	}
+	f.h.approvals.mu.Lock()
+	f.h.approvals.countForRun = maxApprovalsPerRun
+	f.h.approvals.mu.Unlock()
+	if w := raise(f.agent, "agent2.test"); w.Code != http.StatusTooManyRequests || reasonOf(t, w) != reasonInternalApprovalCapReached {
+		t.Fatalf("control: the agent at the run's cap: %d %s, want 429 %s", w.Code, w.Body.String(), reasonInternalApprovalCapReached)
+	}
+}
+
 // TestMCPTokenRaisesEgressHoldsOnly: no MCP policy holds a hold rule (the finish makes each a deny), and as a
 // backstop an MCP token raising any other kind is refused.
 func TestMCPTokenRaisesEgressHoldsOnly(t *testing.T) {

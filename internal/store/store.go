@@ -780,12 +780,26 @@ func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) 
 // state — the per-run DoS bound behind handleInternalRequestApproval
 // (maxApprovalsPerRun), since a sandbox picks the hosts it asks about and could
 // otherwise raise rows without limit. Counted in the database rather than List
-// + filter in Go, which would read every approval row in the deployment.
+// + filter in Go, which would read every approval row in the deployment. Its MCP
+// servers' holds are left out: each server is counted on its own
+// (CountMCPSandboxApprovals).
 func (s PG) CountApprovalsForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	var n int
-	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE run_id = $1`, runID).Scan(&n)
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE run_id = $1 AND NOT `+mcpSandboxApprovalSQL, runID).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("store: count approvals for run: %w", err)
+	}
+	return n, nil
+}
+
+// CountMCPSandboxApprovals returns how many egress holds the run's MCP server key has raised, in any state:
+// that server's own cap.
+func (s PG) CountMCPSandboxApprovals(ctx context.Context, runID uuid.UUID, key string) (int, error) {
+	var n int
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE run_id = $1 AND `+mcpSandboxApprovalSQL+
+		` AND requested_scope ->> 'mcp_sandbox' = $2`, runID, key).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count an MCP server's approvals: %w", err)
 	}
 	return n, nil
 }

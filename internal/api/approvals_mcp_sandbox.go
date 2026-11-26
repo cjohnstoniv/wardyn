@@ -8,9 +8,44 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// maxMCPHoldsPerServer caps how many egress holds one MCP server's proxy may raise on its run, in any state.
+// Its holds are left out of the run's maxApprovalsPerRun, so a server that rotates through hosts fills its
+// own cap and never the one the agent's raises are held to.
+const maxMCPHoldsPerServer = 1024
+
+// approvalRaiseCap is a raise's cap check before the insert, and the context the insert counts again under:
+// the run's maxApprovalsPerRun over the agent's rows, or, for an MCP proxy's hold, maxMCPHoldsPerServer over
+// its server's rows, found by their label. A count that cannot be read refuses (503), as does a full cap
+// (429). It writes the refusal and reports false.
+func (s *Server) approvalRaiseCap(w http.ResponseWriter, r *http.Request, runID uuid.UUID) (context.Context, bool) {
+	ctx := r.Context()
+	key := audit.MCPSandboxOf(ctx)
+	limit, full, capped := maxApprovalsPerRun, store.ErrApprovalRunCap, store.WithAdmissionCap(ctx, maxApprovalsPerRun)
+	var n int
+	var err error
+	if key != "" {
+		limit, full, capped = maxMCPHoldsPerServer, store.ErrApprovalMCPSandboxCap, store.WithMCPSandboxAdmissionCap(ctx, maxMCPHoldsPerServer, key)
+		n, err = s.cfg.Approvals.CountForMCPSandbox(ctx, runID, key)
+	} else {
+		n, err = s.cfg.Approvals.CountForRun(ctx, runID)
+	}
+	if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalApprovalCountUnavailable, loggedMsg(ctx, "count approvals for run", err))
+		return nil, false
+	}
+	if n >= limit {
+		writeCapReached(w, full)
+		return nil, false
+	}
+	return capped, true
+}
 
 // An MCP proxy's first-use hold is an egress_domain row labelled with its server's key at the top-level
 // requested_scope.mcp_sandbox, which only mcpSandboxScope writes. The label keeps it apart from the agent's

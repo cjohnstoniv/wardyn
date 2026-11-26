@@ -14,6 +14,7 @@ const (
 	reasonMCPSandboxLimit          = "mcp_sandbox_limit"           // the run has more MCP servers that start from a command than mcpSandboxMax
 	reasonMCPSandboxUnknown        = "mcp_sandbox_unknown"         // an MCP proxy's token names no live server row of its run (403), or a grant its row does not hold
 	reasonMCPSandboxHostReachable  = "mcp_sandbox_host_reachable"  // the Docker Engine is older than 28.0.0, so an MCP server's sandbox would have an address on the Docker host (runner.ErrMCPSandboxHostReachable); no setting admits one
+	reasonMCPSandboxApprovalCap    = "mcp_sandbox_approval_cap"    // an MCP server's proxy already holds maxMCPHoldsPerServer egress holds on its run (429)
 )
 
 // The sentences, each the approved template byte for byte. <server> and <runner> are filled by
