@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -159,42 +160,45 @@ func probeMemberRoute(t *testing.T, srv *Server, method, pattern string, rc clas
 func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc classifiedRoute, cast ssoShapeCast, seed func(routeEntity) uuid.UUID) {
 	t.Helper()
 	body := bodyFor(method, rc)
-	on := func(p ssoPersona) int {
-		return doSSO(t, srv, method, buildPath(pattern, seed(rc.entity).String()), p.cookie, body).Code
+	on := func(p ssoPersona) *httptest.ResponseRecorder {
+		return doSSO(t, srv, method, buildPath(pattern, seed(rc.entity).String()), p.cookie, body)
 	}
-	reached := func(code int) bool {
-		return code != http.StatusUnauthorized && code != http.StatusForbidden && code != http.StatusNotFound
+	// An MCP server route's own 404 for the probe's key, which names no server, is past the tier too.
+	reached := func(w *httptest.ResponseRecorder) bool {
+		return w.Code != http.StatusUnauthorized && w.Code != http.StatusForbidden &&
+			(w.Code != http.StatusNotFound || unknownMCPServerAnswer(method, pattern, w))
 	}
-	if code := on(cast.member); !reached(code) {
-		t.Errorf("owning member: %d, want the handler's own answer", code)
+	if w := on(cast.member); !reached(w) {
+		t.Errorf("owning member: %d, want the handler's own answer", w.Code)
 	}
 	// Cross-member isolation: the existence-oracle 404, never 403.
-	if code := on(cast.member2); code != http.StatusNotFound {
+	if code := on(cast.member2).Code; code != http.StatusNotFound {
 		t.Errorf("member2 on member's entity: %d, want 404", code)
 	}
 	// tierOwnerOnly (#1197 L2): no admin bypass AT ALL — a SUPER admin gets
 	// the SAME 404 a non-owner gets, unlike every other tier.
-	if adminCode := on(cast.admin); rc.ownerTier == tierOwnerOnly {
-		if adminCode != http.StatusNotFound {
-			t.Errorf("admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", adminCode)
+	if admin := on(cast.admin); rc.ownerTier == tierOwnerOnly {
+		if admin.Code != http.StatusNotFound {
+			t.Errorf("admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", admin.Code)
 		}
 	} else if rc.ownerTier == tierEntry {
 		// Interactive entry (#1476): the super admin is refused with a 403
 		// naming why, not the 404 of a missing run.
-		if adminCode != http.StatusForbidden {
-			t.Errorf("admin on a foreign tierEntry entity: %d, want 403 run_owner_only", adminCode)
+		if admin.Code != http.StatusForbidden {
+			t.Errorf("admin on a foreign tierEntry entity: %d, want 403 run_owner_only", admin.Code)
 		}
-	} else if !reached(adminCode) {
-		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", adminCode)
+	} else if !reached(admin) {
+		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", admin.Code)
 	}
-	code := on(cast.sec)
+	sec := on(cast.sec)
+	code := sec.Code
 	switch rc.ownerTier {
 	case tierSuper, tierEntry:
 		if code != http.StatusNotFound {
 			t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
 		}
 	case tierSecurity:
-		if !reached(code) {
+		if !reached(sec) {
 			t.Errorf("security_admin on a foreign tierSecurity entity: %d, want the handler's own answer", code)
 		}
 	case tierOwnerOnly:

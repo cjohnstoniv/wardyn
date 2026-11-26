@@ -1174,16 +1174,20 @@ func absentRowSignInAnswer(method, pattern string, w *httptest.ResponseRecorder)
 		w.Code == http.StatusForbidden && errorReason(w) == "capability_component"
 }
 
-// unknownMCPServerAnswer reports whether w is the MCP server Stop's own answer for a key the run has no server
-// for: the probe fills {key} with the run's id, so the handler, reached past its authorization, answers its
-// own 404, whose reason the not-owner 404 never carries. The exemption is the Stop route's alone.
+// unknownMCPServerAnswer reports whether w is an MCP server Restart's or Stop's own answer for a key the run
+// has no server for: the probe fills {key} with an id no server holds, so the handler, reached past its
+// authorization, answers its own 404, whose reason the not-owner 404 never carries. The exemption is those two
+// routes' alone.
 func unknownMCPServerAnswer(method, pattern string, w *httptest.ResponseRecorder) bool {
-	return method == http.MethodPost && pattern == mcpServerStopRoute &&
+	return method == http.MethodPost && (pattern == mcpServerStopRoute || pattern == mcpServerRestartRoute) &&
 		w.Code == http.StatusNotFound && errorReason(w) == reasonMCPSandboxUnknown
 }
 
-// mcpServerStopRoute is the MCP server Stop's route pattern.
-const mcpServerStopRoute = "/api/v1/runs/{id}/mcp-servers/{key}/stop"
+// mcpServerStopRoute and mcpServerRestartRoute are the MCP server Stop's and Restart's route patterns.
+const (
+	mcpServerStopRoute    = "/api/v1/runs/{id}/mcp-servers/{key}/stop"
+	mcpServerRestartRoute = "/api/v1/runs/{id}/mcp-servers/{key}/restart"
+)
 
 // assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
 func assertNotBlockedOn(t *testing.T, method, pattern, who string, w *httptest.ResponseRecorder) {
@@ -1214,7 +1218,7 @@ func TestAbsentRowSignInAnswer_IsScopedToTheSignInRoute(t *testing.T) {
 	}
 }
 
-func TestUnknownMCPServerAnswer_IsScopedToTheStopRoute(t *testing.T) {
+func TestUnknownMCPServerAnswer_IsScopedToTheServerRoutes(t *testing.T) {
 	w := httptest.NewRecorder()
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.WriteString(`{"error":"x","reason":"` + reasonMCPSandboxUnknown + `"}`)
@@ -1228,10 +1232,12 @@ func TestUnknownMCPServerAnswer_IsScopedToTheStopRoute(t *testing.T) {
 	}{
 		{http.MethodPost, mcpServerStopRoute, w, true},
 		{http.MethodPost, mcpServerStopRoute, other, false},
-		{http.MethodPost, "/api/v1/runs/{id}/mcp-servers/{key}/restart", w, false},
+		{http.MethodPost, mcpServerRestartRoute, w, true},
+		{http.MethodPost, mcpServerRestartRoute, other, false},
 		{http.MethodGet, "/api/v1/runs/{id}/mcp-servers", w, false},
 		{http.MethodPost, "/api/v1/runs/{id}/kill", w, false},
 		{http.MethodGet, mcpServerStopRoute, w, false},
+		{http.MethodGet, mcpServerRestartRoute, w, false},
 	} {
 		if got := unknownMCPServerAnswer(tc.method, tc.pattern, tc.w); got != tc.want {
 			t.Errorf("%s %s (%s): exempt = %v, want %v", tc.method, tc.pattern, errorReason(tc.w), got, tc.want)
@@ -1731,11 +1737,13 @@ func TestAuthzMatrix(t *testing.T) {
 						t.Errorf("admin on a FOREIGN entity, tierEntry route: status = %d, want 403 run_owner_only; body=%s",
 							w.Code, w.Body.String())
 					}
-				} else if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+				} else if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden ||
+					w.Code == http.StatusNotFound && !unknownMCPServerAnswer(method, pattern, w) {
 					t.Errorf("admin on a FOREIGN entity: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
 				}
 				// The owner reaches their own.
-				if w := doSSO(t, srv, method, pOwned, memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+				if w := doSSO(t, srv, method, pOwned, memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden ||
+					w.Code == http.StatusNotFound && !unknownMCPServerAnswer(method, pattern, w) {
 					t.Errorf("owning member: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
 				}
 				// A non-owner gets the byte-identical 404 a missing entity would
