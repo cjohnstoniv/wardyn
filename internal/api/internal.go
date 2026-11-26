@@ -91,11 +91,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
 	// decisions are kept on its trail and, as on the runner spool, are not activity.
 	kind, isOver := s.decisionRunOver(r.Context())
-	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
+	if s.cfg.Store != nil && !mcpSandboxCaller(r.Context()) && s.shouldTouch(runID, kind, dl) && !isOver() {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
+	if !mcpSandboxCaller(r.Context()) && decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
 		s.noteAgentActive(r.Context(), runID)
 	}
 
@@ -756,6 +756,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeErrorReason(w, http.StatusBadRequest, reasonReservedScopeKey, "requested_scope may not name a lane")
 		return
 	}
+	if !s.mcpSandboxScope(w, r, &body) {
+		return
+	}
 	if body.RejoinID != nil {
 		// A rejoin creates nothing, so neither the push admission nor the per-run cap applies; only a
 		// PENDING row of this run and kind is stamped.
@@ -866,7 +869,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	if ap.RunID != claims.RunID {
+	if ap.RunID != claims.RunID || !mcpRowMatchesCaller(r.Context(), ap) {
 		// Do not confirm existence of another run's approval.
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return

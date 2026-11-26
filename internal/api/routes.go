@@ -843,7 +843,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 // mountInternalRoutes is the internal sidecar surface: every route here is
 // authenticated by a run token (internalAuth), and the run is the token's.
 func (s *Server) mountInternalRoutes(r chi.Router) {
-	r.Use(s.internalAuth)
+	r.Use(s.mcpSandboxAuth, s.internalAuth)
 	r.Post("/internal/decisions", s.handlePostDecision)
 	// The proxy's "bytes moved" presence signal (#572), run from the token.
 	r.Post("/internal/activity", s.handleInternalActivity)

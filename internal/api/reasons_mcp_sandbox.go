@@ -12,6 +12,7 @@ const (
 	reasonMCPOwnSandboxOff         = "mcp_own_sandbox_off"         // WARDYN_MCP_OWN_SANDBOX or the organisation's Local MCP servers setting is off, or the site config could not be read
 	reasonMCPOwnSandboxUnsupported = "mcp_own_sandbox_unsupported" // the run's machine or runner cannot start an MCP server in a sandbox of its own, or the site's egress goes through an upstream proxy, which an MCP sandbox's proxy does not use
 	reasonMCPSandboxLimit          = "mcp_sandbox_limit"           // the run has more MCP servers that start from a command than mcpSandboxMax
+	reasonMCPSandboxUnknown        = "mcp_sandbox_unknown"         // an MCP proxy's token names no live server row of its run (403), or a grant its row does not hold
 	reasonMCPSandboxHostReachable  = "mcp_sandbox_host_reachable"  // the Docker Engine is older than 28.0.0, so an MCP server's sandbox would have an address on the Docker host (runner.ErrMCPSandboxHostReachable); no setting admits one
 )
 

@@ -246,7 +246,13 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // be read keeps it too, as a retryable one noted on the run's trail (runUnreadableError, refuseRunToken), and so does
 // a database clock that cannot be read.
 func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, error) {
-	claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
+	return s.verifyRunTokenFor(r, tok, internalAudience)
+}
+
+// verifyRunTokenFor is verifyRunToken for the audience aud: the MCP sandbox's door (mcpSandboxAuth) verifies
+// its token with the same revoked-token door at the decisions route.
+func (s *Server) verifyRunTokenFor(r *http.Request, tok, aud string) (*identity.Claims, error) {
+	claims, err := s.cfg.Identity.Verify(r.Context(), tok, aud)
 	var revoked *identity.RevokedTokenError
 	// The door's exact path: chi routes on the escaped path, so another door's parameter can spell the segment.
 	if err == nil || s.cfg.Store == nil || !errors.As(err, &revoked) || revoked.Claims == nil ||
