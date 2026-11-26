@@ -51,6 +51,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
 - On the server's Kubernetes cluster a run's agent pod is now created together with its proxy pod, not after the proxy is ready, so the two image pulls overlap. Each run reaches its proxy through its own ClusterIP Service with no selector, which Wardyn deletes with the run. The first command still waits for the proxy to be ready. Kubernetes runners (`wardyn-runnerd`) start as before.
+- With `WARDYN_START_AFTER_READBACK=on`, an interactive run with a task is no longer refused. Its starting prompt or startup command waits in the sandbox until the run's proxy confirms its policy, then starts, so an application can be served with the setting on. This needs a Wardyn agent image from 0.11.0 or later; with an older image the run fails with its sandbox stopped and a hint to rebuild it. An interactive VM run with a task is still refused.
 
 ### Fixed
 

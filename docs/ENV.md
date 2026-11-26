@@ -1867,7 +1867,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `on`: a run's first start stays `STARTING` until its proxy confirms the policy it loaded. No agent task, attach or `wardyn run exec` runs before then, on any substrate. The console's file list and resource reads may still run fixed commands in the sandbox.
 - A revive, a restart with current limits or a live egress edit is not held: its new proxy has the usual 60 seconds to confirm while the agent runs.
 - The run fails with its sandbox stopped when the readback fails or is not in within 60 seconds, the runner or proxy image is older than 0.10.0-rc.18, or the store keeps no readback.
-- An interactive run with a task is refused, since its agent starts as the sandbox boots.
+- An interactive run's task, its starting prompt or startup command, waits in the sandbox until the proxy confirms the policy, then starts. This needs a Wardyn agent image from 0.11.0 or later, or an image built on one; with an older image the run fails with its sandbox stopped.
+- An interactive VM run with a task is still refused, since its task starts as the machine boots.
 - The sandbox's own startup still runs before the readback: the CA install, and an interactive run's workspace preparation.
 - Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
 
@@ -2725,6 +2726,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
+| `WARDYN_HELD_SEED` | string | (unset) | the boot seed in place of `WARDYN_INTERACTIVE_SEED` while [`WARDYN_START_AFTER_READBACK`](#wardyn_start_after_readback) is on; set by dispatch only. The image starts it once the server writes `~/.wardyn/seed-release`, after the proxy confirms its policy |
 | `WARDYN_APPLICATION_RUN` | bool | (unset) | `1` marks an interactive application run, set by dispatch only. A revive then starts the seed again |
 | `WARDYN_SERVICE` | bool | `0` | `1` marks a service run (Keep it running), else `0`; set by dispatch only (`serviceEnv`, [`internal/api/run_service.go`](../internal/api/run_service.go)). `agent-run` then supervises the command and writes its state to `~/.wardyn/service.json`, which wardynd reads; `WARDYN_SERVICE_STATE_FILE` moves that file for [`scripts/test-service-supervisor.sh`](../scripts/test-service-supervisor.sh) only. See [Services](SERVICES.md) |
 | `WARDYN_SERVICE_RESTART` | `on-failure` or `never` | (unset) | a service's restart rule, set with `WARDYN_SERVICE` |
