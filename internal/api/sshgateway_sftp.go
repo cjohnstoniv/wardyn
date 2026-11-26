@@ -52,6 +52,11 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fence *
 	if fence != nil {
 		sess, err = s.execFresh(ctx, run.ID, *fence, spec)
 	} else {
+		// A computer folder's pass works only in its folder (its one "-d" argument): a Kubernetes sandbox whose agent
+		// container has ended can then serve it from the pod's main container (runner.ExecSpec.AgentDir).
+		if len(args) == 2 && args[0] == "-d" {
+			spec.AgentDir = args[1]
+		}
 		sess, err = s.cfg.Runner.ExecStream(ctx, run.SandboxRef, spec)
 	}
 	if err == nil {
@@ -65,6 +70,8 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fence *
 		reason = "sftp unavailable: the runner for this sandbox is offline; retry when it reconnects"
 	case errors.Is(err, runner.ErrSandboxGone):
 		reason = "sftp unavailable: the sandbox is gone"
+	case errors.Is(err, runner.ErrAgentDirUnshared):
+		reason = "sftp unavailable: the agent's container has ended, and the folder is on no volume the sandbox's main container shares with it"
 	case startCut(err):
 		reason = "sftp unavailable: " + err.Error()
 	default:
