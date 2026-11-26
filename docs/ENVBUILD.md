@@ -75,7 +75,9 @@ A run that names an image (`--image`) has no workspace to keep its image on. It 
 - Reuse is per creator, the run's `created_by`. Runs started with the admin token share one creator, and so do the runs of one service identity; another creator's run builds its own copy.
 - A wrap still inspects its base and refuses an ONBUILD trigger on every run. When image admission is on, it still checks the base when the run is created.
 - A devcontainer repository build (`--devcontainer-repo`) is not reused: it builds on every run, under the run's own tag.
-- Wardyn does not remove these images. Remove them with `docker image rm`; a run whose tag is gone builds again.
+- Wardyn removes a reuse image once it is more than a week old and no run has been started on it for a week. It checks when the server starts and every six hours, and each pass that removes one writes an `image.reuse.reclaim` audit row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+- It keeps the image while a run started on it has not ended or keeps its sandbox, while a workspace names it, and while a run launch is about to use it. Docker refuses to remove an image a container still uses.
+- It removes only images that runs in this server's database recorded. An image another Wardyn server on the same Docker host built is left, and so is one whose run failed before recording it; remove those with `docker image rm`. A run whose tag is gone builds again.
 
 ## The build record
 

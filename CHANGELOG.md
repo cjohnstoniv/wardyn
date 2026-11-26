@@ -45,6 +45,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
 - Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
+- With the image builder on, the server removes a reusable custom-image wrap (`wardyn-byoi/reuse:<key>`) once it is more than a week old and no run has been started on it for a week. It checks at start and every six hours, keeps an image a live run, a kept sandbox, a workspace or a starting run uses, and leaves images no run in its database recorded. Each pass that removes one writes an `image.reuse.reclaim` audit row.
 
 ### Changed
 
@@ -65,6 +66,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Each run on the server's cluster now takes one address from the cluster's Service range and counts against a `services` or `count/services` quota in the runs namespace. Wardyn's capacity check does not count Services, so a full quota fails the run's start with a 403.
 - Rolling back to an earlier release with keep off leaves the Service and EndpointSlice of each run started on this one when that run ends. Delete them per ended run by its `wardyn.run-id` label, as docs/operations/kubernetes-agent-sandbox.md says; never delete a live run's Service.
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
+- With the image builder on, the first pass after the upgrade removes reusable custom-image wraps (`wardyn-byoi/reuse:<key>`) built more than a week ago that no run has been started on for a week.
 
 ## [0.11.0-rc.3] — 2026-11-25
 
