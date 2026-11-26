@@ -283,7 +283,7 @@ func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request,
 	}
 	if ap.Kind == types.ApprovalEgressDomain {
 		host := approvalHost(ap)
-		denied, err := s.personDeniedHost(ctx, ap.RunID, host)
+		denied, err := s.personDeniedHost(ctx, ap.RunID, host, mcpSandboxKeyOf(ap))
 		if err != nil {
 			writeServerError(w, r, "read the run's denied hosts", err)
 			return ap, run, false, false
@@ -310,8 +310,9 @@ func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request,
 // enforces a deny, and a replaced proxy starts with none, so a rule reads the rows. The newest decision in force wins,
 // so a person can always undo their own deny; a tie goes to the deny. A once decision is spent and a lapsed until is
 // over, as in the cache, so neither counts either way, and a rule's approve is not a person's. The approved rows are
-// read only once a deny is found: most decisions have none to look for.
-func (s *Server) personDeniedHost(ctx context.Context, runID uuid.UUID, host string) (bool, error) {
+// read only once a deny is found: most decisions have none to look for. Only rows of label count (an MCP server's
+// key, "" for the agent's): each proxy holds its own decisions, so one's approve never undoes the other's deny.
+func (s *Server) personDeniedHost(ctx context.Context, runID uuid.UUID, host, label string) (bool, error) {
 	now := s.cfg.Now()
 	newest := func(state types.ApprovalState) (at time.Time, found bool, err error) {
 		rows, err := s.runApprovalsOfKinds(ctx, runID, state, []types.ApprovalKind{types.ApprovalEgressDomain})
@@ -321,7 +322,7 @@ func (s *Server) personDeniedHost(ctx context.Context, runID uuid.UUID, host str
 		for _, ap := range rows {
 			lapsed := ap.DecisionScope == types.ScopeUntil && ap.DecisionExpiresAt != nil && !now.Before(*ap.DecisionExpiresAt)
 			byRule := state == types.ApprovalApproved && strings.HasPrefix(ap.DecidedBy, "policy:")
-			if ap.Kind != types.ApprovalEgressDomain || approvalHost(ap) != host || ap.DecisionScope.Normalize() == types.ScopeOnce || lapsed || byRule {
+			if ap.Kind != types.ApprovalEgressDomain || approvalHost(ap) != host || ap.DecisionScope.Normalize() == types.ScopeOnce || lapsed || byRule || mcpSandboxKeyOf(ap) != label {
 				continue
 			}
 			found = true
@@ -393,7 +394,7 @@ func (s *Server) serviceEgressHostAllowed(ctx context.Context, run types.AgentRu
 // within one; a rule naming neither repos nor presets matches nothing.
 func (s *Server) matchApprovalRule(ctx context.Context, rule types.ApprovalRule, ap types.ApprovalRequest, run types.AgentRun) (types.ApprovalPolicyMatch, bool, error) {
 	var none types.ApprovalPolicyMatch
-	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isExactCallRow(ap) || !slices.Contains(rule.Kinds, ap.Kind) {
+	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isExactCallRow(ap) || isMCPSandboxRow(ap) || !slices.Contains(rule.Kinds, ap.Kind) {
 		return none, false, nil
 	}
 	matched := map[string]string{}

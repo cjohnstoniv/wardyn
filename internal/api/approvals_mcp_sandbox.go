@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -35,4 +36,21 @@ func isMCPSandboxRow(ap types.ApprovalRequest) bool {
 // for the agent's internal token.
 func mcpRowMatchesCaller(ctx context.Context, ap types.ApprovalRequest) bool {
 	return mcpSandboxKeyOf(ap) == audit.MCPSandboxOf(ctx)
+}
+
+// mcpSandboxDecisionRule is decisionScopeForKind's rule for an MCP server's hold: it is decided for this run at
+// most, so no decision_scope, "once", "until" or "run". Any other scope ("always" above all) is refused, so the
+// decision never writes the host into a workspace's egress lists and never reaches a later run. Every other row
+// passes. It writes the refusal and reports false.
+func mcpSandboxDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, scope types.ApprovalScope) bool {
+	if !isMCPSandboxRow(ap) {
+		return true
+	}
+	switch scope {
+	case "", types.ScopeOnce, types.ScopeUntil, types.ScopeRun:
+		return true
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
+		`An MCP server's host request is decided for this run only: send no decision_scope, "once", "until" or "run"`)
+	return false
 }
