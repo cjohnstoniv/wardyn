@@ -47,12 +47,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
 - People can make a team drive of their own, shared with their governance unit and the units below it, read-only for others until a super admin allows writing (`storage.user_drive.member_create.team_drives`, off by default; Docker only) (#3459).
 - A person can fill their own drive from a GitHub repository of one of their workspaces with `POST /api/v1/me/drives/{id}/seed`. The fill is their own exec run, clones with their own GitHub token (the workspace's required integrations apply as for any run of it), and is audited (`drive.seed`) (#1110).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on
+  `mac_disk_holds` to every role that was granted `UPDATE` on the user drives table, other than its owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run that
+  names a disk drive is refused at create and at Review, because the server cannot read the table.
 
 ### Changed
 
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
 - On the server's Kubernetes cluster a run's agent pod is now created together with its proxy pod, not after the proxy is ready, so the two image pulls overlap. Each run reaches its proxy through its own ClusterIP Service with no selector, which Wardyn deletes with the run. The first command still waits for the proxy to be ready. Kubernetes runners (`wardyn-runnerd`) start as before.
 - A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it. A Mac disk whose delete waits for its Mac shows as Deleting too (#4061).
+- A run that asks for a disk drive another run still holds is refused at create and at Review, instead of waiting on the Mac when it starts (#3851).
 
 ### Fixed
 

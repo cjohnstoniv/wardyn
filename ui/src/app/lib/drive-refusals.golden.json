@@ -11,6 +11,7 @@
   { "key": "MACOS_DOCKER_VOLUME", "args": ["team-data"], "text": "team-data is a Docker volume, which a macOS VM can't open." },
   { "key": "MACOS_CLUSTER_VOLUME", "args": ["team-data"], "text": "team-data is a cluster volume, which a macOS VM can't open." },
   { "key": "MAC_DISK_ELSEWHERE", "args": ["Notes", "Studio Mac"], "text": "Notes is a disk on Studio Mac, so only macOS VM runs on Studio Mac can use it." },
+  { "key": "MAC_DISK_IN_ANOTHER_RUN", "args": ["Notes"], "text": "Notes is in another macOS VM on this Mac. A disk drive is in one run at a time: try again when that run ends." },
   { "key": "MEMBER_REQUIRES_PERSON", "args": [], "text": "Sign in under your own account to create or delete a drive." },
   { "key": "MEMBER_DISABLED", "args": [], "text": "Your organisation doesn't let people create drives. Ask an admin." },
   { "key": "MEMBER_DENIED_BY_UNIT", "args": ["contractors"], "text": "Your governance profile \"contractors\" doesn't let you create drives." },

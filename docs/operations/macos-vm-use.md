@@ -364,7 +364,9 @@ A folder has to pass all three. The rules and the failures are below.
 - A person's own drive can be a disk drive kept on one of their Macs (backend `mac_disk`): `POST /api/v1/me/drives` with `runner_id`, the Mac's runner id, whose runner must be online and up to date. It is a sparse disk image in `macos-vm.noindex/drives/`, 64 GiB unless the organisation sets a drive size, and takes room only as it fills.
 - Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as Mac OS Extended (journaled): a later run's VM did not mount an APFS one. A run on another runner, or of another sandbox kind, is refused naming the Mac.
 - Turn on FileVault on a Mac that keeps disk drives: the guest does not encrypt them.
-- A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused when that run starts, not at Review.
+- A disk drive is in one run at a time. A run that asks for one another run holds, until that run ends, is refused at create and at Review (`drive_in_another_run`).
+  - A run that stays unfinished after its VM is gone (its runner was lost) holds the drive until Wardyn ends that run.
+  - A holder Wardyn does not see (a `drive open`, another login's VM) is still found when the run starts, as below.
 - A run's VM holds its disk drive for up to about 80 seconds after the run shows as ended, usually half a minute. A run that asks for the drive meanwhile waits for it on the Mac.
   - The runner tries every 3 seconds for at most 90 seconds in all, and the run goes on as soon as the drive is free.
   - Every holder is waited for, up to 90 seconds: a live run, a run that just ended, another login's VM, or a `drive open` ([Opening a drive on the Mac](#opening-a-drive-on-the-mac)). The failure after the wait states the wait.
