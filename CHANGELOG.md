@@ -55,6 +55,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `run_previews` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
 - Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
 
