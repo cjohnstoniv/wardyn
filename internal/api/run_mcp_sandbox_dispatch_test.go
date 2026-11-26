@@ -328,7 +328,7 @@ func TestAgentSpecHoldsNoMCPSandboxSecret(t *testing.T) {
 	}
 }
 
-// TestRefusedAtAdmissionStartsNoMCPServer (I8, PM-4-2): a run its last admission refuses, and a run whose
+// TestRefusedAtAdmissionStartsNoMCPServer (I8): a run its last admission refuses, and a run whose
 // recording cannot start, each see the server created and killed and never started.
 func TestRefusedAtAdmissionStartsNoMCPServer(t *testing.T) {
 	for _, tc := range []struct {
@@ -502,7 +502,7 @@ func TestDispatchMCPReadinessWaitEndsWithItsContext(t *testing.T) {
 	}
 }
 
-// TestDispatchMCPReadinessLapseKeepsRun (Q6 A): a server that never comes up is failed alone with cause
+// TestDispatchMCPReadinessLapseKeepsRun: a server that never comes up is failed alone with cause
 // readiness and killed; the run goes on.
 func TestDispatchMCPReadinessLapseKeepsRun(t *testing.T) {
 	f := newMCPDispatchFixture(t)

@@ -24,7 +24,7 @@ import (
 // The restart of an MCP server's sandbox: the watcher's (a dead sandbox, the settle of a starting row) and a
 // person's (the Restart route). Each runs under the run's lock and creates only on a live run.
 
-// The restart window (Q6 A): at most mcpRestartMax restarts by the watcher inside mcpRestartWindow, after
+// The restart window: at most mcpRestartMax restarts by the watcher inside mcpRestartWindow, after
 // which the row is stopped.
 const (
 	mcpRestartMax    = 3
@@ -49,7 +49,7 @@ var (
 // mcpRestartRefused is the cause of a person's Restart refused on a run that is not live (outcome denied).
 const mcpRestartRefused = "run_ended"
 
-// mcpCreateAllowed reports whether an MCP sandbox of run may be created now (F1, MCP1R-F1), with the run's
+// mcpCreateAllowed reports whether an MCP sandbox of run may be created now, with the run's
 // current policy generation it read: the run, read again, is RUNNING with no lost mark (so not kept), its
 // containment is not pending, no revive of it is in flight on this replica, and this replica's cut set does
 // not hold it (lostCutHolds). A read error answers false. A run read terminal or lost drops its cut entry: the
@@ -92,7 +92,7 @@ func (s *Server) currentPolicyGeneration(ctx context.Context, runID uuid.UUID) (
 	return ps.CurrentGeneration(), nil
 }
 
-// lostCutHolds reports whether this replica's cut set holds the run at generation gen (MCP52-F2): an entry
+// lostCutHolds reports whether this replica's cut set holds the run at generation gen: an entry
 // of generation 0, which no advance clears, or one not older than gen. An older entry is ignored and left in
 // place: a revive that abandons its generation puts the older one back as current, and the entry holds again.
 func (s *Server) lostCutHolds(runID uuid.UUID, gen int) bool {
@@ -254,12 +254,12 @@ func (s *Server) createAndStartMCP(ctx context.Context, run types.AgentRun, rc m
 	return mcpCreateCause(err, mcpFailCreate), err
 }
 
-// restartMCPSandbox restarts the run's server key under the run's lock, which the caller holds (MCP1R-F3):
+// restartMCPSandbox restarts the run's server key under the run's lock, which the caller holds:
 // mcpCreateAllowed first (false kills what may run and creates nothing), then for the watcher the window
 // (past mcpRestartMax in mcpRestartWindow the row is stopped, restart_limit), then the old sandbox killed, the
 // row moved to restarting with a fresh token only while it is as read here and the run is live, the sandbox
 // created and started, and the row moved to ready only while the run is still live; a false answer kills
-// what it started. A hit on the cut set after that write kills it and ends the run's rows (MCP5-F5). A failed
+// what it started. A hit on the cut set after that write kills it and ends the run's rows. A failed
 // create or start fails that row alone.
 func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key string, actorType types.ActorType, actor string, auto bool) error {
 	st, m, ok := s.mcpSandboxSeams()
@@ -316,7 +316,7 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 		s.auditMCPSandboxRestart(ctx, actorType, actor, row, "failure", mcpFailCreate)
 		return err
 	}
-	_ = m.KillMCPSandbox(ctx, id) // the old proxy drains first (P3 item 7)
+	_ = m.KillMCPSandbox(ctx, id) // the old proxy drains first
 	if ok, err := st.RestartMCPSandboxIfLive(ctx, run.ID, row.Ordinal, store.MCPSandboxRestart{ReadAt: row.UpdatedAt, JTI: rc.built.jti,
 		PrevUntil: now.Add(terminalUploadGrace), Restarts: restarts, WindowStart: window}); err != nil {
 		return fmt.Errorf("%w: %w", errMCPSandboxStore, err)
@@ -361,7 +361,7 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	return nil
 }
 
-// settleMCPSandbox is the watcher's settle of a starting row (MCP51-F4), under the run's lock the caller
+// settleMCPSandbox is the watcher's settle of a starting row, under the run's lock the caller
 // holds: a live sandbox moves the row to ready while the run is live (else it is killed and the row left as
 // the other writer left it); a sandbox not live mcpReadyWait after the row's last write fails the row,
 // readiness, and is killed. It creates nothing, so it does not ask mcpCreateAllowed.

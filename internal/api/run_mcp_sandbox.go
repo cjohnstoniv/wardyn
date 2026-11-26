@@ -87,7 +87,7 @@ const (
 )
 
 // mcpSandboxEndTimeout bounds one run's MCP end, its own bound and never the caller's: each row's graceful
-// proxy stop, its kill and its row write (four servers' stops fit in it, EST).
+// proxy stop, its kill and its row write (four servers' stops fit in it).
 const mcpSandboxEndTimeout = reconcileFinalizeTimeout
 
 // mcpSandboxSeams are the store and the runner an MCP sandbox needs; ok is false on a deployment with neither.
@@ -455,14 +455,14 @@ func (s *Server) resolveMCPServerSecrets(ctx context.Context, run types.AgentRun
 	return true
 }
 
-// mcpReadyWait is how long dispatch waits, for every server together, for its sandboxes to come up (Q6 A), and
+// mcpReadyWait is how long dispatch waits, for every server together, for its sandboxes to come up, and
 // mcpReadyPoll how often it asks. Variables so a test can shorten them.
 var (
 	mcpReadyWait = 60 * time.Second
 	mcpReadyPoll = 500 * time.Millisecond
 )
 
-// Causes of a failed row that are not an error's own reason (item 7).
+// Causes of a failed row that are not an error's own reason.
 const (
 	mcpFailReadiness  = "readiness"
 	mcpFailStateWrite = "state_write"
@@ -585,7 +585,7 @@ func mcpReserved(rl *types.ResourceLimits) types.RunnerAmounts {
 	return types.RunnerAmounts{CPUMillis: int64(rl.CPUMillis), MemoryMiB: int64(rl.MemoryMiB)}
 }
 
-// mcpDispatchRefusal is the dispatch re-check of the gate (P1 item 4): step 2, the switch and the setting (a
+// mcpDispatchRefusal is the dispatch re-check of the gate: step 2, the switch and the setting (a
 // site config read error reads as off), the site's upstream proxy, step 3b, the runner's MCP sandbox kinds
 // on the run's own capability read, and step 4, the limit. "" passes.
 func (s *Server) mcpDispatchRefusal(ctx context.Context, run types.AgentRun, n int, server string, site types.SiteConfig, siteErr error) (reason, sentence string) {
@@ -790,7 +790,7 @@ func mcpAgentSpecLeak(spec runner.SandboxSpec, servers []mcpServer, own []mcpOwn
 // sandbox is created: per server run.mcp_policy.resolve, StartMCPSandbox and run.mcp_sandbox.create, the row
 // moved to ready only while the run is STARTING (else what started is killed and the dispatch ends), then
 // one wait of up to mcpReadyWait for every server together. A server that does not come up, or does not
-// start, is failed alone and killed: the run goes on, and the relay answers its calls -32002 (Q6 A).
+// start, is failed alone and killed: the run goes on, and the relay answers its calls -32002.
 func (s *Server) startRunMCPSandboxes(ctx context.Context, run types.AgentRun, d *mcpSandboxDispatch, stopCreateLease func()) bool {
 	if d == nil {
 		return true

@@ -368,7 +368,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 	}
 	s.leaseEnded.Delete(run.ID)
-	s.lostCuts.Delete(run.ID) // only a revive that succeeded clears this replica's cut (MCP5-F2)
+	s.lostCuts.Delete(run.ID) // only a revive that succeeded clears this replica's cut
 	if err := reviver.SetRunProxyRelease(ctx, run.ID, version.Version); err != nil {
 		// The row keeps the old release, so the proxy-window listing may name
 		// this run again: a second restart, never a missed one.

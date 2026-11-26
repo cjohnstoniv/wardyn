@@ -83,7 +83,7 @@ func TestMCPWatcherRestartsCrashedServer(t *testing.T) {
 	}
 }
 
-// TestMCPRestartWindowStopsAtLimit (Q6 A): the watcher restarts a server at most three times in ten minutes,
+// TestMCPRestartWindowStopsAtLimit: the watcher restarts a server at most three times in ten minutes,
 // then stops its row with cause restart_limit.
 func TestMCPRestartWindowStopsAtLimit(t *testing.T) {
 	f := newMCPRestartFixture(t)
@@ -129,7 +129,7 @@ func (s *mcpGenStore) RestoreRunLostFateAtGeneration(context.Context, uuid.UUID,
 
 var _ store.RunPolicyGenerations = (*mcpGenStore)(nil)
 
-// TestMCPWatcherNoRestartAfterCut (F1, MCP1R-F1, MCP51-F1, MCP52-F2): in each state a cut leaves the run in,
+// TestMCPWatcherNoRestartAfterCut: in each state a cut leaves the run in,
 // the watcher creates nothing and a restart kills what may run; on a RUNNING run with no cut it restarts.
 func TestMCPWatcherNoRestartAfterCut(t *testing.T) {
 	now := time.Now()
@@ -223,7 +223,7 @@ func TestMCPWatcherNoRestartAfterCut(t *testing.T) {
 			t.Errorf("after the end: creates %d", f.sbx.count("create"))
 		}
 	})
-	// A state change between the check and the start (MCP1R-F3): the ready write is refused and what started
+	// A state change between the check and the start: the ready write is refused and what started
 	// is killed.
 	for name, change := range map[string]func(r *types.AgentRun, s *types.RunState){
 		"killed":      func(_ *types.AgentRun, s *types.RunState) { *s = types.RunKilled },
@@ -357,7 +357,7 @@ func TestMCPRestartRefusedAfterKill(t *testing.T) {
 	}
 }
 
-// TestMCPStopRoute (OP53-1): a person's Stop stops the row (person) before it kills the sandbox, writes its
+// TestMCPStopRoute: a person's Stop stops the row (person) before it kills the sandbox, writes its
 // end row as that person, and the watcher never restarts a stopped row.
 func TestMCPStopRoute(t *testing.T) {
 	f := newMCPRestartFixture(t)
@@ -390,7 +390,7 @@ func TestMCPStopRoute(t *testing.T) {
 	}
 }
 
-// TestMCPSettleStartingRow (MCP51-F4): a starting row whose sandbox is live goes ready; one not live past the
+// TestMCPSettleStartingRow: a starting row whose sandbox is live goes ready; one not live past the
 // wait goes failed (readiness) and is killed.
 func TestMCPSettleStartingRow(t *testing.T) {
 	f := newMCPRestartFixture(t)
@@ -416,7 +416,7 @@ func TestMCPSettleStartingRow(t *testing.T) {
 	}
 }
 
-// TestMCPWatcherTearsDownFailedRow (MCP4A-renew): a stopped row whose kill failed keeps a live proxy; the next
+// TestMCPWatcherTearsDownFailedRow: a stopped row whose kill failed keeps a live proxy; the next
 // pass kills it, so no failed or stopped row keeps a proxy that renews its token.
 func TestMCPWatcherTearsDownFailedRow(t *testing.T) {
 	f := newMCPRestartFixture(t)

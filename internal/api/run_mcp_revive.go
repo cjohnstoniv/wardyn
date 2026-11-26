@@ -95,7 +95,7 @@ func (s *Server) mcpRowLive(ctx context.Context, run types.AgentRun, row store.R
 // errMCPEditStopped is why failMCPEditRest fails a server: the edit's phase stopped before re-creating it.
 var errMCPEditStopped = errors.New("the edit's MCP phase stopped before this server was re-created")
 
-// mcpSandboxReviveTimeout bounds a revive's MCP phase (MCP51-F2), on a bound of its own: never the claim's.
+// mcpSandboxReviveTimeout bounds a revive's MCP phase on a bound of its own: never the claim's.
 const mcpSandboxReviveTimeout = killCascadeTimeout
 
 // reviveMCPContext is the MCP phase's context: its own bound, ended too if the run's lock is lost.

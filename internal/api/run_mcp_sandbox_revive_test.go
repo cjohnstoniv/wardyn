@@ -98,7 +98,7 @@ func (f *mcpDispatchFixture) assertNoneUp(t *testing.T) {
 	}
 }
 
-// TestReviveAfterOutageRecreatesMCPSandboxes (F1): an outage-lost run's rows (ended, lost) are each
+// TestReviveAfterOutageRecreatesMCPSandboxes: an outage-lost run's rows (ended, lost) are each
 // re-created by a revive that did not reboot: reopened to starting with a fresh token, the old kept until
 // the grace, on the same relay token and pinned address, and settled to ready by the watcher. With the switch
 // off the revive is refused naming the server, and nothing is created.
@@ -169,7 +169,7 @@ func TestReviveAfterOutageRecreatesMCPSandboxes(t *testing.T) {
 	})
 }
 
-// TestReviveRecreateFailureKeepsRunRunning (MCP1R-F4): a start that fails fails that server only: the run
+// TestReviveRecreateFailureKeepsRunRunning: a start that fails fails that server only: the run
 // stays RUNNING, the row is failed with its cause, nothing it started is left, and a create failure row is
 // written.
 func TestReviveRecreateFailureKeepsRunRunning(t *testing.T) {
@@ -188,7 +188,7 @@ func TestReviveRecreateFailureKeepsRunRunning(t *testing.T) {
 	}
 }
 
-// TestReviveSucceedsWhileMCPSandboxNotReady (MCP5-F1, MCP51-F2): the phase waits for no readiness, so a
+// TestReviveSucceedsWhileMCPSandboxNotReady: the phase waits for no readiness, so a
 // server that never reports ready is left starting, and the watcher fails it (readiness) later; a create
 // that blocks until the phase's bound ends fails the row, its failure row written after the bound.
 func TestReviveSucceedsWhileMCPSandboxNotReady(t *testing.T) {
@@ -234,7 +234,7 @@ func TestReviveSucceedsWhileMCPSandboxNotReady(t *testing.T) {
 	})
 }
 
-// TestReviveMCPPhaseInterruptedLeavesNoMCPSandbox (MCP51-F3, OP53-1, OP53-8): however the phase is cut short,
+// TestReviveMCPPhaseInterruptedLeavesNoMCPSandbox: however the phase is cut short,
 // no MCP container of the run is left running unrecorded, and no row is starting or ready on a run that was
 // killed or lost.
 func TestReviveMCPPhaseInterruptedLeavesNoMCPSandbox(t *testing.T) {
@@ -372,7 +372,7 @@ func TestReviveMCPPhaseInterruptedLeavesNoMCPSandbox(t *testing.T) {
 	})
 }
 
-// TestReviveRefusedOrLockLostLeavesNoMCPSandbox (MCP1R-F4, MCP5-F2): a phase whose lock is already lost
+// TestReviveRefusedOrLockLostLeavesNoMCPSandbox: a phase whose lock is already lost
 // creates nothing, and a cut under an unwritten mark that no revive cleared still keeps the watcher from
 // creating.
 func TestReviveRefusedOrLockLostLeavesNoMCPSandbox(t *testing.T) {
