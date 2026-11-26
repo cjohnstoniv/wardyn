@@ -73,8 +73,10 @@ func (s *Server) mountUserDriveFamily(r, operatorOnly, securityOps chi.Router) {
 	s.memberDriveLimiter.rate, s.memberDriveLimiter.burst = memberDriveRatePerSec, memberDriveBurst
 	r.Post("/me/drives", s.handleCreateMemberDrive)
 	r.Delete("/me/drives/{id}", s.handleDeleteMyDrive)
+	r.Post("/me/drives/{id}/seed", s.handleFillMyDrive)
 	operatorOnly.Get("/drives/member", s.handleListMemberDrives)
 	operatorOnly.Delete("/drives/member/{id}", s.handleDeleteMemberDriveAdmin)
+	operatorOnly.Put("/drives/member/{id}/team", s.handlePutMemberTeamDrive)
 }
 
 // userDriveReclaimRequest names the ALLOCATION whose object is to be

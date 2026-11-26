@@ -316,6 +316,11 @@
   },
   {
     "reason": "drive_not_found",
+    "target": "\"drives.member.seed\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_found",
     "target": "\"runs.drive\"",
     "sentence": "(audit only)"
   },

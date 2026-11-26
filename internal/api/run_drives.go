@@ -151,6 +151,9 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 		}
 		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: narrow, legacy: d.legacy, id: a.DriveID, macOS: macOS, portal: viaPortal})
 	}
+	if refusal := s.macDiskHeldRefusal(r.Context(), out); refusal != nil {
+		return nil, refusal
+	}
 	return out, driveKindMixRefusal(out)
 }
 

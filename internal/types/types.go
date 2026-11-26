@@ -205,6 +205,9 @@ type AgentRun struct {
 	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
 	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
+	// SiteID is the organisation site of the run's pool when it was placed, written once at create while
+	// sites are on; nil otherwise. A deleted site keeps its row, so the run keeps its record.
+	SiteID *uuid.UUID `json:"site_id,omitempty"`
 	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
 	Reserved RunnerAmounts `json:"-"`

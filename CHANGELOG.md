@@ -81,6 +81,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `run_history_tombstones` to every role that was granted UPDATE on the runs table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then the unit admins' audit view, the device audit ingest and erasing a person's recordings fail.
 - A run on Kubernetes writes a `run.sandbox.start` audit row when its sandbox is created, naming the node it was scheduled on and the RuntimeClass and handler it runs under. It is written before the policy readback, so a start that then fails still says where it ran. A runner older than this release writes no such row.
 - Setup status warns when a CC2 or CC3 RuntimeClass's nodes carry no taint it tolerates, so other pods can land on them. It also warns when the RuntimeClass sets no scheduling: its sandboxes can then run on any node with the runtime.
+- People can make a team drive of their own, shared with their governance unit and the units below it, read-only for others until a super admin allows writing (`storage.user_drive.member_create.team_drives`, off by default; Docker only) (#3459).
+- A person can fill their own drive from a GitHub repository of one of their workspaces with `POST /api/v1/me/drives/{id}/seed`. The fill is their own exec run, clones with their own GitHub token (the workspace's required integrations apply as for any run of it), and is audited (`drive.seed`) (#1110).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on
+  `mac_disk_holds` to every role that was granted `UPDATE` on the user drives table, other than its owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run that
+  names a disk drive is refused at create and at Review, because the server cannot read the table.
+- Sites: an admin names a place, such as an office or a cloud region, puts organization runner pools and admin drives at it, and picks one of its pools as its default. A run that names no pool and whose homed drives are all at one site goes to that site's default pool, ahead of the person's and the organization's defaults; the run and its `run.create` audit row name the site. Routes `/org-sites`, `/runner-pools/{id}/site` and `/drives/{id}/site`; see [Sites](docs/operations/sites.md).
 
 ### Changed
 
@@ -96,6 +104,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Audit rows are now hashed with a per-row salt that Postgres makes and stores with the row (hash format 2), so a row exported with its fields projected away can no longer be matched against a list of guessed values. Rows from before keep their format and verify as they did. A device sends its rows' format and salt, and the organisation re-checks the claim with them.
 - Every audit row written under a run's token now names the run's owner and workload as `run_owner` and `run_workload`, and a service-owned run's sponsor as `sponsor`, taken from the verified token. A successful credential mint row carries only `run_workload`, because it is written without the audit sealer (a denied or failed mint goes through the recorders and carries the same keys as the run's other rows); a decision a runner spooled takes them from the stored run.
 - A server egress proxy that cannot reach the control plane now keeps up to 50,000 decisions (32 MiB) in its container's temporary directory and sends them when it can, with their own times, instead of dropping them.
+- A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it. A Mac disk whose delete waits for its Mac shows as Deleting too (#4061).
+- A run that asks for a disk drive another run still holds is refused at create and at Review, instead of waiting on the Mac when it starts (#3851).
 
 ### Fixed
 
@@ -119,6 +129,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - There is no rolling upgrade across this release: stop every older replica before the first new one starts. An older replica that keeps running writes format 2 rows too, because the database makes the hash, but its verify sweep and checkpoint signer recompute every row with the old formula and report a chain break at the first format 2 row.
 - Upgrade the organisation before its devices.
 - An older `wardyn audit verify` reports every new row as altered and exits 1, because it ignores the row's format and salt: update the CLI before you verify a new export.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_fork_sources`,
+  `SELECT, INSERT, DELETE` on `machine_snapshot_holds`, `SELECT, INSERT, UPDATE` on `run_dispatch_secret_facts`, and
+  `SELECT, INSERT, UPDATE, DELETE` on `machine_snapshots`, to every role that was granted `DELETE` on `run_attach_leases`,
+  other than that table's owner. If the app role is not one of those roles or a member of one, grant it the same on each
+  table as soon as the migration has run. The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover the three
+  tables granted fewer verbs: the migrations take every other privilege on them away from every role but their owner.
+- Sites are off until an admin sets `features.org_sites.enabled` in the site config. While they are off, where a run goes and what its record and audit row say do not change. Migrations `04xx_org_sites` and `04xx_run_site` add the tables `org_sites`, `org_site_pools` and `org_site_drives` and the column `agent_runs.site_id`, and grant the app role the new tables on split-role installs. Stop every wardynd older than 0.11 first: an older server cannot read a run that a site's default pool placed.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `org_sites`, `org_site_pools` and `org_site_drives` to every role that was granted `UPDATE` on `runner_pools`, other than that table's owner. An install that granted by hand grants the new tables to the role that updates runner pools.
 
 ## [0.11.0-rc.3] — 2026-11-25
 

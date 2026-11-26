@@ -15,13 +15,14 @@ import { CREATE_ALLOWED, CREATE_DOORS, DRIVE_LEGACY, DRIVE_LOCKED, DRIVE_OWNED }
 import { filesPreflight, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import { DRIVE_REFUSAL } from "../../../../../lib/drive-refusals";
 import { MEMBER } from "../../../../../lib/governance-copy";
-import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
+import { DRIVE_MEMBER, DRIVES } from "../../../../../lib/user-drives-copy";
 import type { MeDrive, MeDriveCatalogue, MemberDriveCreate, MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
 import { Dialog, DialogContent, DialogTitle } from "../../../../ui/dialog";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
+import { MacOSOfferContext, type MacOSOffer } from "../run/macos-offer";
 import { AnnounceContext } from "../step-shell";
 import { FilesRoute } from "./files-route";
 
@@ -43,8 +44,13 @@ let drives: MeDrive[];
 let post: (body: { name: string }) => Response | Promise<Response>;
 let del: (id: string) => Response;
 const announce = vi.fn();
+// A macOS run's offer and the person's Macs, for the team checkbox's Mac case only (as mac-drives.test.tsx sets them).
+let offer: MacOSOffer | undefined;
+let runners: unknown[];
 
 beforeEach(() => {
+  offer = undefined;
+  runners = [];
   create = CREATE_ALLOWED;
   drives = [DRIVE_LEGACY, DRIVE_OWNED, DRIVE_LOCKED];
   post = (body) => {
@@ -61,6 +67,7 @@ beforeEach(() => {
     const method = init?.method ?? "GET";
     if (path.startsWith("/workspaces")) return json(SCENARIO_FILES_WORKSPACES.member);
     if (path.startsWith("/setup/status")) return json({ runner: { driver: "", confinement_classes: [], kubernetes: false } });
+    if (path.startsWith("/me/runners")) return json(runners);
     if (path === "/me/drives" && method === "POST") return post(JSON.parse(init!.body!));
     if (path.startsWith("/me/drives/") && method === "DELETE") return del(decodeURIComponent(path.slice("/me/drives/".length)));
     if (path.startsWith("/me/drives")) {
@@ -87,11 +94,13 @@ function show(intent: RunIntent = INTERACTIVE) {
   render(
     <MemoryRouter>
       <AnnounceContext.Provider value={announce}>
-        <NewRunDraftProvider owner="alice">
-          <Seed intent={intent} />
-          <FilesRoute location={{ screen: "step", step: "files" }} go={vi.fn()} startFromScratch={() => {}} />
-          <Drawn />
-        </NewRunDraftProvider>
+        <MacOSOfferContext.Provider value={offer}>
+          <NewRunDraftProvider owner="alice">
+            <Seed intent={intent} />
+            <FilesRoute location={{ screen: "step", step: "files" }} go={vi.fn()} startFromScratch={() => {}} />
+            <Drawn />
+          </NewRunDraftProvider>
+        </MacOSOfferContext.Provider>
       </AnnounceContext.Provider>
     </MemoryRouter>,
   );
@@ -431,6 +440,21 @@ describe("delete: Escape and focus", () => {
     expect(within(addDialog()).getByRole("button", { name: NR_SHARED.BACK })).toBeVisible();
   });
 
+  it("moves focus on once a deferred delete leaves the drive listed as Deleting", async () => {
+    create = CREATE_DOORS.limit_reached;
+    del = (id) => {
+      drives = drives.map((d) => (d.id === id ? { ...d, unavailable_reason: "deleting" } : d));
+      return json({ reason: "member_drive_delete_deferred", message: DRIVE_REFUSAL.MEMBER_DELETE_DEFERRED("kofi-mbp") }, 202);
+    };
+    await openChoose();
+    await userEvent.click(ownDeletes()[0]);
+    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+    await userEvent.click(await within(top()).findByRole("button", { name: NR_SHARED.CLOSE_DIALOG }));
+    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    await waitFor(() => expect(addDialog().contains(focused())).toBe(true));
+    expect(focused()).not.toBe(addDialog());
+  });
+
   it("moves focus to Back when nothing else is left to land on", async () => {
     create = CREATE_DOORS.disabled;
     drives = [DRIVE_OWNED];
@@ -502,5 +526,105 @@ describe("with the public step's fixes", () => {
     expect(within(top()).getByLabelText(NR_FILES.ACCESS_LABEL)).toHaveValue("read");
     await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.SAVE }));
     await waitFor(() => expect(drawn().drives).toEqual([{ drive_id: DRIVE_OWNED.id, read_only: true }]));
+  });
+});
+
+describe("a team drive of the person's own (#3459)", () => {
+  const cardName = () => within(top()).getByLabelText(NR_FILES.DRIVE_NAME);
+  const teamBox = () => within(top()).getByRole("checkbox", { name: NR_FILES.CREATE_TEAM });
+  const TEAM_ON: MemberDriveCreate = { ...CREATE_ALLOWED, team_drives_allowed: true };
+
+  it("offers the team checkbox where a team drive can be made, and sends team", async () => {
+    create = TEAM_ON;
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(within(top()).getByText(NR_FILES.CREATE_TEAM_HINT)).toBeInTheDocument();
+    await userEvent.click(teamBox());
+    await userEvent.type(cardName(), "Design assets{Enter}");
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(posts()[0][1].body)).toEqual({ name: "Design assets", team: true });
+  });
+
+  it("hides the team checkbox when the catalogue says no", async () => {
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(within(top()).queryByRole("checkbox", { name: NR_FILES.CREATE_TEAM })).toBeNull();
+  });
+
+  it("never offers the team checkbox on a Mac card", async () => {
+    const MAC = "mac-studio-07";
+    offer = { ok: true, guestOS: "macOS 26.6.2 (25G83)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none"], runner: MAC };
+    runners = [{ id: "r-mac", name: MAC, macos_vm: { max: 2, disk_drives: true, base: { state: "ready" } } }];
+    create = TEAM_ON;
+    show({ shape: "environment", experience: "interactive", machine_kind: "macos_vm" });
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
+    await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    await userEvent.click(await within(top()).findByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }));
+    expect(cardName()).toBeInTheDocument();
+    expect(within(top()).queryByRole("checkbox", { name: NR_FILES.CREATE_TEAM })).toBeNull();
+  });
+
+  it.each(["member_team_drives_disabled", "member_team_drive_unsupported", "member_team_drive_no_unit"])(
+    "a team refusal (%s) marks the checkbox, not the name",
+    async (reason) => {
+      const sentence = "This server does not make team drives.";
+      post = () => json({ error: sentence, reason }, 422);
+      create = TEAM_ON;
+      await openChoose();
+      await userEvent.click(createLink());
+      await userEvent.click(teamBox());
+      await userEvent.type(cardName(), "Design assets{Enter}");
+      const alert = await within(top()).findByRole("alert");
+      expect(alert).toHaveTextContent(sentence);
+      expect(teamBox()).toHaveAttribute("aria-invalid", "true");
+      expect(teamBox().getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
+      expect(cardName()).not.toHaveAttribute("aria-invalid");
+      expect(cardName().getAttribute("aria-describedby") ?? "").not.toContain(alert.id);
+      await waitFor(() => expect(teamBox()).toHaveFocus());
+    },
+  );
+
+  it("a name refusal still marks the name", async () => {
+    const sentence = DRIVE_REFUSAL.MEMBER_NAME_TAKEN("Design assets");
+    post = () => json({ error: sentence, reason: "member_drive_name_taken" }, 422);
+    create = TEAM_ON;
+    await openChoose();
+    await userEvent.click(createLink());
+    await userEvent.click(teamBox());
+    await userEvent.type(cardName(), "Design assets{Enter}");
+    const alert = await within(top()).findByRole("alert");
+    expect(cardName()).toHaveAttribute("aria-invalid", "true");
+    expect(cardName().getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
+    expect(teamBox()).not.toHaveAttribute("aria-invalid");
+    expect(teamBox().getAttribute("aria-describedby")?.split(" ")).not.toContain(alert.id);
+  });
+
+  it("deleting your own team drive says the unit loses it too", async () => {
+    const TEAM_OWN: MeDrive = { ...DRIVE_OWNED, id: "d-team-own", name: "Design assets", team: true, shared_with_unit: true };
+    drives = [DRIVE_LEGACY, TEAM_OWN, DRIVE_OWNED, DRIVE_LOCKED];
+    await openChoose();
+    await userEvent.click(ownDeletes().find((b) => b.dataset.ownDelete === TEAM_OWN.id)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM_TEAM(TEAM_OWN.name))).toBeInTheDocument();
+    await userEvent.click(within(top()).getByRole("button", { name: NR_SHARED.CANCEL }));
+    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    await userEvent.click(ownDeletes().find((b) => b.dataset.ownDelete === DRIVE_OWNED.id)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(DRIVE_OWNED.name))).toBeInTheDocument();
+  });
+
+  it("deleting your own team drive whose unit was deleted keeps the plain sentence", async () => {
+    const ORPHAN: MeDrive = { ...DRIVE_OWNED, id: "d-team-orphan", name: "Old templates", team: true, shared_with_unit: false };
+    drives = [DRIVE_LEGACY, ORPHAN, DRIVE_LOCKED];
+    await openChoose();
+    await userEvent.click(ownDeletes().find((b) => b.dataset.ownDelete === ORPHAN.id)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(ORPHAN.name))).toBeInTheDocument();
+    expect(within(top()).queryByText(NR_FILES.DELETE_CONFIRM_TEAM(ORPHAN.name))).toBeNull();
+  });
+
+  it("the create card has no one-host line", async () => {
+    create = TEAM_ON;
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(teamBox()).toBeInTheDocument();
+    expect(within(top()).queryByText(DRIVES.TEAM_ONE_HOST)).toBeNull();
   });
 });

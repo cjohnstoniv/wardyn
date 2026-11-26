@@ -111,7 +111,10 @@ func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([
 		}
 		out = append(out, d)
 	}
-	return s.memberReachableDrives(ctx, out, ceiling)
+	if out, err = s.memberReachableDrives(ctx, out, ceiling); err != nil {
+		return nil, err
+	}
+	return s.memberTeamReachableDrives(ctx, out, ceiling)
 }
 
 // handleListMeDrives is GET /me/drives: the drive catalogue New Run attaches
@@ -130,6 +133,10 @@ func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 		out.DeniedByUnit = name
 	default:
 		out.Drives, out.PoolChecked, out.Unavailable = s.meDrives(ctx, r.URL.Query().Get("runner_pool_id"))
+		// A catalogue that could not be read is not padded with the rows that could.
+		if out.Unavailable == "" {
+			out.Drives = append(out.Drives, s.meDeletingDrives(ctx, out.Drives)...)
+		}
 	}
 	out.Create = s.memberDriveCreateState(r.WithContext(ctx))
 	writeJSON(w, http.StatusOK, out)
@@ -168,6 +175,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 			if row.Team = d.resolved.Team; row.Team {
 				// drive.enabled mounts a team drive under /home/agent/shared, never as the person's own.
 				row.SharedWith, row.Legacy = sharedWith[drive.ID], false
+				row.SharedWithUnit = memberTeamSharedWithUnit(d.winner)
 			}
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
@@ -257,7 +265,7 @@ func driveSource(tier types.CapabilitySubjectType) string {
 	switch tier {
 	case types.CapabilitySubjectUser:
 		return client.MeDriveSourcePersonal
-	case types.CapabilitySubjectGroup:
+	case types.CapabilitySubjectGroup, types.DriveSubjectUnit:
 		return client.MeDriveSourceTeam
 	default:
 		return client.MeDriveSourceOrganisation

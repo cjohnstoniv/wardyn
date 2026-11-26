@@ -85,14 +85,18 @@ func TestMemberDriveOwnerSubOnly(t *testing.T) {
 	wantReason(t, memberCall(bob, srv.handleDeleteMyDrive, http.MethodDelete, "/api/v1/me/drives/"+made.ID, "", map[string]string{"id": made.ID}),
 		http.StatusNotFound, string(authz.ReasonDriveNotFound))
 
-	// A drive being deleted is gone from the catalogue and from drives[].
+	// A drive being deleted is listed to its owner as deleting (#4061) and can never be attached.
 	id := uuid.MustParse(made.ID)
 	d := st.drives[id]
 	at := time.Now()
 	d.DeleteStartedAt = &at
 	st.drives[id] = d
-	if a := meDrivesOf(t, srv, alice); len(a.Drives) != 0 || a.Create.Count != 1 {
+	if a := meDrivesOf(t, srv, alice); len(a.Drives) != 1 || a.Drives[0].ID != made.ID || !a.Drives[0].Owned ||
+		a.Drives[0].UnavailableReason != client.MeDriveUnavailableDeleting || a.Create.Count != 1 {
 		t.Errorf("a drive being deleted = %+v (create %+v)", a.Drives, a.Create)
+	}
+	if b := meDrivesOf(t, srv, bob); len(b.Drives) != 0 {
+		t.Errorf("Bob's catalogue lists Alice's deleting drive: %+v", b.Drives)
 	}
 	if _, f := authorizeDrives(srv, alice, drivesRequest(made.ID)); f == nil || f.body.Reason != string(authz.ReasonDriveNotFound) {
 		t.Errorf("attaching a drive being deleted = %+v, want drive_not_found", f)
@@ -384,8 +388,8 @@ func (s ctxMemberDriveStore) ClearMemberDriveClaim(ctx context.Context, id uuid.
 }
 
 // TestMemberDriveDeleteOutlivesTheRequest: a delete whose caller goes away
-// mid-reclaim still finishes. A reclaim whose answer is not known leaves the drive held (deleting, out of the
-// owner's catalogue) for a later delete to settle; a successful one removes the row.
+// mid-reclaim still finishes. A reclaim whose answer is not known leaves the drive held (deleting, listed to its
+// owner as deleting, never attachable) for a later delete to settle; a successful one removes the row.
 func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 	for name, tc := range map[string]struct {
 		outcome runner.DriveReclaimOutcome
@@ -415,8 +419,11 @@ func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 				t.Fatalf("row kept = %v, want %v", ok, tc.kept)
 			case tc.kept && d.DeleteStartedAt == nil:
 				t.Fatal("the claim was cleared after an answer that is not known")
-			case tc.kept && len(meDrivesOf(t, srv, alice).Drives) != 0:
-				t.Error("a drive held after an unknown answer is in its owner's catalogue")
+			case tc.kept:
+				if rows := meDrivesOf(t, srv, alice).Drives; len(rows) != 1 || rows[0].ID != made.ID ||
+					rows[0].UnavailableReason != client.MeDriveUnavailableDeleting {
+					t.Errorf("a drive held after an unknown answer = %+v, want one row listed as deleting", rows)
+				}
 			}
 		})
 	}

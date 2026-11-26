@@ -166,6 +166,10 @@ func (s *Server) handleCreateMemberDrive(w http.ResponseWriter, r *http.Request)
 	if refusal.write(s, w, r) {
 		return
 	}
+	unit, refusal := s.memberTeamDriveGate(r, policy, req.Team, req.RunnerID != "")
+	if refusal.write(s, w, r) {
+		return
+	}
 	if req.RunnerID != "" {
 		if d.HomeRunnerID = s.memberDriveMac(r.Context(), owner, req.RunnerID); d.HomeRunnerID == nil {
 			writeErrorReason(w, http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, memberDriveMacUnavailableMsg())
@@ -173,7 +177,7 @@ func (s *Server) handleCreateMemberDrive(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	d.OwnerSubject, d.CreatedBy = owner, principalFromRequest(r)
-	saved, err := ms.CreateMemberDrive(r.Context(), d, policy.MaxPerPerson)
+	saved, err := s.insertMemberOrTeamDrive(r.Context(), ms, d, policy.MaxPerPerson, unit)
 	switch {
 	case errors.Is(err, store.ErrMemberDriveLimit):
 		n := policy.MaxPerPerson
@@ -189,7 +193,7 @@ func (s *Server) handleCreateMemberDrive(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "create member drive", err)
 		return
 	}
-	s.auditMemberDriveCreate(r, ms, saved, policy.MaxPerPerson)
+	s.auditMemberDriveCreate(r, ms, saved, policy.MaxPerPerson, unit)
 	out := memberMeDrive(saved)
 	out.Mac = s.macDiskName(r.Context(), saved)
 	writeJSON(w, http.StatusCreated, out)
@@ -342,9 +346,9 @@ func (s *Server) memberDriveNameRefusal(ctx context.Context, name string) *runRe
 // memberMeDrive is a member drive as the catalogue shows it to its owner.
 func memberMeDrive(d types.UserDrive) client.MeDrive {
 	return client.MeDrive{
-		ID: d.ID.String(), Name: d.Name, Section: client.MeDriveSectionUser, Source: client.MeDriveSourcePersonal,
-		Backend: d.Backend, Target: runner.DriveTargetFor(types.ResolvedDrive{Drive: d}, false), Writable: true,
-		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true, KeptFromRun: keptFromRunOf(d),
+		ID: d.ID.String(), Name: d.Name, Section: client.MeDriveSectionUser, Source: memberDriveSource(d), SharedWithUnit: d.Team,
+		Backend: d.Backend, Target: runner.DriveTargetFor(types.ResolvedDrive{Drive: d, Team: d.Team}, false), Writable: true,
+		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true, KeptFromRun: keptFromRunOf(d), Team: d.Team,
 	}
 }
 
@@ -371,10 +375,13 @@ func (s *Server) keptFromRunTitle(ctx context.Context, d types.UserDrive) string
 
 // auditMemberDriveCreate writes drive.member.create. count is the owner's
 // drives after the insert; a failed read leaves it out rather than guessing.
-func (s *Server) auditMemberDriveCreate(r *http.Request, ms store.MemberDriveStore, d types.UserDrive, limit int) {
+func (s *Server) auditMemberDriveCreate(r *http.Request, ms store.MemberDriveStore, d types.UserDrive, limit int, unit *uuid.UUID) {
 	data := map[string]any{
 		"backend": d.Backend, "drive": d.Name, "drive_id": d.ID, "limit": limit,
 		"size_mib": d.SizeMiB, "storage_class": d.StorageClass,
+	}
+	if unit != nil {
+		data["team"], data["unit_id"] = true, *unit
 	}
 	if all, err := ms.ListMemberDrivesOf(r.Context(), d.OwnerSubject); err == nil {
 		data["count"] = len(all)
@@ -474,12 +481,12 @@ type memberDriveDeletion struct {
 	untouched bool
 }
 
-// memberDriveOwnerStarting refuses a delete before its tombstone, writing no row, while the
-// drive's owner has a run in STARTING: that run may attach the drive, and would meet the tombstone
+// memberDriveOwnerStarting refuses a delete before its tombstone, writing no row, while the drive's
+// owner has a run in STARTING, or any person has for a team drive: that run may attach it, and would meet the tombstone
 // as drive_not_found. The refusal is audited as deleteMemberDrive audits its own. deleteMemberDrive
 // reads the same thing again past the tombstone, for a run that starts in between.
 func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, by string) (bool, error) {
-	starting, err := ms.MemberDriveOwnerStarting(ctx, d.OwnerSubject, watcherLeaseStaleAfter)
+	starting, err := s.memberDriveStarting(ctx, ms, d)
 	if err != nil || !starting {
 		return false, err
 	}
@@ -496,7 +503,8 @@ func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDr
 // absent, record-only), the claim's clearing (a refusal before any call, or a definitive refusal after it that
 // touched nothing), the claim left for the Mac's sweep, or nothing, which leaves the drive deleting: a call was
 // made and its outcome is not known. The one physical call is made only after IssueMemberDriveDelete committed
-// for this exact pair, so a retry, a duplicate or a claim taken over never makes a second call.
+// for this exact pair, so a retry, a duplicate or a claim taken over never makes a second call. A sweep's claim
+// (mac_reconnect, retry_sweep) is never cleared: its next pass meets the mark again.
 func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
 	// Past the claim the delete finishes even if the caller goes away, so
 	// the row is always removed or settled and the attempt audited.
@@ -517,11 +525,11 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
-		// Past the claim, a run of the owner's still STARTING may have re-read this drive before it
+		// Past the claim, a run of the owner's (of anyone's, for a team drive) still STARTING may have re-read it before it
 		// (memberDrivesStillThere) and create the drive's object after the reclaim, so the drive counts
 		// as in use until that run leaves STARTING, and until a create whose run was ended on another
 		// replica stops holding its lease. A run that re-reads later meets the claim.
-		starting, serr := ms.MemberDriveOwnerStarting(sctx, d.OwnerSubject, watcherLeaseStaleAfter)
+		starting, serr := s.memberDriveStarting(sctx, ms, d)
 		if serr != nil {
 			slog.WarnContext(ctx, "api: member drive delete could not read the owner's starting runs",
 				slog.String("drive_id", d.ID.String()), slog.String("error", serr.Error()))
@@ -561,7 +569,7 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 // settleMemberDriveDelete applies what deleteMemberDrive found to the claim (started, d.DeleteIssues).
 func (s *Server) settleMemberDriveDelete(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string, res *memberDriveDeletion) {
 	claimN := d.DeleteIssues
-	sweep := by == memberDriveByMacReconnect
+	sweep := by == memberDriveByMacReconnect || by == memberDriveByRetrySweep
 	var err error
 	if res.reason == "" && res.outcome != string(runner.DriveReclaimDeleted) && res.outcome != string(runner.DriveReclaimAlreadyAbsent) {
 		// Both reclaim paths end here. A reply with no outcome, or one this server does not know (a Mac's
@@ -722,13 +730,13 @@ func (s *Server) finishMacDiskDeletes(ctx context.Context) error {
 // memberDriveMount is the DriveMount a member drive's object is addressed by:
 // the hash home of the drive and its owner, as the resolver derives it.
 func memberDriveMount(d types.UserDrive) (types.DriveMount, error) {
-	home, err := types.DriveHomeName(d, d.OwnerSubject, "")
+	home, err := memberDriveHome(d)
 	if err != nil {
 		return types.DriveMount{}, err
 	}
 	return types.DriveMount{
 		DriveID: d.ID, Backend: d.Backend, ObjectName: types.DriveObjectName(d, home), DriveName: d.Name,
-		StorageClass: d.StorageClass, HomeName: home, SubjectHash: types.DriveSubjectHash(d.OwnerSubject),
+		StorageClass: d.StorageClass, HomeName: home, SubjectHash: memberDriveSubjectHash(d),
 		Target: runner.DriveTarget, SizeMiB: d.SizeMiB, RunnerID: d.HomeRunnerID,
 	}, nil
 }

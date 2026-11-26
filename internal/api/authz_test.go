@@ -300,6 +300,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/me/runner-pool-defaults":                  {class: classMember},
 	"PUT /api/v1/me/runner-pool-defaults":                  {class: classMember},
 	"DELETE /api/v1/me/runner-pool-defaults":               {class: classMember},
+	// Organisation sites (0.11): members read them; the writes are SUPER, beside the runner-pool writes; the
+	// drives-at-a-site list is the security tier, as GET /drives is.
+	"GET /api/v1/org-sites":                 {class: classMember},
+	"GET /api/v1/org-sites/{id}":            {class: classMember},
+	"GET /api/v1/org-sites/drives":          {class: classSecurity},
+	"POST /api/v1/org-sites":                {class: classAdmin},
+	"PUT /api/v1/org-sites/{id}":            {class: classAdmin},
+	"DELETE /api/v1/org-sites/{id}":         {class: classAdmin},
+	"PUT /api/v1/runner-pools/{id}/site":    {class: classAdmin},
+	"DELETE /api/v1/runner-pools/{id}/site": {class: classAdmin},
+	"PUT /api/v1/drives/{id}/site":          {class: classAdmin},
+	"DELETE /api/v1/drives/{id}/site":       {class: classAdmin},
 	// Workloads (0.10): each route acts on the caller's own workloads (?owner= for a sponsor or the
 	// security tier); a binding is standing authority over a service identity, the security tier's.
 	"PUT /api/v1/workloads/{name}":          {class: classMember},
@@ -724,8 +736,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/drives/{id}/reclaim": {class: classAdmin},
 	// People's own drives (member_drives_admin.go): the super admin's list and
 	// delete, SUPER like reclaim because the delete destroys a person's bytes.
-	"GET /api/v1/drives/member":         {class: classAdmin},
-	"DELETE /api/v1/drives/member/{id}": {class: classAdmin},
+	"GET /api/v1/drives/member":           {class: classAdmin},
+	"DELETE /api/v1/drives/member/{id}":   {class: classAdmin},
+	"PUT /api/v1/drives/member/{id}/team": {class: classAdmin},
 	// People's kept machines (kept_machines.go): the super admin's list and delete, SUPER like the
 	// member drives' because the delete destroys a person's files on their Mac.
 	"GET /api/v1/machines/kept":         {class: classAdmin},
@@ -757,8 +770,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// A person creates and deletes their own drive (member_drives.go). The
 	// handler refuses every caller that is not a person, and the delete's
 	// owner predicate answers another person's id with the uniform 404.
-	"POST /api/v1/me/drives":        {class: classMember},
-	"DELETE /api/v1/me/drives/{id}": {class: classMember},
+	"POST /api/v1/me/drives":           {class: classMember},
+	"DELETE /api/v1/me/drives/{id}":    {class: classMember},
+	"POST /api/v1/me/drives/{id}/seed": {class: classMember},
 	// A person lists and deletes their own kept machines (kept_machines.go). The handler refuses every
 	// caller that is not a person, and the owner predicate answers another person's id with the uniform 404.
 	"GET /api/v1/me/machines":         {class: classMember},
@@ -2222,8 +2236,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// The approval counts add their read and write on the security tier (= 111 SEC).
 	// Agent rules add GET /agent-rules and PUT and DELETE /agent-rules/{harness} on the security tier (= 114 SEC).
 	// Inbound federation (#3787) adds its switch read and write and the four trust routes on the security tier (= 120 SEC, with the approval counts and agent rules above).
-	if sec != 120 || super != 84 {
-		t.Errorf("tier split = %d security / %d admin, want 120 / 84 (PLUS inbound federation's 6 switch and trust routes, PLUS the 3 /agent-rules routes, PLUS the 2 /governance/approval-counts routes, PLUS the 2 /assistant/settings routes, PLUS the attach forward route, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// The org sites add GET /org-sites/drives on the security tier and 8 admin-tier writes (= 121 SEC / 92 SUPER).
+	if sec != 121 || super != 92 {
+		t.Errorf("tier split = %d security / %d admin, want 121 / 92 (PLUS inbound federation's 6 switch and trust routes, PLUS GET /org-sites/drives, PLUS the 3 /agent-rules routes, PLUS the 2 /governance/approval-counts routes, PLUS the 2 /assistant/settings routes, PLUS the attach forward route, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename, PLUS the member team drive write bit, PLUS the 7 site writes)", sec, super)
 	}
 }
 

@@ -70,6 +70,16 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/runner-pools/{id}/runners/{runner}", "the `/runner-pools` writes"},
 	{"DELETE /api/v1/runner-pools/{id}/runners/{runner}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/remote-runners/{rid}", "the `/runner-pools` writes"},
+	// Organisation sites (0.11): the writes are SUPER, beside the pool writes; the drives-at-a-site list is the
+	// security tier's, as GET /drives is.
+	{"POST /api/v1/org-sites", "the site writes"},
+	{"PUT /api/v1/org-sites/{id}", "the site writes"},
+	{"DELETE /api/v1/org-sites/{id}", "the site writes"},
+	{"PUT /api/v1/runner-pools/{id}/site", "the site writes"},
+	{"DELETE /api/v1/runner-pools/{id}/site", "the site writes"},
+	{"PUT /api/v1/drives/{id}/site", "the site writes"},
+	{"DELETE /api/v1/drives/{id}/site", "the site writes"},
+	{"GET /api/v1/org-sites/drives", "`GET /org-sites/drives`"},
 	{"PUT /api/v1/runner-pool-defaults", "the `/runner-pools` writes"},
 	{"GET /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
 	{"PUT /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
@@ -347,6 +357,7 @@ var docTierRows = []struct{ route, token string }{
 	// Member drives (0.9): the admin list and delete of the drives people create are SUPER.
 	{"GET /api/v1/drives/member", "the `/drives/member` routes"},
 	{"DELETE /api/v1/drives/member/{id}", "the `/drives/member` routes"},
+	{"PUT /api/v1/drives/member/{id}/team", "the `/drives/member` routes"},
 	// Kept machines (0.10): the admin list and delete of the machines people keep are SUPER.
 	{"GET /api/v1/machines/kept", "the `/machines/kept` routes"},
 	{"DELETE /api/v1/machines/kept/{id}", "the `/machines/kept` routes"},

@@ -79,6 +79,8 @@ var kernelDoors = map[string][]string{
 	// run's context only for a caller it is granted to, asked as the attach door
 	// asks it, so an ungranted caller never learns the pinned unit. It grants nothing.
 	"componentPins": {"capComponent"},
+	// A drive fill's grant: kept only when the caller holds the secret capability on its shared name and the egress capability on github.com.
+	"driveFillKeeps": {"capEgressHost", "capSecret"},
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim

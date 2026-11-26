@@ -28,6 +28,9 @@ export const DRIVE_REFUSAL = {
   MACOS_CLUSTER_VOLUME: (name: string) => `${name} is a cluster volume, which a macOS VM can't open.`,
   // A person's disk drive is kept on one Mac, and only a macOS VM there attaches it.
   MAC_DISK_ELSEWHERE: (name: string, mac: string) => `${name} is a disk on ${mac}, so only macOS VM runs on ${mac} can use it.`,
+  // A person's disk drive is in one run at a time; another run that has not ended holds it.
+  MAC_DISK_IN_ANOTHER_RUN: (name: string) =>
+    `${name} is in another macOS VM on this Mac. A disk drive is in one run at a time: try again when that run ends.`,
   // Member drives: POST /me/drives and DELETE /me/drives/{id}. A quoted name is
   // Go's %q, which JSON.stringify matches for the names a drive can carry.
   MEMBER_REQUIRES_PERSON: () => "Sign in under your own account to create or delete a drive.",
@@ -68,6 +71,7 @@ export const DRIVE_REFUSAL_REASON = {
   MACOS_DOCKER_VOLUME: "placement_capability",
   MACOS_CLUSTER_VOLUME: "placement_capability",
   MAC_DISK_ELSEWHERE: "drive_not_in_pool",
+  MAC_DISK_IN_ANOTHER_RUN: "drive_in_another_run",
   MEMBER_REQUIRES_PERSON: "member_drive_requires_person",
   MEMBER_DISABLED: "member_drives_disabled",
   MEMBER_DENIED_BY_UNIT: "member_drives_denied_by_unit",

@@ -244,11 +244,13 @@ const (
 	RunnerPoolSelectedPersonal RunnerPoolSelection = "personal_default"
 	// RunnerPoolSelectedOrg: the organisation's default.
 	RunnerPoolSelectedOrg RunnerPoolSelection = "organisation_default"
+	// RunnerPoolSelectedSite: the default pool of the site where the run's drives are homed.
+	RunnerPoolSelectedSite RunnerPoolSelection = "site_default"
 )
 
-// Valid reports whether s is one of the three.
+// Valid reports whether s is one of the four.
 func (s RunnerPoolSelection) Valid() bool {
-	return s == RunnerPoolSelectedExplicit || s == RunnerPoolSelectedPersonal || s == RunnerPoolSelectedOrg
+	return s == RunnerPoolSelectedExplicit || s == RunnerPoolSelectedPersonal || s == RunnerPoolSelectedOrg || s == RunnerPoolSelectedSite
 }
 
 // ResolvedRunnerPool is the pool a request resolves to: the pool, the revision
@@ -260,6 +262,9 @@ type ResolvedRunnerPool struct {
 	Scope     RunnerPoolScope     `json:"scope"`
 	Revision  int64               `json:"revision"`
 	Selection RunnerPoolSelection `json:"selection"`
+	// SiteID and SiteName are the pool's site, set only while sites are on and the pool is at a live one.
+	SiteID   *uuid.UUID `json:"site_id,omitempty"`
+	SiteName string     `json:"site_name,omitempty"`
 }
 
 // RunnerPoolSubject is one person, group or role a pool-use policy admits.
