@@ -394,3 +394,99 @@ func TestAttachPump_FenceErrorTellsTheWriterItsInputWasDropped(t *testing.T) {
 	default:
 	}
 }
+
+// pumpWithOpen serves one socket through attachPump with open as its exec opener, and returns the dialled
+// client, the pump's close reason (once it returns) and a channel that, once closed, has the handler close the
+// socket with 4401, as endAttachAuthority does.
+func pumpWithOpen(t *testing.T, open func() error) (*websocket.Conn, <-chan string, func()) {
+	t.Helper()
+	srv, _, _ := leaseCovServer(t, newLeaseCovLeases(), leaseCovServerOpts{})
+	alice := newLeaseCovClient("alice", attachSourceWeb)
+	if readOnly, _ := srv.registerAttachHolder(leaseCovRun, alice.h); readOnly {
+		t.Fatal("the first client was admitted read-only")
+	}
+	closeNow, pumped := make(chan struct{}), make(chan string, 1)
+	closeSocket := sync.OnceFunc(func() { close(closeNow) })
+	t.Cleanup(closeSocket)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		go func() {
+			<-closeNow
+			_ = c.Close(attachAuthEndedCode, attachAuthEndedReason)
+		}()
+		pumped <- srv.attachPump(r.Context(), c, leaseCovRun, alice.h, nil, open)
+	}))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.CloseNow() })
+	return c, pumped, closeSocket
+}
+
+// TestAttachPump_CancelledOpenLeavesTheSocketToItsCloser: an exec open cancelled by an eviction or a cut does
+// not end the pump. Ending it cancels the reader's context, which tears the connection down before the closer
+// writes its frame, and the client read a bare EOF instead of 4401. The closer here runs only after the open
+// has been cancelled, so the order the race once lost is fixed by channels.
+func TestAttachPump_CancelledOpenLeavesTheSocketToItsCloser(t *testing.T) {
+	opened := make(chan struct{})
+	c, pumped, closeSocket := pumpWithOpen(t, func() error { close(opened); return errAttachCancelled })
+	ended := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := c.Read(context.Background()); err != nil {
+				ended <- err
+				return
+			}
+		}
+	}()
+	select {
+	case <-opened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exec open never ran")
+	}
+	select {
+	case reason := <-pumped:
+		t.Fatalf("the pump ended (%q) on a cancelled open, before its closer wrote a frame", reason)
+	case <-time.After(200 * time.Millisecond):
+	}
+	closeSocket()
+	select {
+	case err := <-ended:
+		var ce websocket.CloseError
+		if !errors.As(err, &ce) || ce.Code != attachAuthEndedCode || ce.Reason != attachAuthEndedReason {
+			t.Fatalf("the socket ended with %v (status %d), want close %d %q", err, websocket.CloseStatus(err), attachAuthEndedCode, attachAuthEndedReason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the socket is still open after its closer ran")
+	}
+	select {
+	case reason := <-pumped:
+		// The reader sees the close handshake: the client's echo, or the closed connection after it.
+		if reason != "client closed" && reason != "client read error" {
+			t.Fatalf("the pump ended with %q, want the reader's end after the close", reason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the pump did not end after its socket was closed")
+	}
+}
+
+// TestAttachPump_FailedOpenStillEndsThePump: an open that fails for any other reason ends the pump at once, with
+// no closer to wait for.
+func TestAttachPump_FailedOpenStillEndsThePump(t *testing.T) {
+	_, pumped, _ := pumpWithOpen(t, func() error { return errors.New("boom") })
+	select {
+	case reason := <-pumped:
+		if reason != "attach failed" {
+			t.Fatalf("the pump ended with %q, want attach failed", reason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a failed open did not end the pump")
+	}
+}

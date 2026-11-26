@@ -87,16 +87,18 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, runID uuid.U
 	go p.drain()
 	go p.resizeWorker()
 	go p.tellDropped()
-	// Open the exec now that the reader runs.
+	// Open the exec now that the reader runs. An open cancelled by an eviction or a cut leaves the socket
+	// to whoever ended it: that closer writes its own close frame (4401, a take-over's), and ending the pump
+	// here cancels the reader's context, which tears the connection down before the frame is written.
+	// A displaced open is noted, as for an open session displaced later.
 	go func() {
 		err := attach()
 		switch {
 		case err == nil:
-		case errors.Is(err, errAttachCancelled) && p.holder.evicted.Load():
-			// Displaced while the exec was opening: the displacement closes the socket with its own code and
-			// reason, and the reader ends the pump on the peer's answer, as for an open session. Cancelling here
-			// would tear the socket down before that frame, and the client would read a bare drop.
-			p.note("attach failed")
+		case errors.Is(err, errAttachCancelled):
+			if p.holder.evicted.Load() {
+				p.note("attach failed")
+			}
 		default:
 			p.end("attach failed")
 		}

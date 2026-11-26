@@ -511,10 +511,32 @@ func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
 // refused at a cap is closed or told ResourceShortage instead. (A keepalive request cannot tell
 // them apart: the gateway answers every request with a failure reply, which SendRequest reports
 // as no error on a refused connection too.)
+//
+// The probe also ends when the connection does. The ssh client's OpenChannel never returns when it
+// is called just as the server closes the connection: its channel is added after the client has
+// dropped its open channels, and its write lands before the client records the read error, so
+// nothing answers or closes it. A refused connection is closed at once, so that window is real.
 func sshServed(c *ssh.Client) bool {
-	_, _, err := c.OpenChannel("probe@wardyn.invalid", nil)
-	var oce *ssh.OpenChannelError
-	return errors.As(err, &oce) && oce.Reason == ssh.UnknownChannelType
+	answered := make(chan bool, 1)
+	go func() {
+		_, _, err := c.OpenChannel("probe@wardyn.invalid", nil)
+		var oce *ssh.OpenChannelError
+		answered <- errors.As(err, &oce) && oce.Reason == ssh.UnknownChannelType
+	}()
+	closed := make(chan struct{})
+	go func() { _ = c.Wait(); close(closed) }()
+	select {
+	case ok := <-answered:
+		return ok
+	case <-closed:
+		// An answer read before the close is still delivered: prefer it when it comes just after.
+		select {
+		case ok := <-answered:
+			return ok
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
 }
 
 // rejectRows counts the recorded ssh.connection.reject rows.
@@ -530,6 +552,8 @@ func rejectRows(a *sshTestRecorder) int {
 
 // sshGoroutines counts the goroutines running ssh code: the gateway's own and the ssh library's. Other
 // tests' leftover goroutines start and end on their own clock, so a process-wide count is noise here.
+// A test client's OpenChannel (sshServed's or sshFlood's) parked for good on a connection the server
+// closed (see sshServed) is not counted: that goroutine is the client's, never the server's.
 func sshGoroutines() int {
 	buf := make([]byte, 1<<20)
 	for {
@@ -542,6 +566,10 @@ func sshGoroutines() int {
 	}
 	n := 0
 	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "golang.org/x/crypto/ssh.(*mux).openChannel") &&
+			(strings.Contains(g, "internal/api.sshServed") || strings.Contains(g, "internal/api.sshFlood")) {
+			continue
+		}
 		if strings.Contains(g, "golang.org/x/crypto/ssh") || strings.Contains(g, "/internal/api/sshgateway") {
 			n++
 		}
