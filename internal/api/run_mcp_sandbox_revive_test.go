@@ -559,6 +559,48 @@ func TestLiveEditStoppedEarlyFailsChangedServers(t *testing.T) {
 	}
 }
 
+// TestLiveEditStopLeavesAFailedRow: an edit's phase that stops fails each changed server it did not reach,
+// but a row read again as failed (its create failed on the spent bound) is left: no second kill and no
+// second create failure row.
+func TestLiveEditStopLeavesAFailedRow(t *testing.T) {
+	f := newMCPReviveFixture(t, true)
+	f.keepAgentPolicy(t, func(p *types.RunPolicySpec) { p.DeniedDomains = append(p.DeniedDomains, "api.other.test") })
+	ctx := context.Background()
+	rest := f.st.mcpRowsMem.all() // as the phase read them, both ready
+	if _, err := f.st.mcpRowsMem.FailMCPSandboxIfUp(ctx, f.run.ID, 0, mcpFailCreate); err != nil {
+		t.Fatal(err)
+	}
+	b, servers, _, err := f.srv.mcpLiveBase(ctx, f.current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	kills := func(call string) int {
+		f.sbx.mu.Lock()
+		defer f.sbx.mu.Unlock()
+		n := 0
+		for _, c := range f.sbx.calls {
+			if c == call {
+				n++
+			}
+		}
+		return n
+	}
+	k0, k1 := kills("kill:0"), kills("kill:1")
+	f.srv.failMCPEditRest(ctx, f.current(), rest, servers, b, true)
+	failures := map[string]int{}
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.mcp_sandbox.create") {
+		if ev.Outcome == "failure" {
+			failures[ev.Target]++
+		}
+	}
+	if kills("kill:0") != k0 || failures["files"] != 0 {
+		t.Errorf("failed files row: kills %d -> %d, create failure rows %d; want it left", k0, kills("kill:0"), failures["files"])
+	}
+	if row := f.st.mcpRowsMem.get(1); row.State != store.MCPSandboxFailed || kills("kill:1") != k1+1 || failures["search"] != 1 {
+		t.Errorf("search row %s, kills %d -> %d, failure rows %d: want the changed server killed and failed once", row.State, k1, kills("kill:1"), failures["search"])
+	}
+}
+
 // TestReviveEndsErasedComponentsMCPRow: a revive ends the row of a server whose component is gone from the
 // run's snapshot (superseded), as a restart does, rather than leave it running under the policy it was made
 // under.
