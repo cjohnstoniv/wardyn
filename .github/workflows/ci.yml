@@ -3238,6 +3238,10 @@ jobs:
           free -m
       # vmstat as in the go job: staticcheck's whole-tree load is a memory peak of its own.
       - name: make ${{ matrix.gate }}
+        env:
+          # The -tags docker pass filled RAM and the 8 GB swap and was killed (143) three times running.
+          # A soft limit makes staticcheck collect harder before that; empty (unset) for the other gates.
+          GOMEMLIMIT: ${{ startsWith(matrix.gate, 'staticcheck') && '12GiB' || '' }}
         run: |
           vmstat -t 15 &
           vm=$!
