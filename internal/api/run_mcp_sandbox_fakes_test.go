@@ -31,6 +31,8 @@ type mcpRowsMem struct {
 	// reopenErr and keepErr fail a revive's reopen and keep writes, and restartErr a restart's write, as a
 	// store that cannot write answers.
 	reopenErr, keepErr, restartErr error
+	// honourCtx fails every write on a done context.
+	honourCtx bool
 	// runOf reads the run a joined write is checked against; nil reads every run RUNNING and not lost.
 	runOf func(uuid.UUID) (types.AgentRun, error)
 }
@@ -106,10 +108,14 @@ func (m *mcpRowsMem) ListRunMCPSandboxes(_ context.Context, runID uuid.UUID) ([]
 	return out, nil
 }
 
-// write applies f to the row when ok holds for it, as one UPDATE ... WHERE.
-func (m *mcpRowsMem) write(runID uuid.UUID, ordinal int, ok func(r *store.RunMCPSandbox) bool, f func(r *store.RunMCPSandbox)) (bool, error) {
+// write applies f to the row when ok holds for it, as one UPDATE ... WHERE. With honourCtx a done ctx fails
+// it, as a database call on a spent context fails.
+func (m *mcpRowsMem) write(ctx context.Context, runID uuid.UUID, ordinal int, ok func(r *store.RunMCPSandbox) bool, f func(r *store.RunMCPSandbox)) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.honourCtx && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
 	r := m.row(runID, ordinal)
 	if r == nil || !ok(r) {
 		return false, nil
@@ -119,29 +125,29 @@ func (m *mcpRowsMem) write(runID uuid.UUID, ordinal int, ok func(r *store.RunMCP
 	return true, nil
 }
 
-func (m *mcpRowsMem) MarkMCPSandboxStartedIfStarting(_ context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+func (m *mcpRowsMem) MarkMCPSandboxStartedIfStarting(ctx context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State == store.MCPSandboxStarting && m.runLive(runID, types.RunStarting)
 	}, func(r *store.RunMCPSandbox) { r.State, r.SandboxRef = store.MCPSandboxReady, ref })
 }
 
-func (m *mcpRowsMem) FailMCPSandboxIfUp(_ context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+func (m *mcpRowsMem) FailMCPSandboxIfUp(ctx context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State == store.MCPSandboxStarting || r.State == store.MCPSandboxReady || r.State == store.MCPSandboxRestarting
 	}, func(r *store.RunMCPSandbox) { r.State, r.LastCause = store.MCPSandboxFailed, cause })
 }
 
-func (m *mcpRowsMem) MarkMCPSandboxReadyIfLive(_ context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+func (m *mcpRowsMem) MarkMCPSandboxReadyIfLive(ctx context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State != store.MCPSandboxStopped && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) { r.State, r.SandboxRef = store.MCPSandboxReady, ref })
 }
 
-func (m *mcpRowsMem) ReopenMCPSandboxIfLive(_ context.Context, runID uuid.UUID, ordinal int, readAt time.Time, jti string, prevUntil time.Time) (bool, error) {
+func (m *mcpRowsMem) ReopenMCPSandboxIfLive(ctx context.Context, runID uuid.UUID, ordinal int, readAt time.Time, jti string, prevUntil time.Time) (bool, error) {
 	if m.reopenErr != nil {
 		return false, m.reopenErr
 	}
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.UpdatedAt.Equal(readAt) && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) {
 		until := prevUntil
@@ -150,25 +156,25 @@ func (m *mcpRowsMem) ReopenMCPSandboxIfLive(_ context.Context, runID uuid.UUID, 
 	})
 }
 
-func (m *mcpRowsMem) KeepMCPSandboxStartingIfLive(_ context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
+func (m *mcpRowsMem) KeepMCPSandboxStartingIfLive(ctx context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
 	if m.keepErr != nil {
 		return false, m.keepErr
 	}
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State == store.MCPSandboxStarting && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) { r.SandboxRef = ref })
 }
 
-func (m *mcpRowsMem) FailMCPSandboxIfStarting(_ context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool { return r.State == store.MCPSandboxStarting },
+func (m *mcpRowsMem) FailMCPSandboxIfStarting(ctx context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool { return r.State == store.MCPSandboxStarting },
 		func(r *store.RunMCPSandbox) { r.State, r.LastCause = store.MCPSandboxFailed, cause })
 }
 
-func (m *mcpRowsMem) StopMCPSandboxRow(_ context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
+func (m *mcpRowsMem) StopMCPSandboxRow(ctx context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
 	if m.stopErr != nil {
 		return false, m.stopErr
 	}
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool { return r.State != store.MCPSandboxStopped },
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool { return r.State != store.MCPSandboxStopped },
 		func(r *store.RunMCPSandbox) {
 			at := m.clock
 			r.State, r.LastCause, r.StoppedAt = store.MCPSandboxStopped, cause, &at
@@ -187,22 +193,22 @@ func (m *mcpRowsMem) RotateMCPSandboxToken(_ context.Context, runID uuid.UUID, o
 	return true, nil
 }
 
-func (m *mcpRowsMem) RecordMCPSandboxCreated(_ context.Context, runID uuid.UUID, ordinal int, c store.MCPSandboxCreated) (bool, error) {
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+func (m *mcpRowsMem) RecordMCPSandboxCreated(ctx context.Context, runID uuid.UUID, ordinal int, c store.MCPSandboxCreated) (bool, error) {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State == store.MCPSandboxStarting || r.State == store.MCPSandboxRestarting
 	}, func(r *store.RunMCPSandbox) {
 		r.RelayAddr, r.PolicyDigest, r.ProxyConfigSealed = c.RelayAddr, c.PolicyDigest, c.ProxyConfigSealed
 	})
 }
 
-func (m *mcpRowsMem) RestartMCPSandboxIfLive(_ context.Context, runID uuid.UUID, ordinal int, rs store.MCPSandboxRestart) (bool, error) {
+func (m *mcpRowsMem) RestartMCPSandboxIfLive(ctx context.Context, runID uuid.UUID, ordinal int, rs store.MCPSandboxRestart) (bool, error) {
 	m.mu.Lock()
 	err := m.restartErr
 	m.mu.Unlock()
 	if err != nil {
 		return false, err
 	}
-	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+	return m.write(ctx, runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State != store.MCPSandboxStarting && r.UpdatedAt.Equal(rs.ReadAt) && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) {
 		until := rs.PrevUntil
@@ -228,6 +234,8 @@ type mcpSandboxerFake struct {
 	killErr  error
 	// statusDead reads every sandbox dead whatever its state, as a crashed server reads.
 	statusDead bool
+	// honourCtx fails a kill on a done context, as the runner's call on a spent context fails.
+	honourCtx bool
 }
 
 func newMCPSandboxerFake() *mcpSandboxerFake {
@@ -274,7 +282,7 @@ func (f *mcpSandboxerFake) KillRunMCPSandboxes(context.Context, uuid.UUID) error
 	return nil
 }
 
-func (f *mcpSandboxerFake) KillMCPSandbox(_ context.Context, id runner.MCPSandboxID) error {
+func (f *mcpSandboxerFake) KillMCPSandbox(ctx context.Context, id runner.MCPSandboxID) error {
 	f.mu.Lock()
 	fn := f.killFn
 	f.mu.Unlock()
@@ -286,6 +294,9 @@ func (f *mcpSandboxerFake) KillMCPSandbox(_ context.Context, id runner.MCPSandbo
 	f.record("kill", id.Ordinal)
 	if f.killErr != nil {
 		return f.killErr
+	}
+	if f.honourCtx && ctx.Err() != nil {
+		return ctx.Err()
 	}
 	delete(f.held, id.Ordinal)
 	delete(f.live, id.Ordinal)

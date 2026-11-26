@@ -101,8 +101,9 @@ func reviveMCPContext(ctx, lockCtx context.Context) (context.Context, func()) {
 	return held, func() { end(); cancel() }
 }
 
-// mcpReviveWriteContext is one write of the MCP phase that must land after the phase's bound is spent (a
-// failed row, its audit row, the kill of what it started): its own short bound, with the phase's values.
+// mcpReviveWriteContext is one write of the MCP phase, or of a restart, that must land after the phase's or
+// the restart's bound is spent (a failed row, its audit row, the kill of what it started): its own short
+// bound, with the caller's values.
 func mcpReviveWriteContext(mcpCtx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(mcpCtx), heldStoreCallBound)
 }

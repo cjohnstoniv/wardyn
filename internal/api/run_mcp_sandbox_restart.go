@@ -318,27 +318,40 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 		return errMCPRestartRunEnded
 	}
 	row.Restarts, row.RestartWindowStart = restarts, window
-	if cause, err := s.createAndStartMCP(ctx, run, rc); err != nil {
-		slog.WarnContext(ctx, "wardynd: restarting an MCP server's sandbox failed", slog.String("run_id", run.ID.String()),
+	cause, err := s.createAndStartMCP(ctx, run, rc)
+	// The create may spend the restart's whole bound (an image pull), so the kills and writes that end a
+	// failed restart run on a bound of their own: the row never stays restarting with what was made running.
+	wctx, cancel := mcpReviveWriteContext(ctx)
+	defer cancel()
+	if err != nil {
+		slog.WarnContext(wctx, "wardynd: restarting an MCP server's sandbox failed", slog.String("run_id", run.ID.String()),
 			slog.String("server", key), slog.Any("err", err))
-		_, _ = st.FailMCPSandboxIfUp(ctx, run.ID, row.Ordinal, cause)
-		s.auditMCPSandboxRestart(ctx, actorType, actor, row, "failure", cause)
+		_ = m.KillMCPSandbox(wctx, id)
+		_, _ = st.FailMCPSandboxIfUp(wctx, run.ID, row.Ordinal, cause)
+		s.auditMCPSandboxRestart(wctx, actorType, actor, row, "failure", cause)
 		if errors.Is(err, errMCPRestartRunEnded) {
 			return errMCPRestartRunEnded
 		}
 		return nil
 	}
-	if ok, err := st.MarkMCPSandboxReadyIfLive(ctx, run.ID, row.Ordinal, mcpSandboxRef(run, row.Ordinal)); err != nil || !ok {
-		_ = m.KillMCPSandbox(ctx, id) // the run or the row moved on after the check: what started goes
+	ok, err = st.MarkMCPSandboxReadyIfLive(ctx, run.ID, row.Ordinal, mcpSandboxRef(run, row.Ordinal))
+	if err != nil {
+		_ = m.KillMCPSandbox(wctx, id)
+		_, _ = st.FailMCPSandboxIfUp(wctx, run.ID, row.Ordinal, mcpFailStateWrite)
+		s.auditMCPSandboxRestart(wctx, actorType, actor, row, "failure", mcpFailStateWrite)
+		return fmt.Errorf("%w: %w", errMCPSandboxStore, err)
+	}
+	if !ok {
+		_ = m.KillMCPSandbox(wctx, id) // the run or the row moved on after the check: what started goes
 		return errMCPRestartRunEnded
 	}
 	if s.lostCutHolds(run.ID, gen) {
-		_ = m.KillMCPSandbox(ctx, id)
-		s.endRunMCPSandboxes(ctx, run.ID, mcpEndLost)
+		_ = m.KillMCPSandbox(wctx, id)
+		s.endRunMCPSandboxes(wctx, run.ID, mcpEndLost)
 		return errMCPRestartRunEnded
 	}
-	s.auditMCPPolicyResolve(ctx, run.ID, row.Ordinal, row.ServerKey, rc.pol)
-	s.auditMCPSandboxRestart(ctx, actorType, actor, row, "success", "")
+	s.auditMCPPolicyResolve(wctx, run.ID, row.Ordinal, row.ServerKey, rc.pol)
+	s.auditMCPSandboxRestart(wctx, actorType, actor, row, "success", "")
 	return nil
 }
 

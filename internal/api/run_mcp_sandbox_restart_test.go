@@ -509,3 +509,26 @@ func TestMCPRestartOfStartingRowOrStoreError(t *testing.T) {
 		})
 	}
 }
+
+// TestMCPRestartPastItsBoundLeavesNoRestartingRow: a restart whose bound ends during the create (an image
+// pull that took it all) kills what it made and fails the row on a bound of its own, so the row does not
+// stay restarting with a container running.
+func TestMCPRestartPastItsBoundLeavesNoRestartingRow(t *testing.T) {
+	f := newMCPRestartFixture(t)
+	f.crash()
+	f.sbx.honourCtx, f.st.mcpRowsMem.honourCtx = true, true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.sbx.createFn = func(context.Context, runner.MCPSandboxSpec) error {
+		cancel() // the bound ends as the create returns
+		return nil
+	}
+	_ = f.srv.restartMCPSandbox(ctx, f.current(), "files", types.ActorSystem, "wardynd", true)
+	if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxFailed {
+		t.Fatalf("row %s (%q), want failed", row.State, row.LastCause)
+	}
+	if f.sbx.left() != 0 || !f.audit.has(f.run.ID, "run.mcp_sandbox.restart", "failure") {
+		t.Errorf("left %d, restart failure row %v: want what was made killed and the failure written", f.sbx.left(),
+			f.audit.has(f.run.ID, "run.mcp_sandbox.restart", "failure"))
+	}
+}
