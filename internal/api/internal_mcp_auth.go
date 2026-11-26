@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -52,10 +53,23 @@ func mcpSandboxRowFrom(ctx context.Context) (store.RunMCPSandbox, bool) {
 }
 
 // mcpSandboxCaller reports whether the request is an MCP proxy's. Its decisions are not the run's activity:
-// a server that polls a host must keep the run neither from idling out nor from pausing, so handlePostDecision
+// a server that polls a host must keep the run neither from idling out nor from pausing, so decisionTouch
 // asks this before shouldTouch (which takes the run's debounce slot when it answers true) and before the
 // pause's presence stamp.
 func mcpSandboxCaller(ctx context.Context) bool { return audit.MCPSandboxOf(ctx) != "" }
+
+// decisionTouch is handlePostDecision's activity step for one decision: the idle clock (TouchRun, once per
+// touchDebounce) and the pause's presence clock, neither for a run that is over. An MCP proxy's decision moves
+// neither, and is judged so ahead of shouldTouch, so it never takes the agent's debounce slot. Carved out of
+// handlePostDecision, which sits at its gocyclo gate.
+func (s *Server) decisionTouch(ctx context.Context, runID uuid.UUID, kind types.MachineKind, isOver func() bool, dl egress.DecisionLog) {
+	if s.cfg.Store != nil && !mcpSandboxCaller(ctx) && s.shouldTouch(runID, kind, dl) && !isOver() {
+		_ = s.cfg.Store.TouchRun(ctx, runID)
+	}
+	if !mcpSandboxCaller(ctx) && decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
+		s.noteAgentActive(ctx, runID)
+	}
+}
 
 // tokenAudienceHint is the aud a bearer JWT says it carries, unverified: which door verifies it, never a
 // decision. A token that is not a JWT has none.

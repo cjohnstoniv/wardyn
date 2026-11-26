@@ -91,13 +91,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
 	// decisions are kept on its trail and, as on the runner spool, are not activity.
 	kind, isOver := s.decisionRunOver(r.Context())
-	if s.cfg.Store != nil && !mcpSandboxCaller(r.Context()) && s.shouldTouch(runID, kind, dl) && !isOver() {
-		_ = s.cfg.Store.TouchRun(r.Context(), runID)
-	}
-	// The same decision moves the pause's presence clock (run_pause.go).
-	if !mcpSandboxCaller(r.Context()) && decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
-		s.noteAgentActive(r.Context(), runID)
-	}
+	s.decisionTouch(r.Context(), runID, kind, isOver, dl) // and the pause's presence clock (run_pause.go)
 
 	// A synthetic "bypass" decision is PURELY an LLM-inspection coverage signal
 	// (an opaque CONNECT to a model host that could not be inspected). Emit only
