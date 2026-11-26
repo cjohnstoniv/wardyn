@@ -383,7 +383,11 @@ What happens:
   instead. The agent has no network, but it is left running and can still change files while the pass runs. If the
   proxy can't be stopped, no pass runs.
 - On Kubernetes in server mode, no pass back runs while the agent is still running: the sandbox is stopped and the
-  run records that its changes were not brought back.
+  run records that its changes were not brought back. A pass back runs only after the agent has exited.
+- On Kubernetes, a pass back after the agent has exited reads the folder from the sandbox's main container. That
+  container sees the folder only on a volume it shares with the agent, such as the work folder (`/home/agent/work`)
+  of a run with a disk size (`disk_mib`), or a drive. Anywhere else no pass runs, and the run records why.
+- A Kubernetes runner older than 0.11.0 sends that pass to the agent's ended container, where it does not start.
 - `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
   back. Only you can do it.
 

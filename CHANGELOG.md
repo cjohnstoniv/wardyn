@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- Computer folders on Kubernetes: a **Both ways** folder now comes back from a run whose agent has exited. The copy back reads the folder from the sandbox's main container, which sees it only on a volume the two share, such as the work folder (`/home/agent/work`) of a run with a disk size, or a drive; anywhere else no copy back runs and the run records why. A Kubernetes runner needs 0.11.0 or later for this.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
