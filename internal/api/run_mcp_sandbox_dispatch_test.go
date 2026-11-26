@@ -302,8 +302,8 @@ func TestAgentSpecHoldsNoMCPSandboxSecret(t *testing.T) {
 	if spec.Image == "" {
 		t.Fatalf("no agent sandbox created (run %s)", f.state())
 	}
-	if spec.Env["AGENT_TOKEN"] != mcpAgentSecretValue {
-		t.Errorf("the agent's own secret is missing: %q", spec.Env["AGENT_TOKEN"])
+	if spec.SecretEnv["AGENT_TOKEN"] != mcpAgentSecretValue { // a resolved secret rides SecretEnv (splitSecretEnv)
+		t.Errorf("the agent's own secret is missing: %q", spec.SecretEnv["AGENT_TOKEN"])
 	}
 	for _, name := range []string{"FILES_TOKEN", "FILES_ROOT"} {
 		if _, ok := spec.Env[name]; ok {
