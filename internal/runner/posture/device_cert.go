@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/devicecert"
@@ -47,6 +48,9 @@ type DeviceCertSender struct {
 	mu       sync.Mutex
 	watching *runnerwire.Peer
 	refused  *runnerwire.Peer
+	// wanted is whether the organisation asked for the identities on this connect (SetWanted). False until told, so
+	// a runner whose organisation never says reads no keychain.
+	wanted atomic.Bool
 }
 
 // NewDeviceCertSender returns the sender that runs the wardyn-macvm helper at helperPath, or nil when there is
@@ -71,10 +75,19 @@ func (s *DeviceCertSender) refusedFor(peer *runnerwire.Peer) bool {
 	return s.refused == peer
 }
 
-// Send runs the helper and reports its proofs on peer, waiting for the organisation's answer. An organisation
-// that refuses the event for good is not asked again on this session.
+// SetWanted is runnerwire.RunnerHooks.DeviceCert, told on every connect whether the organisation has an MDM device
+// CA set; Send runs the helper only while it says so. A runner with no helper has a nil sender, which ignores it.
+func (s *DeviceCertSender) SetWanted(on bool) {
+	if s != nil {
+		s.wanted.Store(on)
+	}
+}
+
+// Send runs the helper and reports its proofs on peer, waiting for the organisation's answer. It does nothing until
+// the organisation asks for the identities (SetWanted), so with no MDM device CA set the keychain is never read. An
+// organisation that refuses the event for good is not asked again on this session.
 func (s *DeviceCertSender) Send(ctx context.Context, peer *runnerwire.Peer) error {
-	if s.refusedFor(peer) {
+	if !s.wanted.Load() || s.refusedFor(peer) {
 		return nil
 	}
 	hctx, cancel := context.WithTimeout(ctx, deviceHelperTimeout)
@@ -133,8 +146,8 @@ func chainBytes(chain [][]byte) int {
 }
 
 // Watch presents the identities at once, then again every interval, until peer ends or the organisation refuses
-// the event. It runs on its own goroutine after the session is online, so a helper that waits on the keychain
-// never delays the runner's READY.
+// the event; each time, Send runs the helper only while the organisation asks (SetWanted). It runs on its own
+// goroutine after the session is online, so a helper that waits on the keychain never delays the runner's READY.
 func (s *DeviceCertSender) Watch(peer *runnerwire.Peer) {
 	s.mu.Lock()
 	if s.watching == peer {

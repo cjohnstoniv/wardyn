@@ -66,6 +66,10 @@ type (
 		// StreamWindowLarge. 0 or absent (an older organisation, or a runner that offered none) means
 		// StreamWindow and ConnWindow; an older runner ignores the field.
 		StreamWindow uint32 `json:"stream_window,omitempty"`
+		// DeviceCert says the organisation has an MDM device CA set, so a Mac runner presents its MDM device
+		// identities (EventDeviceCert). Re-sent on every connect; absent or false (no CA, or an older
+		// organisation) means the runner reads no keychain; an older runner ignores it.
+		DeviceCert bool `json:"device_cert,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {

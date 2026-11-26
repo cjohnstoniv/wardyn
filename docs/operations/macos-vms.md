@@ -143,11 +143,24 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 - Serve the CRL over https. Over http, a control plane that has just started takes any unexpired CRL signed by your CA as its first.
 - It fails closed. A CRL that cannot be fetched is used until its next-update time or 24 hours after the last good fetch, whichever comes first. Then every Mac is refused until a fetch succeeds.
 - After a failed fetch the control plane retries after 1 minute, doubling to 10 minutes. The refusal names the cause: `timeout`, `network`, `status`, `size`, `redirect`, `parse`, `signature`, `unsupported`, `expired` or `older`.
-- The macOS runner presents the device identities your MDM installed in the System keychain when it connects and every 6 hours. This has not yet been tried on a real Mac.
+- The macOS runner presents the device identities your MDM installed in the System keychain while a CA is set: when it connects and every 6 hours. A Mac that connects while no CA is set never reads the keychain. This has not yet been tried on a real Mac.
+- Setting a CA where none was set, or clearing it, ends each connected Mac runner's session once, within one 15-second ping interval. The runner reconnects with the new setting, and its running sandboxes keep running; a terminal open to one of them is disconnected.
+- Replacing one CA with another ends no session. Each Mac presents again at its next 6-hourly report or reconnect; until then, a Mac whose stored certificate is from the old CA is refused.
+- A runner on 0.11.0-rc.2 or 0.11.0-rc.3 reads the keychain whether or not a CA is set. A newer runner presents nothing to an organisation on 0.11.0-rc.3 or earlier.
 - The trust class is still set by a security operator; a valid certificate is a further requirement, never a way to become `managed_device`.
 - Limits: a running sandbox is not stopped when its certificate is later revoked, and the device proves it holds the key when it reports, not at each run.
 - The proof shows that a runner key was on a Mac holding the MDM identity when it reported. Root on a managed Mac that copies another runner's key there can present for that runner.
 - Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
+
+#### On a managed fleet
+
+- The package runs the runner as the person signed in to the Mac, as a LaunchAgent; this release has no root LaunchDaemon form. The VM helper looks for the device identity in the System keychain.
+- With 0.11.0-rc.3, the VM helper's search of the System keychain, run as that person, showed a prompt for an administrator's name and password. A standard user cannot answer it, and denying it leaves the Mac presenting no certificate.
+- Apple's SCEP, ACME and PKCS12 certificate payloads have no setting that lets one named program use the identity's private key. Their one access setting, `AllowAllAppsAccess`, lets every app on the Mac use it.
+- With `AllowAllAppsAccess`, any program on the Mac, not only root, can make the proof for another runner's key, so that runner can present this Mac's certificate.
+- A hardware-bound ACME identity is kept in a keychain that third-party programs cannot use, so the runner cannot present it.
+- Until the release is signed with a Developer ID, the VM helper is signed ad hoc. An ad hoc signature identifies one build only, so a keychain access rule written for it stops matching at the next release.
+- Not yet tried on a real Mac: whether `AllowAllAppsAccess` removes the prompt for the runner, and whether running the helper as root would. Until it is, once a CA is set, a Mac whose person cannot answer the prompt has its macOS sandboxes refused.
 
 ## Apple's licence and the two-VM limit
 

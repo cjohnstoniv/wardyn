@@ -46,7 +46,7 @@ func TestHubLimitsRecheckEndsOnlyTheSessionItServed(t *testing.T) {
 			s.perRun.Store(&perRunLimits{cpuMillis: 2000, memoryMiB: 4096})
 			hub.sessions[row.ID] = s
 
-			hub.recheckRow(t.Context(), row.ID, s, served, row, false, false)
+			hub.recheckRow(t.Context(), row.ID, s, served, row, false, false, nil)
 
 			if got := !current.Online(); got != !reconnected {
 				t.Errorf("current session ended = %v, want %v", got, !reconnected)
