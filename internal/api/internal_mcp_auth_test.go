@@ -234,6 +234,9 @@ func TestMCPTokenRefusedOnRunRoutes(t *testing.T) {
 		t.Errorf("the MCP door serves %d routes, want exactly the %d listed", len(mcpSandboxRoutes), len(five))
 	}
 	f := newMCPAuthFixture(t)
+	// With no provider sending identity, gatewayMintOffGate answers the mint path as one no route holds, before
+	// any door: the walk turns identity on so that path reaches its door too.
+	testGatewayIdentityOn(f.srv)
 	routes := map[string]bool{}
 	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if strings.Contains(route, "/internal/") {
@@ -918,8 +921,9 @@ func TestInternalTokenUnchangedByMCPAuth(t *testing.T) {
 	} {
 		routed := do(t, h.srv, http.MethodPost, c.path, tok, c.body)
 		alone := direct(c.handler, http.MethodPost, c.path, c.body)
-		if routed.Code != alone.Code || reasonOf(t, routed) != reasonOf(t, alone) {
-			t.Errorf("%s: routed %d %q, internalAuth alone %d %q", c.name, routed.Code, reasonOf(t, routed), alone.Code, reasonOf(t, alone))
+		// errorReasonOf, not reasonOf: a decision taken is a 202 with no body.
+		if r, a := errorReasonOf(routed.Body.String()), errorReasonOf(alone.Body.String()); routed.Code != alone.Code || r != a {
+			t.Errorf("%s: routed %d %q, internalAuth alone %d %q", c.name, routed.Code, r, alone.Code, a)
 		}
 	}
 	// A fresh server, so the earlier refusals have not spent the auth.fail limiter's burst of five.
