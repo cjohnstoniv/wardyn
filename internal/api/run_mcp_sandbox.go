@@ -720,7 +720,7 @@ func (s *Server) createRunMCPSandboxes(ctx, createCtx context.Context, run types
 		if ok, err := st.RecordMCPSandboxCreated(ctx, run.ID, srv.ordinal, store.MCPSandboxCreated{RelayAddr: sb.RelayAddr,
 			PolicyDigest: row.PolicyDigest, ProxyConfigSealed: built.sealed}); err != nil || !ok {
 			// A kill or a person's Stop may have ended the row between the insert and the create; its kill
-			// found nothing then, and the deferred end skips a stopped row, so this kill is the one that removes it.
+			// found nothing then, so this kill removes the sandbox now rather than leaving it to the deferred end.
 			_ = m.KillMCPSandbox(ctx, built.spec.ID)
 			return fail(mcpFailStateWrite, "the MCP server "+srv.key+" could not be recorded") // PROPOSED
 		}
