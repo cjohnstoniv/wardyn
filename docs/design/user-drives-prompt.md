@@ -888,6 +888,7 @@ SUPER only.
 | `NR_PAUSED` | Your drive is paused by your admin. |
 | `NR_DENIED(profile)` | Your governance profile "{profile}" does not allow mounting a drive. |
 | `NR_UNAVAILABLE` | Your drive couldn't be checked, so it stays unmounted for this run. Try again, or ask an admin. |
+| `NR_DELETING` | This drive is still being deleted, so it can't be added to a run. Wardyn retries on its own, and you can try again a minute after its last try. |
 | `NR_GOVERNANCE_UNAVAILABLE` | Your governance profile couldn't be resolved, so your drive stays unmounted for this run — sign in again. |
 | `GS_DRIVE_CHIP(name, size, mode)` | Drive · {name}, {size}, {mode} |
 | `GS_DRIVE_CHIP_NOSIZE(name, mode)` | Drive · {name}, {mode} |

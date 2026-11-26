@@ -97,4 +97,7 @@ const (
 	// MeDriveUnavailableBoundElsewhere: the pool holds only the caller's own runners, and the drive's second
 	// place is bound to a runner it does not hold.
 	MeDriveUnavailableBoundElsewhere = "bound_elsewhere"
+	// MeDriveUnavailableDeleting: the caller's own drive whose delete has not finished. It is never attachable; the
+	// server retries the delete, and DELETE /me/drives/{id} tries again a minute after its last try.
+	MeDriveUnavailableDeleting = "deleting"
 )

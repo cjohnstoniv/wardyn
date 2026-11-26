@@ -385,6 +385,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CREATE_UNSUPPORTED` | pending (W-17) | This server can't create drives. |
 | `CREATE_NO_DELETE` | pending (W-17) | This server can't delete drives, so it can't create them. |
 | `DELETE_DRIVE` | pending (W-17) | Delete drive |
+| `DELETE_DRIVE_AGAIN` | pending (W-17) | Delete again |
 | `DELETE_CONFIRM(name)` | pending (W-17) | Delete {name}? Its files are deleted and can't be recovered. |
 | `DELETE_CONFIRM_TEAM(name)` | pending (W-17) | Delete {name}? Its files are deleted and can't be recovered. Everyone in its governance unit, and in the units below it, loses the folder too. |
 | `DRIVE_DELETED(name)` | pending (W-17) | {name} deleted. |

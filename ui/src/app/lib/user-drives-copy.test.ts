@@ -74,8 +74,8 @@ const EXCLUDED = [...PLURALISED, ...SIZE_HELPERS];
 const RENDERABLE = [...doc.keys()].filter((k) => !EXCLUDED.includes(k));
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 191 frozen keys in the doc", () => {
-    expect(doc.size).toBe(191);
+  it("finds all 192 frozen keys in the doc", () => {
+    expect(doc.size).toBe(192);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
