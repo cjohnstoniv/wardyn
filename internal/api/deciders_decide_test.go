@@ -476,6 +476,8 @@ func decidersMDCases() []mdCase {
 			setup: func(f *dcFix) { f.st.rulesErr = errDecidersTest }, cookie: owner, ctx: ownerCtx},
 		{name: "rules unreadable: security", rule: egress(types.DeciderOwner), kind: types.DeciderKindEgressDomain,
 			setup: func(f *dcFix) { f.st.rulesErr = errDecidersTest }, cookie: sec, ctx: secCtx},
+		{name: "rules unreadable: security on their own run", rule: egress(types.DeciderOwner), kind: types.DeciderKindEgressDomain,
+			setup: func(f *dcFix) { f.run.CreatedBy = dcSec; f.st.rulesErr = errDecidersTest }, cookie: sec, ctx: secCtx},
 	}
 	var out []mdCase
 	for _, r := range rows {

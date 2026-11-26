@@ -37,8 +37,9 @@ type healthzProbeCache struct {
 
 // healthzProbeFor returns a probe whose read started less than cfg.HealthzProbeTTL ago, reading a new one when there
 // is none. mu is held across the read, so one read runs at a time and a burst of polls costs one. Nothing is served
-// past the TTL except to a caller that waited for the read itself: when the store hangs, the next read hangs too and the probe fails as it would with no cache. A read
-// whose request ended is not kept, since what it returned may be partial. A zero TTL reads every time.
+// past the TTL except to a caller that waited for the read itself: a store that stops answering is read again on the
+// next probe, each read within its own bound (healthzStoreReadTimeout, sensorBeatReadTimeout). A read whose request
+// ended is not kept, since what it returned may be partial. A zero TTL reads every time.
 func (s *Server) healthzProbeFor(ctx context.Context) healthzProbe {
 	ttl := s.cfg.HealthzProbeTTL
 	if ttl <= 0 {

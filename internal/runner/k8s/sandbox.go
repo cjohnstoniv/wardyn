@@ -481,6 +481,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ProxyConfig.NoNetwork {
 		sb.NoNetworkProxyOnly = cmp.Or(proxyOnly, noNetworkPodEnforced)
 	}
+	sb.Where = d.agentPodWhere(ctx, ns, spec.RunID, runtimeClassName, runtimeHandler)
 	return sb, nil
 }
 

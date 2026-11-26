@@ -176,6 +176,16 @@
 - A runs namespace cannot be shared: the foreign-object check refuses one holding another runner's objects.
 - A `kubernetes.io/arch` in `k8s.sandbox.nodeSelector` of another architecture refuses boot. A node affinity that excludes the architecture is not checked: the pods stay `Pending` instead.
 
+## An isolated pool for barrier runs
+
+- Taint and label the pool's nodes, for example `isolated=true:NoSchedule` and `pool=isolated`. Put the matching toleration and node selector in the RuntimeClass's `scheduling`, and pin it with `k8s.runtimeClasses.CC3` (or `CC2`). Kubernetes adds both to pods of that class (agent and warm pool pods) only.
+- The taint is what keeps other pods off the pool. Wardyn cannot add it, so setup status warns when a pool node has none. Leave the pool's toleration and selector out of `k8s.sandbox.*`: the proxy, the canary and CC1 runs use that placement.
+- Runnerd refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. A class with no `scheduling` boots with a setup warning.
+- A class meant for every node needs no `scheduling`, or a selector every node carries, such as `kubernetes.io/os: linux`. Wardyn reads the RuntimeClasses when the runner starts: restart it after you create or change one.
+- `sandbox.arch` adds `kubernetes.io/arch` to every pod. A RuntimeClass that selects another architecture is refused at boot. Runner affinity and a run's own architecture are not judged at boot; a pod they exclude fails at the start-time limit.
+- The fit warning and the start-time limit judge the agent pod with the RuntimeClass's selector, tolerations and overhead. A CC3 pod that no pool node can take fails at the start limit. It is never placed elsewhere. A queued run is judged on the general nodes when it is promoted.
+- The NetworkPolicy canary runs on the general nodes. It does not prove enforcement inside a Kata guest, so check egress from a CC3 run on the pool yourself.
+
 ## Several runs namespaces
 
 - One runner can place runs in several runs namespaces, so a pool for each team keeps its runs in the team's own namespace. The first namespace, `runsNamespace`, is the runner's default.
@@ -325,6 +335,8 @@ An upgraded runner retries a held stop when it reconnects, from its own reads of
 ## What the kind conformance run proves
 
 `scripts/k6-kind-conformance.sh` (`WARDYN_TEST_K8S=1`) is the proof.
+
+A separate run, `scripts/test-kind-kata-place.sh` (`WARDYN_TEST_K8S=1`), taints and labels one worker as an isolated pool and shows a CC3 agent pod lands there while its proxy and a CC1 run do not. It is run by hand, not in the nightly workflow.
 
 - It builds a kind cluster of one control plane and two workers on Calico, and installs this chart with its rendered Role against a fake organisation.
 - It runs [`test/k6`](../../test/k6/k6_test.go) under runnerd's own ServiceAccount token, never cluster-admin.

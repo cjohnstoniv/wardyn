@@ -719,6 +719,70 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 	}
 }
 
+// TestClaudeAgentRun_BootSeedWaitsForTheHeldRelease — the property the held seed exists for, through the real
+// boot pane: with the server's hold on, the seed arrives as WARDYN_HELD_SEED, prep is done and the idle
+// process is alive, yet nothing starts until the release marker is written. It pins the release wait at the
+// end of boot_seed_wait_for_prep; the unit tests in held_seed_boot_test.go call boot_seed_wait_for_release
+// directly and would stay green without that line.
+func TestClaudeAgentRun_BootSeedWaitsForTheHeldRelease(t *testing.T) {
+	root := t.TempDir()
+	home, binDir := filepath.Join(root, "home"), filepath.Join(root, "bin")
+	work := filepath.Join(home, "work", "repo")
+	for _, d := range []string{filepath.Join(home, ".wardyn"), binDir, work} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\necho started >> \"$HOME/claude.log\"\n"), 0o700); err != nil { //nolint:gosec // test fixture
+		t.Fatalf("write fake claude: %v", err)
+	}
+	for name, body := range map[string]string{"workdir": work + "\n", "prep-done": ""} {
+		if err := os.WriteFile(filepath.Join(home, ".wardyn", name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	cmd := exec.Command("timeout", "20s", "bash", ccRunnableAgentRun(t), "--boot-seed")
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"WARDYN_INTERACTIVE_START=agent",
+		"WARDYN_INTERACTIVE_SEED=",
+		"WARDYN_HELD_SEED=say hello in five words",
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"WARDYN_RECORDING=",
+		"WARDYN_GIT_HELPER_SECRET=",
+		// Alive and the same uid, as in TestClaudeAgentRun_BootSeedWaitsForPrep.
+		"WARDYN_IDLE_PID="+strconv.Itoa(os.Getpid()),
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start agent-run --boot-seed: %v", err)
+	}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-done
+	})
+
+	claudeLog := filepath.Join(home, "claude.log")
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := os.Stat(claudeLog); err == nil {
+		t.Fatal("the boot pane started the seed before the release marker — a task would run before the network policy is confirmed")
+	}
+	if err := os.WriteFile(filepath.Join(home, ".wardyn", "seed-release"), nil, 0o600); err != nil {
+		t.Fatalf("write seed-release: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the boot pane did not go on within 10 s of the release marker")
+	}
+	if got := ccRead(t, claudeLog); !strings.Contains(got, "started") {
+		t.Errorf("the seed never started after the release marker\nclaude log:\n%s", got)
+	}
+}
+
 // ccShellConst reads a single-quoted shell constant out of the SHARED library,
 // so every assertion below goes through the ONE definition rather than a second
 // copy of the prose. It lives there rather than in claude-code's agent-run

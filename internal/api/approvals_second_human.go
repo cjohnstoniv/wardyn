@@ -75,9 +75,12 @@ func secondHumanGate(ap types.ApprovalRequest) (name string, on bool) {
 
 // secondHumanGateUnder is secondHumanGate with the unit deciders rule that governs ap: the gate is on when the
 // switch is or when the rule states second_human, never weaker. A switch that is on keeps its own name; a rule
-// alone reads as deciderSwitchName.
+// alone reads as deciderSwitchName, and rules that could not be read as "unit deciders (unreadable)".
 func secondHumanGateUnder(ap types.ApprovalRequest, dv deciderVerdict) (name string, on bool) {
 	name, on = secondHumanGate(ap)
+	if !on && dv.unreadable {
+		return "unit deciders (unreadable)", true
+	}
 	if !on && dv.secondHuman() {
 		return deciderSwitchName(dv.unit), true
 	}

@@ -245,6 +245,12 @@ type Driver struct {
 	dynamic dynamic.Interface
 	// placement is cfg.SandboxPlacement, parsed and validated once at construction.
 	placement Placement
+	// untaintedPools are the pinned classes whose nodes the runner's own placement may also use (boot's
+	// readUntaintedPools); Classes reports them for the setup status. Set once at boot.
+	untaintedPools []types.ConfinementClass
+	// anyNodeClasses are the pinned classes whose RuntimeClass sets no scheduling, so their pods run on any
+	// node with the runtime (boot's checkClassPlacement); Classes reports them for the setup status.
+	anyNodeClasses []types.ConfinementClass
 	// nodeCache is the last node list, shared by every fit check (fit_nodes.go).
 	nodeCache nodeCache
 
@@ -405,6 +411,12 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 		}
 	}
 	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, dynamic: dyn, placement: placement, apiserverHostPort: hostPort, now: time.Now}
+	selectors, anyNode, err := d.checkClassPlacement(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.untaintedPools = d.readUntaintedPools(ctx, selectors)
+	d.anyNodeClasses = anyNode
 
 	// The canary runs in every namespace: each is where some run's NetworkPolicies must hold.
 	// NetworkPolicy reads as enforced only when every namespace proved it.
@@ -516,6 +528,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		NetworkPolicyAcknowledged: netPol.acknowledged(),
 		// The live verdict for health, with the time of the check that produced it.
 		NetworkPolicyCheck: d.netPolCheck(),
+		UntaintedPools:     d.untaintedPools,
+		AnyNodeClasses:     d.anyNodeClasses,
 		// Exec (exec.go's recordCmd) wraps the ephemeral-container argv with
 		// wardyn-rec via the masked brokered proxy upload — the only path
 		// this substrate supports, since mounts (and shared-volume delivery)

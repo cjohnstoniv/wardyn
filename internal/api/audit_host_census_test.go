@@ -118,6 +118,7 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"run.requirement.inject":         {[]string{"injected_hosts"}, keepEgress},
 	"run.requirement.skip":           {[]string{"host", "hosts"}, keepEgress},
 	"run.revive":                     {[]string{"dropped_injection_hosts"}, keepEgress},
+	"run.sandbox.start":              {[]string{"node"}, "the node a run's agent pod was scheduled on; any signed-in caller already sees node names on /healthz"},
 	"run.secret_placeholder.resolve": {[]string{"host"}, keepEgress},
 	"run.seed":                       {[]string{"remote_dir"}, keepSandbox},
 	"run.seed.hold":                  {[]string{"remote_dir"}, keepSandbox},

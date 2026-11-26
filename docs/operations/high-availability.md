@@ -70,13 +70,15 @@
 
 | Endpoint | Probe | Reports | Fails when |
 |---|---|---|---|
-| `/healthz` | Liveness, startup and, by default, readiness. Liveness checks every 10 seconds and restarts the container after 3 failures; readiness marks the pod not ready after 3 failures | `status: ok`, the version, the sign-in options, the runner, the confinement classes and the eBPF sensor's verdict. A signed-in caller also gets the substrates and the components. An unreadable Postgres only leaves out the sign-in help text | The process does not answer within the probe's limit, 3 seconds or 1 for the startup probe: it is down, still starting, or held by a Postgres that stops answering ([`healthz.go`](../../internal/api/healthz.go)) |
+| `/healthz` | Liveness, startup and, by default, readiness. Liveness checks every 10 seconds and restarts the container after 3 failures; readiness marks the pod not ready after 3 failures | `status: ok`, the version, the sign-in options, the runner, the confinement classes and the eBPF sensor's verdict. A signed-in caller also gets the substrates and the components. An unreadable or slow Postgres leaves out the sign-in help text | The process does not answer within the probe's limit, 3 seconds or 1 for the startup probe: it is down or still starting ([`healthz.go`](../../internal/api/healthz.go)) |
 | `/readyz` | Readiness where `readinessProbe.path` is `/readyz`, every 10 seconds, not ready after 3 failures. The console polls it for its database banner | A Postgres ping with a 3-second limit. `200` with `{"status":"ok"}`, or `503` with `{"status":"error","postgres":"unreachable"}` | Postgres does not answer. Where readiness reads it, the pod leaves the Service, so with one replica the Service has no ready pod ([`security_headers.go`](../../internal/api/security_headers.go) `handleReadyz`) |
 
 - `/readyz` does not cover the sandbox runner. A runner fault shows on `wardyn_runner_up` and the `substrate_health` row of `/setup/status` instead ([Monitoring](monitoring.md#substrate-and-sweep-health)).
-- A Postgres that refuses connections does not restart the pod, because `/healthz` still answers.
-- A Postgres that stops answering can hold `/healthz` past the probe's 3-second limit, since its site settings read, which every probe makes, has no time limit of its own. After 3 such probes, liveness restarts the container.
-- With the chart's default readiness, a Postgres that refuses connections leaves the pod Ready, so the console stays reachable and shows its database banner.
+- A Postgres that refuses connections or stops answering does not restart the pod, because `/healthz` still answers.
+- `/healthz` gives up each of its Postgres reads after half a second. Against a Postgres that stops answering, it answers in about 1.5 seconds at worst, inside the 3-second limit. That is longer than the startup probe's 1 second, so a Postgres that stops answering before startup passes still fails startup.
+- A sensor read given up reads as unreadable. A site-settings read given up drops the help text.
+- The connections those reads gave up are dropped, and the pool opens new ones when Postgres answers again, so the server carries on without a restart.
+- With the chart's default readiness, a Postgres that refuses connections or stops answering leaves the pod Ready, so the console stays reachable and shows its database banner.
 - With two or more replicas and the default readiness, a replica that alone loses Postgres stays in the Service, and its requests that need the database fail.
 - `readinessProbe.path: /readyz` takes only that replica out instead. When every replica loses Postgres, the Service then has no ready pod, and the console is unreachable.
 

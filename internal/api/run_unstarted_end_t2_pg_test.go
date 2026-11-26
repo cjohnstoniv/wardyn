@@ -268,7 +268,7 @@ func t2Exec(t *testing.T, f *residentFix, stmts ...string) {
 }
 
 // t2Returns are the ways a dispatch ends before or at its create, by the return that ends it. Each of the first
-// eleven fails the run before the Mac was asked to create a sandbox, so a macOS VM run's end claims the drive it
+// ten fails the run before the Mac was asked to create a sandbox, so a macOS VM run's end claims the drive it
 // kept; the last two keep it (a failed create that was asked for, and a failure before the marker is installed).
 var t2Returns = []t2Dispatch{
 	{name: "keptMachineAtDispatch refuses the run's machine", claims: true, hint: keptMachineNotFoundMsg("gone"),
@@ -312,10 +312,6 @@ var t2Returns = []t2Dispatch{
 	{name: "the lease is refused before the create is asked for", claims: true, hint: errRunnerContained.Error(),
 		arrange: func(t *testing.T, f *residentFix, run types.AgentRun, _ *dispatchParams) {
 			t2Exec(t, f, `INSERT INTO run_containment_pending (run_id, runner_id, kind, since) VALUES ('`+run.ID.String()+`', '`+f.rn.ID.String()+`', 'agent_only', now())`)
-		}},
-	{name: "the start-after-readback hold refuses the boot seed before the create", claims: true, hint: startAfterReadbackSeedHint,
-		arrange: func(_ *testing.T, f *residentFix, _ types.AgentRun, _ *dispatchParams) {
-			f.srv.cfg.StartAfterReadback = true
 		}},
 	{name: "recording is required and the recording store is off", claims: true, hint: runnerpool.RecordingStoreOffMsg(),
 		arrange: func(t *testing.T, f *residentFix, _ types.AgentRun, _ *dispatchParams) {

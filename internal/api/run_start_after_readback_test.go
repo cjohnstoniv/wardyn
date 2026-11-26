@@ -157,26 +157,6 @@ func TestStartAfterReadback_LegacyStartFails(t *testing.T) {
 	}
 }
 
-// On: an interactive run with a task, whose sandbox would start the agent as it boots, is refused
-// before any create.
-func TestStartAfterReadback_BootSeedRefusedBeforeCreate(t *testing.T) {
-	d, _ := newStartGate(t, hashHex([]byte("bytes")), true)
-	d.srv.dispatchRun(context.Background(), d.run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
-		RunToken: d.token, Image: "wardyn/claude-code:latest", Interactive: true,
-		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
-	})
-	d.rn.fakeRunner.mu.Lock()
-	creates := d.rn.fakeRunner.createCalls
-	d.rn.fakeRunner.mu.Unlock()
-	if creates != 0 {
-		t.Fatalf("creates = %d, want 0", creates)
-	}
-	if got := d.st.State(); got != types.RunFailed {
-		t.Fatalf("run state = %s, want FAILED", got)
-	}
-	d.wantCreateFailure(t, "boot_seed_before_readback")
-}
-
 // wantCreateFailure asserts the run's run.create failure row: reason policy_unconfirmed, readback why.
 func (d *dispatchReadback) wantCreateFailure(t *testing.T, why string) {
 	t.Helper()

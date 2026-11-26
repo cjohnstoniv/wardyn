@@ -79,6 +79,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A runner and the organisation now agree a larger per-stream window on the runner link (4 MiB instead of 256 KiB), so a long-distance link relays faster; each side holds at most 16 MiB (four streams' worth) of unread data per runner, up from 4 MiB. An older runner or organisation keeps the old window (#4070).
 - `WARDYN_RUN_HISTORY_RETENTION_DAYS` (default `0`, keep forever) deletes runs that ended more than N days ago (at least 30), with their approvals and model usage; audit rows stay, and runs that held push or MCP evidence are kept. Runs dispatched to an enrolled runner since 0.9.3 are kept too (their output watermark holds them), so on an install whose runs go to runners it deletes only server-local runs. Each sweep that deleted anything writes a `run.retention.sweep` audit row (#4068).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `run_history_tombstones` to every role that was granted UPDATE on the runs table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then the unit admins' audit view, the device audit ingest and erasing a person's recordings fail.
+- A run on Kubernetes writes a `run.sandbox.start` audit row when its sandbox is created, naming the node it was scheduled on and the RuntimeClass and handler it runs under. It is written before the policy readback, so a start that then fails still says where it ran. A runner older than this release writes no such row.
+- Setup status warns when a CC2 or CC3 RuntimeClass's nodes carry no taint it tolerates, so other pods can land on them. It also warns when the RuntimeClass sets no scheduling: its sandboxes can then run on any node with the runtime.
 
 ### Changed
 
@@ -89,10 +91,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An open run page reads only its newest audit rows on each refresh, and reads its recording lists again only when a new recording row appears. Each audit read for one run skips the months of the audit log from before the run was created.
 - Between its once-a-minute full read, the Runs board reads only the live runs and the runs that ended in the last few minutes, and keeps the older ended runs it already shows. A change to a run that ended earlier, such as a new title, shows within a minute.
 - With the SSH gateway off, `wardyn run forward` asks for a forward ticket for each connection, so it no longer counts against the run's terminal sessions.
+- With `WARDYN_START_AFTER_READBACK=on`, an interactive run with a task is no longer refused. Its starting prompt or startup command waits in the sandbox until the run's proxy confirms its policy, then starts, so an application can be served with the setting on. This needs a Wardyn agent image from 0.11.0 or later; with an older image the run fails with its sandbox stopped and a hint to rebuild it. An interactive VM run with a task is still refused.
+- Kubernetes: the fit warning and the start-time limit now judge a barrier run's agent pod with its RuntimeClass's scheduling and overhead.
 
 ### Fixed
 
 - A web or local terminal displaced while it was still opening, for example when the run's owner joins while a helper's terminal connects, now closes with code 1008 and the reason instead of a plain close (#4206).
+- While a unit's deciders cannot be read, a security admin or the admin token now decides a hold once at most, and a security admin never decides one on their own run. The decision's audit row says the deciders could not be read. Before, no rule applied until they could be read again, so a hold a rule allowed only once could be decided for the whole run.
+- A database that stops answering no longer gets the server's pod restarted by its liveness probe. `/healthz` gives up each of its database reads after half a second and still answers: it leaves out the sign-in help text and says the eBPF sensor's health could not be read. When the database answers again, the server carries on without a restart.
+- Computer folders on Kubernetes: a **Both ways** folder now comes back from a run whose agent has exited. The copy back reads the folder from the sandbox's main container, which sees it only on a volume the two share, such as the work folder (`/home/agent/work`) of a run with a disk size, or a drive; anywhere else no copy back runs and the run records why. A Kubernetes runner needs 0.11.0 or later for this.
 
 ### Before you upgrade
 
@@ -105,6 +112,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
 - With the image builder on, the first pass after the upgrade removes reusable custom-image wraps (`wardyn-byoi/reuse:<key>`) built more than a week ago that no run has been started on for a week.
 - Migration `0400_run_history_tombstones` adds a table, grants the app role (every role granted `UPDATE` on `agent_runs`) `SELECT, INSERT, UPDATE` on it, and changes no row. On a split-role install, grant the app role `DELETE` on `agent_runs` before you set `WARDYN_RUN_HISTORY_RETENTION_DAYS`.
+- Kubernetes: Wardyn now refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. Before upgrading, add the selector and remove from `k8s.sandbox.tolerations` any toleration the RuntimeClass already carries; the 0.10.4 Kata recipe put one there.
 
 ## [0.11.0-rc.3] — 2026-11-25
 

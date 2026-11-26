@@ -49,8 +49,10 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool        `json:"-"`
-	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
+	ExecOutputUncaptured bool                     `json:"-"`
+	NetworkPolicyCheck   NetPolCheck              `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
+	UntaintedPools       []types.ConfinementClass `json:"-"`                             // k8s: pinned classes whose RuntimeClass nodes the runner's own placement may also use, read at boot
+	AnyNodeClasses       []types.ConfinementClass `json:"-"`                             // k8s: pinned classes whose RuntimeClass sets no scheduling, so their pods run on any node with the runtime, read at boot
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -304,6 +306,9 @@ type Resources struct {
 	// (ProxyLimitsFor). Only FitChecker.CheckFit reads it, in-process; the sandbox create reads
 	// ProxyConfig.AzureGates, so it never rides the runner wire.
 	ProxyAzure bool `json:"-"`
+	// ConfinementClass is the class whose RuntimeClass the agent pod runs under: the k8s fit judges the pod
+	// with that class's scheduling and overhead. In-process only, like ProxyAzure; never on the runner wire.
+	ConfinementClass types.ConfinementClass `json:"-"`
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).
@@ -377,6 +382,10 @@ type ExecSpec struct {
 	// corrupted by interleaved stderr without one.
 	TTY        bool
 	Cols, Rows uint16 // initial PTY window size (TTY only); zero => implementation default
+	// AgentDir, when set, says the exec reads and writes only under this folder of the agent's. Kubernetes then runs
+	// it in the pod's main container once the agent's own container has ended (ErrAgentDirUnshared when the folder is
+	// on no volume the two share); other substrates ignore it.
+	AgentDir string `json:",omitempty"`
 }
 
 // ExecSession is a live, bidirectional stream into ONE exec started by
@@ -440,7 +449,8 @@ type Sandbox struct {
 	// when its namespace's NetworkPolicy is proven enforced; otherwise why not ("netpol_not_enforced" and
 	// "netpol_ambient_acknowledged", which only an override admits, or "netpol_not_proven").
 	// Empty for any other run, and from a driver or runner that predates it.
-	NoNetworkProxyOnly string `json:",omitempty"`
+	NoNetworkProxyOnly string        `json:",omitempty"`
+	Where              *SandboxWhere `json:",omitempty"` // where it runs (sandbox_where.go); nil from other drivers and older runners
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link

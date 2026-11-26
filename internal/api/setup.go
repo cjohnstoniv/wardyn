@@ -252,6 +252,10 @@ type SetupRunner struct {
 	// netpolCheckedAt is when the k8s canary check that produced the verdict
 	// ran, for the egress-containment row. Never on the wire.
 	netpolCheckedAt time.Time
+	// untaintedPools are the in-process substrate's classes whose pool general pods can reach. Never on the wire.
+	untaintedPools []types.ConfinementClass
+	// anyNodeClasses are the in-process substrate's classes whose RuntimeClass sets no scheduling. Never on the wire.
+	anyNodeClasses []types.ConfinementClass
 }
 
 // SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
@@ -385,6 +389,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.runnerArchImagesRow(ctx); ok {
 			checks = append(checks, chk)
 		}
+		// k8s_isolated_pool and k8s_class_any_node: where barrier pods and general pods can share nodes. Never Blocking.
+		checks = append(checks, s.classPoolRows(ctx, rnr.untaintedPools, rnr.anyNodeClasses)...)
 		// self_host_runner_grant and defaults_changed: what an upgrade changed on this deployment's own
 		// configuration. Never Blocking. Both need the site config; a failed read leaves them out.
 		if siteCfgOK {
@@ -720,6 +726,8 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 	if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
 		out.netpolCheckedAt = c.NetworkPolicyCheck.At
 	}
+	out.untaintedPools = c.UntaintedPools
+	out.anyNodeClasses = c.AnyNodeClasses
 	return out, k8sNetpolVerdict(out.Driver, c)
 }
 

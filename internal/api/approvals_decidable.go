@@ -251,9 +251,14 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 // requireSecondHuman's own doc), and otherwise it refuses only when the
 // asking principal IS the run's own creator, or sponsors the service identity that created it.
 func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, run types.AgentRun) bool {
-	// A rule that cannot be read is no rule here: decidableKindAndOwner already refused a member for it, and a
-	// security caller decides as without deciders (deciderForDecide).
+	// A rule that cannot be read refuses a member in decidableKindAndOwner; a security caller then needs a second
+	// person, as deciderForDecide requires of a kind a rule can name.
+	r = withDeciderMemo(r) // one read answers both the rule and whether it could be read
 	v, _ := s.governingRule(r.Context(), ap, run)
+	if deciderKindOf(ap) != "" {
+		_, terr := s.deciderTree(r.Context())
+		v.unreadable = terr != nil
+	}
 	if _, on := secondHumanGateUnder(ap, v); !on {
 		return true
 	}

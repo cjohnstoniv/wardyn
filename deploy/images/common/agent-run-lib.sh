@@ -994,6 +994,36 @@ boot_seed_wait_for_prep() {
     local idle_pid="${WARDYN_IDLE_PID:-1}"
     while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done
     [[ -f "$HOME/.wardyn/prep-done" ]] || printf '%s\n' "$BOOT_SEED_PREP_GONE" >&2
+    boot_seed_wait_for_release
+}
+
+# A held boot seed. While WARDYN_START_AFTER_READBACK is on, the server sends an
+# interactive run's seed as WARDYN_HELD_SEED, not WARDYN_INTERACTIVE_SEED, so an
+# image from before the hold starts nothing at boot. held_seed_adopt makes it this
+# image's seed. Each agent-run calls it on the line after sourcing this file, and
+# the server checks for that exact line before it releases the seed.
+BOOT_SEED_HELD='Waiting for the network policy to be confirmed; the agent starts here then.'
+BOOT_SEED_HOLD_GONE='wardyn: the network policy was not confirmed before the sandbox stopped, so the agent was not started.'
+
+held_seed_adopt() {
+    if [[ -n "${WARDYN_HELD_SEED:-}" && -z "${WARDYN_INTERACTIVE_SEED:-}" ]]; then
+        export WARDYN_INTERACTIVE_SEED="$WARDYN_HELD_SEED"
+    fi
+}
+
+# boot_seed_wait_for_release: hold a held seed's boot pane until the server writes
+# ~/.wardyn/seed-release, after the run's proxy confirmed its policy. Bounded by
+# the idle process, as boot_seed_wait_for_prep is. If that process ends first,
+# the seed never starts: the pane drops to a shell.
+boot_seed_wait_for_release() {
+    [[ -n "${WARDYN_HELD_SEED:-}" ]] || return 0
+    [[ -f "$HOME/.wardyn/seed-release" ]] && return 0
+    printf '%s\n' "$BOOT_SEED_HELD" >&2
+    local idle_pid="${WARDYN_IDLE_PID:-1}"
+    while [[ ! -f "$HOME/.wardyn/seed-release" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 1; done
+    [[ -f "$HOME/.wardyn/seed-release" ]] && return 0
+    printf '%s\n' "$BOOT_SEED_HOLD_GONE" >&2
+    exec bash
 }
 
 # recover_git_helper_secret — the OTHER cost of creating the session first.
