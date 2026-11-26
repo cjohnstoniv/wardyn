@@ -390,11 +390,15 @@ type TemplateImportResult struct {
 
 // TemplateCopyRequest copies (publishes) a template into another scope. The
 // caller needs to read the source and to write the target scope; the server
-// re-checks every reference the copy would disclose.
+// re-checks every reference the copy would disclose. ExpectedRevision, when
+// set, is the revision the caller reviewed: a template that has moved on since
+// answers 409 template_revision_conflict and nothing is copied. Unset copies
+// the current revision.
 type TemplateCopyRequest struct {
-	Scope   TemplateScope `json:"scope"`
-	GroupID string        `json:"group_id,omitempty"`
-	Name    string        `json:"name,omitempty"`
+	Scope            TemplateScope `json:"scope"`
+	GroupID          string        `json:"group_id,omitempty"`
+	Name             string        `json:"name,omitempty"`
+	ExpectedRevision *int          `json:"expected_revision,omitempty"`
 }
 
 // TemplateGroupAdmins is GET /api/v1/admin/template-group-admins.

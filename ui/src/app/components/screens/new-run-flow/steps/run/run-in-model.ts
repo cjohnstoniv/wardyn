@@ -65,13 +65,15 @@ export function shown(c: RunInChoices | undefined): boolean {
 
 /**
  * A `run_in` the units still list stays; otherwise the run goes home, with the sentence that says why. The unit is
- * named by its request, else by the name it had when the person picked it, else by the draft's value.
+ * named by its request, else by the name it had when the person picked it, else by the draft's value. Without the
+ * person's requests nothing can be said about a unit the list lacks (it may be an elevation or an ask the failed read
+ * would have listed), so the pick stays and the server decides at launch.
  */
 export function reconcileRunIn(
   runIn: string | undefined, c: RunInChoices, list: GovernanceRequestList | null | undefined, homeName: string,
   picked?: { unitId: string; name: string },
 ): { keep: true } | { keep: false; notice: string } {
-  if (!runIn || itemFor(c, runIn)) return { keep: true };
+  if (!runIn || itemFor(c, runIn) || !list) return { keep: true };
   const had = list?.requests.find((r) => mineElevation(r) && r.state === "applied" && forUnit(r, runIn));
   const name = had?.unit_name ?? (picked?.unitId === runIn ? picked.name : runIn);
   return { keep: false, notice: had ? NR_RUN_IN.ENDED(name, homeName) : NR_RUN_IN.NO_LONGER_IN(name, homeName) };

@@ -40,3 +40,11 @@ func TestWithin(t *testing.T) {
 		}
 	}
 }
+
+func TestDepthUnder(t *testing.T) {
+	for rel, want := range map[string]int{".": 0, "a": 1, "a/b": 2, "a/b/c.txt": 3} {
+		if got := DepthUnder(rel); got != want {
+			t.Errorf("DepthUnder(%q) = %d, want %d", rel, got, want)
+		}
+	}
+}

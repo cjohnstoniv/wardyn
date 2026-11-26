@@ -200,6 +200,38 @@ func TestTemplateCopyRerunsTheScopeDoor(t *testing.T) {
 	}
 }
 
+// TestTemplateCopyRefusesARevisionSavedAfterReview: a copy that names the revision its publisher reviewed is refused
+// with template_revision_conflict, and copies nothing, once a later save moved the template on; naming the current
+// revision copies it.
+func TestTemplateCopyRefusesARevisionSavedAfterReview(t *testing.T) {
+	e := newTemplateEnv(t)
+	root := templateCookie(t, "root", oidc.RoleAdmin, false, []string{}, false)
+	src := e.seed(types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "root"}, types.TemplateKindTemplate, "reviewed", templateIntentEgress)
+	path := "/api/v1/templates/" + src.ID.String()
+	b, _ := json.Marshal(map[string]any{"name": "edited after review", "expected_revision": 1, "document": json.RawMessage(templateDocBody(templateIntentEgress))})
+	if status, body := e.call(root, http.MethodPut, path, string(b)); status != http.StatusOK {
+		t.Fatalf("update = %d %s", status, body)
+	}
+	listed := func() int {
+		rows, err := e.ts.ListTemplatesVisible(context.Background(), "root", []string{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rows)
+	}
+	before := listed()
+	status, body := e.call(root, http.MethodPost, path+"/copy", `{"scope":"org","expected_revision":1}`)
+	if status != http.StatusConflict || !strings.Contains(body, reasonTemplateRevisionConflict) || !strings.Contains(body, "revision 2") {
+		t.Fatalf("copy of a revision saved over = %d %s", status, body)
+	}
+	if n := listed(); n != before {
+		t.Fatalf("the refused copy left %d templates, want %d", n, before)
+	}
+	if status, body = e.call(root, http.MethodPost, path+"/copy", `{"scope":"org","name":"published","expected_revision":2}`); status != http.StatusCreated {
+		t.Fatalf("copy of the current revision = %d %s", status, body)
+	}
+}
+
 // TestGroupSharedTemplateHoldsReferencesNeverValues (DR-0079, A17): a group
 // template keeps the names of what it uses (a secret's name) and never a
 // value. A value-shaped string is refused before anything is stored, and no

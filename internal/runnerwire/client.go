@@ -82,6 +82,9 @@ type Client struct {
 	// at the head of the replay buffer.
 	quickDeaths int
 	link        linkState
+	// authOKs counts the sessions of this process the organisation has accepted (AUTH_OK); prior is that count
+	// before the current one.
+	authOKs, prior int
 }
 
 // A resumed session that ends within resumeQuickDeath of READY with an EVENT unacknowledged, resumeQuickDeaths times
@@ -295,6 +298,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.cfg.Hooks.PerRunLimits(ok.PerRunCPUMillis, ok.PerRunMemoryMiB)
 	}
 	c.session, c.ready = ok.SessionID, false
+	c.prior, c.authOKs = c.authOKs, c.authOKs+1
 	return c.serve(ctx, conn, cfg, ok)
 }
 
@@ -346,6 +350,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	var readyAt time.Time
 	c.configure(ctx, &cfg, &ready, pending, func() *Peer { return peer })
 	peer = NewPeer(conn, cfg)
+	peer.prior = c.prior
 	c.peer = peer
 	defer func() {
 		c.setLink(false, "")

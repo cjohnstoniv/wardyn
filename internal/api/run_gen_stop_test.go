@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -191,7 +190,7 @@ func TestStopLostSandboxAt_NewerIsNil(t *testing.T) {
 	}{{"proxy only", types.LostOutage, "stop@3"}, {"end", types.LostEnded, "end@3"}} {
 		t.Run(c.name, func(t *testing.T) {
 			f, gr, _ := newGenStopFixture(t, 4)
-			var buf bytes.Buffer
+			var buf lockedBuffer
 			old := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 			t.Cleanup(func() { slog.SetDefault(old) })

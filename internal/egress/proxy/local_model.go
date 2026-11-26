@@ -108,26 +108,38 @@ func localModelURLKey(raw string) (key string, plaintext, ok bool) {
 	return localModelKey(u.Hostname(), port), u.Scheme == "http", true
 }
 
+// localModelRef names a LocalModels entry in a message by its host and port alone, quoted: the key is a
+// URL, and what follows its host (userinfo, path, query) can carry a secret that a log or error must not
+// repeat, however a config reached the loader. A key with no readable host is named as such, and a parse
+// error is never put in a message, since it repeats the URL.
+func localModelRef(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return strconv.Quote(u.Host)
+	}
+	return `"unreadable URL"`
+}
+
 // validateLocalModels: each entry is an http(s) base URL this run's brokered
 // route also dials (an LLMUpstreams value), with at least one model no rule
 // refuses.
 func (c *Config) validateLocalModels() error {
 	for raw, s := range c.LocalModels {
 		u, err := url.Parse(raw)
+		ref := localModelRef(raw)
 		switch {
 		case err != nil:
-			return fmt.Errorf("config: local_models[%q]: %w", raw, err)
+			return fmt.Errorf("config: local_models[%s]: not a valid URL", ref)
 		case (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "":
-			return fmt.Errorf("config: local_models[%q]: want an http:// or https:// base URL", raw)
+			return fmt.Errorf("config: local_models[%s]: want an http:// or https:// base URL", ref)
 		case !slices.Contains(slices.Collect(maps.Values(c.LLMUpstreams)), raw):
-			return fmt.Errorf("config: local_models[%q]: not an llm_upstreams address", raw)
+			return fmt.Errorf("config: local_models[%s]: not an llm_upstreams address", ref)
 		case len(s.Models) == 0 || slices.ContainsFunc(s.Models, types.LocalModelNameRefused):
-			return fmt.Errorf("config: local_models[%q]: models must list at least one model, none with a \"/\" or a cloud tag", raw)
+			return fmt.Errorf("config: local_models[%s]: models must list at least one model, none with a \"/\" or a cloud tag", ref)
 		}
 	}
 	for _, raw := range c.RunnerLocalModels {
 		if s, ok := c.LocalModels[raw]; !ok || !s.AllowOnLaptopRunners {
-			return fmt.Errorf("config: runner_local_models: %q is not a local_models entry allowed on laptop runners", raw)
+			return fmt.Errorf("config: runner_local_models: %s is not a local_models entry allowed on laptop runners", localModelRef(raw))
 		}
 	}
 	return nil

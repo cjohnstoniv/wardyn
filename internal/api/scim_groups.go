@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,11 @@ func scimGroupResource(ctx context.Context, st scimStore, g store.ScimGroup) (sc
 	if err != nil {
 		return scim.Group{}, err
 	}
+	return groupResource(g, ids), nil
+}
+
+// groupResource renders a group with the given member identity ids as a SCIM Group.
+func groupResource(g store.ScimGroup, ids []uuid.UUID) scim.Group {
 	members := make([]scim.Member, 0, len(ids))
 	for _, id := range ids {
 		members = append(members, scim.Member{Value: id.String()})
@@ -73,7 +79,7 @@ func scimGroupResource(ctx context.Context, st scimStore, g store.ScimGroup) (sc
 	return scim.Group{
 		Schemas: []string{scim.SchemaGroup}, ID: g.ID.String(), ExternalID: g.ExternalID, DisplayName: g.DisplayName,
 		Members: members, Meta: &scim.Meta{ResourceType: "Group", Created: g.CreatedAt.UTC().Format(time.RFC3339)},
-	}, nil
+	}
 }
 
 func (s *Server) handleSCIMListGroups(w http.ResponseWriter, r *http.Request) {
@@ -92,9 +98,16 @@ func (s *Server) handleSCIMListGroups(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, perr)
 		return
 	}
-	rows, err := st.SearchScimGroups(r.Context(), f.Attr, f.Value, scimListLimit)
+	// One row past the cap is read, so an overflow is told from a list that is exactly full: the response never
+	// claims the cap's worth of groups is the whole set a name selects.
+	rows, err := st.SearchScimGroups(r.Context(), f.Attr, f.Value, scimListLimit+1)
 	if err != nil {
 		s.scimServerError(w, r, "search groups", err)
+		return
+	}
+	if len(rows) > scimListLimit {
+		writeSCIMError(w, scim.NewError(http.StatusBadRequest, scim.TypeTooMany,
+			"the filter selects more than "+strconv.Itoa(scimListLimit)+" groups; narrow it, for example by externalId"))
 		return
 	}
 	groups := make([]scim.Group, 0, len(rows))
@@ -138,6 +151,35 @@ func memberIdentities(ms []scim.Member) []uuid.UUID {
 	return out
 }
 
+// ownIdentity reads an identity and says whether it is a user of this SCIM endpoint's issuer and tenant. An
+// absent one and one of another issuer or tenant are both "not mine", with no error.
+func (s *Server) ownIdentity(ctx context.Context, st scimStore, id uuid.UUID) (store.PrincipalIdentity, bool, error) {
+	ident, err := st.GetIdentity(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return ident, false, nil
+	}
+	if err != nil {
+		return ident, false, err
+	}
+	return ident, s.scimOwns(ident), nil
+}
+
+// ownMembers keeps the identity ids that name a user of this SCIM endpoint's issuer and tenant. An id
+// of another issuer or tenant is treated as an id nobody holds: dropped, with no error.
+func (s *Server) ownMembers(ctx context.Context, st scimStore, ids []uuid.UUID) ([]uuid.UUID, error) {
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		_, mine, err := s.ownIdentity(ctx, st, id)
+		if err != nil {
+			return nil, err
+		}
+		if mine {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.scimStore(w)
 	if !ok {
@@ -154,19 +196,26 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
-	g, err := st.CreateScimGroup(ctx, in.ExternalID, in.DisplayName, now)
+	// The members are read before anything is written, and the group and its members commit together: a
+	// failure at either step leaves no group, so the identity provider's retry with the same externalId is
+	// not a conflict. A 409 is only a group that really exists.
+	own, err := s.ownMembers(ctx, st, memberIdentities(in.Members))
+	if err != nil {
+		s.scimServerError(w, r, "create the group", err)
+		return
+	}
+	g, members, err := st.CreateScimGroupWithMembers(ctx, in.ExternalID, in.DisplayName, own, now)
 	if errors.Is(err, store.ErrScimGroupExists) {
 		writeSCIMError(w, scim.NewError(http.StatusConflict, "uniqueness", "a group with this externalId already exists"))
 		return
-	}
-	if err == nil {
-		err = st.AddScimGroupMembers(ctx, g.ID, memberIdentities(in.Members), now)
 	}
 	if err != nil {
 		s.scimServerError(w, r, "create the group", err)
 		return
 	}
-	s.writeSCIMGroup(w, r, st, g, http.StatusCreated)
+	// The answer is what the create's own transaction recorded: a read of the members after the commit could
+	// fail, and the identity provider's retry would then meet a 409 for a group that exists.
+	writeSCIM(w, http.StatusCreated, groupResource(g, members))
 }
 
 func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +235,8 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	slot := scimSlot(ctx)
 	// The whole request is read before any of it is applied, except that removals are never held back
-	// by a refusal: a refused externalId change answers 400 after the members have been removed.
+	// by a refusal: a refused externalId change answers 400 after the members have been removed, and
+	// adds no one and renames nothing.
 	externalIDRefused := false
 	displayName := ""
 	for _, op := range ops {
@@ -200,6 +250,8 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var errs []error
+	gone := false
+memberOps:
 	for _, op := range ops {
 		if op.Attr != scim.AttrMembers {
 			continue
@@ -207,7 +259,20 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		members, _ := op.Value.([]scim.Member)
 		switch op.Kind {
 		case scim.OpAdd:
-			if err := st.AddScimGroupMembers(ctx, g.ID, memberIdentities(members), s.cfg.Now().UTC()); err != nil {
+			if externalIDRefused {
+				continue // the request is refused: it adds no one, and renames nothing below
+			}
+			own, err := s.ownMembers(ctx, st, memberIdentities(members))
+			if err == nil {
+				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				// A deletion committed after the group was read: nobody is added, the rest is the deletion's,
+				// and the request is refused below, after any earlier failure.
+				gone = true
+				break memberOps
+			}
+			if err != nil {
 				errs = append(errs, err)
 			}
 		case scim.OpRemove:
@@ -218,11 +283,17 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 					errs = append(errs, err)
 				}
 			}
-			errs = append(errs, s.removeGroupMembers(ctx, st, g, ids, slot))
+			errs = append(errs, s.removeGroupMembers(ctx, st, g, ids, slot, false, false))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		s.scimServerError(w, r, "update the group", err)
+		return
+	}
+	// An earlier operation that failed answers 5xx first: a removal's ledger stays pending, and the 404 would tell the
+	// identity provider the request was settled.
+	if gone {
+		writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))
 		return
 	}
 	if externalIDRefused {
@@ -239,35 +310,76 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	s.writeSCIMGroup(w, r, st, g, http.StatusOK)
 }
 
+// scimGroupDeletePasses bounds a group DELETE's cut-then-delete passes: each pass cuts the members a pass before it
+// could not see (added meanwhile), and the delete commits only on a pass that leaves none.
+const scimGroupDeletePasses = 3
+
 func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	st, g, ok := s.scimGroupLoad(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
-	ids, err := st.GroupRemovalIdentities(ctx, g.ID)
-	if err == nil {
-		err = s.removeGroupMembers(ctx, st, g, ids, scimSlot(ctx))
+	slot := scimSlot(ctx)
+	// Every membership the delete removes is cut first, another issuer's or tenant's person included, and the group
+	// row goes only on a pass that leaves nothing owed (store.DeleteScimGroup refuses otherwise): nobody keeps access
+	// through the group once the delete commits. A member added after a pass's listing makes the delete refuse, and
+	// the next pass cuts them. Only the group's own delete may find it already gone; a not-found from a removal is a
+	// step that failed, and the 5xx lets the identity provider retry it.
+	var err error
+	for range scimGroupDeletePasses {
+		var ids []uuid.UUID
+		if ids, err = st.GroupRemovalIdentities(ctx, g.ID); err == nil {
+			err = s.removeGroupMembers(ctx, st, g, ids, slot, false, true)
+		}
+		if err != nil {
+			break
+		}
+		if err = st.DeleteScimGroup(ctx, g.ID); errors.Is(err, store.ErrNotFound) {
+			err = nil
+		}
+		if !errors.Is(err, store.ErrGroupRemovalOwed) {
+			break
+		}
+	}
+	if errors.Is(err, store.ErrGroupRemovalOwed) {
+		err = fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
 	if err != nil {
 		s.scimServerError(w, r, "delete the group", err)
 		return
 	}
-	// Only the group's own delete may find it already gone; a not-found from the removal above is a step that
-	// failed, and the 5xx lets the identity provider retry it.
-	if err := st.DeleteScimGroup(ctx, g.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+	// The cuts are recorded. A removal whose audit row is still owed is finished here before the 204; one that
+	// fails stays pending, and the 5xx says so. The sweeper finishes this issuer's; another issuer's member's owed
+	// row is left for an operator (/scim/status lists it).
+	ids, err := st.GroupRemovalIdentities(ctx, g.ID)
+	if err == nil {
+		err = s.removeGroupMembers(ctx, st, g, ids, slot, true, true)
+	}
+	if err != nil {
 		s.scimServerError(w, r, "delete the group", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// removeGroupMembers removes each identity from the group as a mover. Every one is attempted whether or
-// not another failed; the joined error wraps errDeprovisionIncomplete.
-func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.ScimGroup, ids []uuid.UUID, slot string) error {
+// groupRemovalIdentity is the identity removeGroupMember acts on, and false for nobody it removes: an absent
+// identity (ownIdentity answers the zero identity with no error), or one of another issuer or tenant unless anyIssuer.
+func (s *Server) groupRemovalIdentity(ctx context.Context, st scimStore, identityID uuid.UUID, anyIssuer bool) (store.PrincipalIdentity, bool, error) {
+	ident, mine, err := s.ownIdentity(ctx, st, identityID)
+	if err != nil {
+		return ident, false, err
+	}
+	return ident, mine || (anyIssuer && ident.ID == identityID), nil
+}
+
+// removeGroupMembers removes each identity from the group as a mover (resume as removeGroupMember takes
+// it). Every one is attempted whether or not another failed; the joined error wraps errDeprovisionIncomplete.
+// anyIssuer is removeGroupMember's.
+func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.ScimGroup, ids []uuid.UUID, slot string, resume, anyIssuer bool) error {
 	var errs []error
 	for _, id := range ids {
-		if err := s.removeGroupMember(ctx, st, g, id, slot, false); err != nil {
+		if err := s.removeGroupMember(ctx, st, g, id, slot, resume, anyIssuer); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -292,13 +404,17 @@ func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.S
 //
 // resume is the sweeper's recovery of a removal it selected earlier: it only goes on with a pending ledger
 // (store.ResumeGroupRemoval), and drops the candidate when the person has been added back since.
-func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string, resume bool) error {
+//
+// anyIssuer is a group delete's: it removes another issuer's or tenant's person too, since the delete is the one
+// step that drops their membership and their own endpoint never sees it go. Every other caller leaves them alone.
+func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string, resume, anyIssuer bool) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	ident, err := st.GetIdentity(ctx, identityID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
+	// An absent identity is nobody to remove. One of another issuer or tenant is removed only by a group delete
+	// (anyIssuer); otherwise nothing is started, resumed, cut, revoked or audited for them, a pending ledger row
+	// they already hold is left as it is, and the sweeper does not select it (PendingGroupRemovals lists only this
+	// endpoint's own people).
+	ident, ok, err := s.groupRemovalIdentity(ctx, st, identityID, anyIssuer)
+	if err != nil || !ok {
 		return err
 	}
 	if resume {
@@ -329,7 +445,7 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		return st.FinishDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, detail)
 	}
 	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the removal.
-	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindGroupRemove, jobs); err != nil {
+	if err := s.drainRefusalAudits(ctx, s.scimOrigin(), st, ident, store.JobKindGroupRemove, jobs); err != nil {
 		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", identityID.String()), slog.Any("err", err))
 	}
 	forms, err := s.leaverForms(ctx, st, ident)
@@ -341,7 +457,7 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 			return nil
 		}
 		j, _ := jobByKey(jobs, store.GroupRemovalSteps[i], g.ID.String())
-		owed, refused := s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
+		owed, refused := s.refuseDeprovision(ctx, s.scimOrigin(), ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
 		marker := errors.New(forms.refusal)
 		if owed != "" {
 			if oweErr := oweRefusalAudit(ctx, st, identityID, store.JobKindGroupRemove, store.JobKey{Step: owed, Target: g.ID.String()}); oweErr != nil {

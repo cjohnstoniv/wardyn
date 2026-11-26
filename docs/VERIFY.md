@@ -203,11 +203,11 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
 ## The continuous lane
 
 - Everything above is about **release** images — the ten `vX.Y.Z`-tagged images `release.yml` publishes.
-- A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
+- A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:sha-<short-sha>`. It runs the version command for the two amd64 CLIs in the image, checks that every regular file copied out of each architecture's image contains the revision text, and signs that digest. Only then does `ghcr.io/cjohnstoniv/wardynd:latest` move to it.
 
 Those tags are **signed but not attested**, and their signature is under a different identity:
 
-- **Signed.** The workflow runs `cosign sign --yes` on the pushed digest, keyless.
+- **Signed.** The workflow runs `cosign sign --yes` on the pushed digest, keyless, before `:latest` or any other name moves to it.
 - **No SBOM, no provenance.** It runs no `cosign attest` and no `attest-build-provenance` step, so §2 and §3 above have nothing to fetch for these tags — `cosign verify-attestation` finds no attestation, which is the expected answer, not a tampering signal.
 - **A different certificate identity.** The identity every command on this page uses is pinned to `release.yml@refs/tags/v${WARDYN_VERSION}` and structurally cannot match a `main`-push signature. Verify a continuous tag with its own:
 

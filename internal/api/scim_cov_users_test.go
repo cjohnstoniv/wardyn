@@ -643,6 +643,42 @@ func TestSCIMCovPutReplacesTheProjectionAndSuspends(t *testing.T) {
 	}
 }
 
+// An email rename answers the new address as the primary, and so does the next read; the old address is still an
+// alias a removal finds. A PUT's primary address wins whichever position it holds.
+func TestSCIMCovEmailRenameAnswersTheNewPrimary(t *testing.T) {
+	st := newSCIMCovStore()
+	pat := st.addIdentity(scimCovBound(), "pat@corp.example")
+	e := newSCIMCovEnv(t, st)
+	path := "/scim/v2/Users/" + pat.ID.String()
+	primaryOf := func(method, body string) string {
+		t.Helper()
+		w := e.scim(method, path, body)
+		u := scimCovDecode[scimCovUser](t, w)
+		if w.Code != http.StatusOK || len(u.Emails) != 1 || !u.Emails[0].Primary {
+			t.Fatalf("%s = %d %s, want 200 with one primary email", method, w.Code, w.Body.String())
+		}
+		return u.Emails[0].Value
+	}
+	rename := scimCovPatch(scimCovReplace(`emails[type eq "work"].value`, `"Pat.New@corp.example"`))
+	if got := primaryOf(http.MethodPatch, rename); got != "pat.new@corp.example" {
+		t.Errorf("PATCH reply email = %q, want the renamed address", got)
+	}
+	if got := primaryOf(http.MethodGet, ""); got != "pat.new@corp.example" {
+		t.Errorf("GET email after the rename = %q, want the renamed address", got)
+	}
+	if !st.hasAlias(pat.ID, "email", "pat@corp.example") {
+		t.Error("the old address is no longer an alias a removal finds")
+	}
+	if rows := e.auditRows("scim.user.write"); len(rows) != 1 || e.auditData(rows[0])["op"] != "projection" {
+		t.Errorf("rows = %+v, want one projection row", rows)
+	}
+	put := fmt.Sprintf(`{%s,"externalId":%q,"userName":"Pat","emails":[{"value":"other@corp.example","type":"other"},{"value":"pat.put@corp.example","type":"work","primary":true}]}`,
+		scimCovUserSchema, scimCovOID)
+	if got := primaryOf(http.MethodPut, put); got != "pat.put@corp.example" {
+		t.Errorf("PUT reply email = %q, want the address marked primary", got)
+	}
+}
+
 func TestSCIMCovNormaliseHelpers(t *testing.T) {
 	if got, ok := normalizeExternalID("  " + strings.ToUpper(scimCovOID) + " "); !ok || got != scimCovOID {
 		t.Errorf("normalizeExternalID = %q %t, want the lower-case GUID", got, ok)

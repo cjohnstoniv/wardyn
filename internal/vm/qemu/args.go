@@ -147,7 +147,9 @@ func VirtiofsdArgs(n int, readOnly bool, uid, gid int) []string {
 		"--sandbox=none", "--cache=auto"}
 	// Unprivileged, virtiofsd can create files only as its own user: the guest's agent user maps to
 	// it one to one both ways, so the agent's writes land as uid:gid and it owns uid:gid's files in
-	// the guest. A guest id equal to the runner's is forbidden, so no other guest id lands as it.
+	// the guest. A guest id equal to the runner's is forbidden, so no other guest id lands as it. Nor
+	// does the guest's root: virtiofsd would make its new files as the runner's user, so id 0 is refused
+	// a create, a new folder or link, and a change of owner. Every other id passes through unchanged.
 	for _, t := range []struct {
 		flag       string
 		agent, own int
@@ -156,6 +158,7 @@ func VirtiofsdArgs(n int, readOnly bool, uid, gid int) []string {
 			a = append(a, t.flag+"map:"+strconv.Itoa(t.agent)+":"+strconv.Itoa(t.own)+":1",
 				t.flag+"forbid-guest:"+strconv.Itoa(t.own)+":1")
 		}
+		a = append(a, t.flag+"forbid-guest:0:1")
 	}
 	if readOnly {
 		a = append(a, "--readonly")

@@ -73,6 +73,7 @@ CC_RUN_ID=""                             # the REAL-AGENT (claude-code) run id
 REC_RUN_ID=""                            # the finite recording run id (step i)
 SVC_A_ID=""                              # the failing service run (step j)
 SVC_B_ID=""                              # the healthy service run (step j)
+START_IDS=()                             # the start-latency runs (start_latency_step)
 PROXY_NAME=""
 CC_AGENT="claude-code"                   # real agent NAME (image via WARDYN_AGENT_IMAGES)
 CC_IMAGE="${WARDYN_E2E_CC_IMAGE:-wardyn/agent-claude-code:local}" # the demo tag the compose stack maps to
@@ -122,7 +123,7 @@ teardown() {
   [[ "${WARDYN_E2E_KEEP:-}" == "1" ]] && { log "WARDYN_E2E_KEEP=1 set; leaving stack up"; return; }
   log "Tearing down"
   [[ -n "${PROXY_NAME}" ]] && docker rm -f "${PROXY_NAME}" >/dev/null 2>&1 || true
-  for rid in "${RUN_ID}" "${CC_RUN_ID}" "${REC_RUN_ID}" "${SVC_A_ID}" "${SVC_B_ID}"; do
+  for rid in "${RUN_ID}" "${CC_RUN_ID}" "${REC_RUN_ID}" "${SVC_A_ID}" "${SVC_B_ID}" "${START_IDS[@]}"; do
     [[ -n "${rid}" ]] || continue
     # Best-effort: remove any per-run sandbox artifacts the kill cascade left.
     docker rm -f "wardyn-agent-${rid}" "wardyn-proxy-${rid}" >/dev/null 2>&1 || true
@@ -149,6 +150,37 @@ e2e_wardyn() {
 run_state() {
   hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/$1" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin).get("state",""))' 2>/dev/null
+}
+# wait_running polls a run every 100 ms for up to 60 s and prints "STATE START_MS": the state that ended the
+# wait (RUNNING or a terminal state; the last one read on a timeout, "none" if no read answered) and the
+# milliseconds from the run's created_at to the read that saw RUNNING (-1 if none did). wardynd's container
+# reads this host's clock, so the two times compare; the figure is good to about one poll.
+wait_running() {
+  python3 - "${BASE}/api/v1/runs/$1" "${ADMIN_TOKEN}" <<'PY'
+import datetime, json, re, sys, time, urllib.request
+url, token = sys.argv[1], sys.argv[2]
+def created_ms(ts):
+    ts = re.sub(r"(\.\d{6})\d+", r"\1", ts).replace("Z", "+00:00")
+    return datetime.datetime.fromisoformat(ts).timestamp() * 1000
+state, start = "none", -1
+deadline = time.monotonic() + 60
+while time.monotonic() < deadline:
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            run = json.load(r)
+    except Exception:
+        time.sleep(0.1)
+        continue
+    state = run.get("state") or "none"
+    if state == "RUNNING":
+        start = round(time.time() * 1000 - created_ms(run["created_at"]))
+        break
+    if state in ("COMPLETED", "FAILED", "KILLED", "STOPPED", "ARCHIVED"):
+        break
+    time.sleep(0.1)
+print(state, start)
+PY
 }
 
 # (i) recording AUTO-DELIVERED, on a run of its OWN that ends by itself. wardyn-rec
@@ -307,6 +339,46 @@ wardyn() { e2e_wardyn "$@"; }
 WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-cpu 8 --total-memory 16 --total-disk 80 --per-run-cpu 2 --per-run-memory 4 --per-run-disk 20}" \
   wardyn_ensure_runner_limits </dev/null || die "could not give the e2e stack's runner its limits"
 
+# start_latency_step starts START_RUNS fixture runs one after another, each killed before the next, and prints
+# each START_MS and then START_LATENCY with p50, p95 and max (nearest rank). The image is local by now, so these
+# are warm starts. It then reads /metrics once: the start-phase, route and egress-decision histograms must be
+# there, the start phases counting at least these runs.
+START_RUNS=20
+start_latency_step() {
+  log "start latency: ${START_RUNS} sequential runs"
+  local i out rid st ms samples=() m total
+  for i in $(seq 1 "${START_RUNS}"); do
+    out="$(e2e_wardyn run --agent "${FIXTURE_AGENT}" --task "wardyn e2e start ${i}" 2>&1)"
+    rid="$(printf '%s\n' "${out}" | awk '/^created run/{print $3; exit}')"
+    [[ -n "${rid}" ]] || { bad "start latency: run ${i} was not created: ${out}"; return; }
+    START_IDS+=("${rid}")
+    read -r st ms < <(wait_running "${rid}")
+    echo "START_MS=${ms} run=${rid} n=${i}"
+    hc -o /dev/null -X POST "${BASE}/api/v1/runs/${rid}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" || true
+    for _ in $(seq 1 60); do
+      case "$(run_state "${rid}")" in KILLED|STOPPED|FAILED|COMPLETED|ARCHIVED) break ;; esac
+      sleep 0.5
+    done
+    [[ "${st}" == "RUNNING" ]] || { bad "start latency: run ${i} state=${st}, expected RUNNING"; return; }
+    samples+=("${ms}")
+  done
+  printf '%s\n' "${samples[@]}" | python3 -c 'import sys
+v = sorted(int(x) for x in sys.stdin.read().split())
+rank = lambda q: v[max(0, -(-len(v) * q // 100) - 1)]
+print("START_LATENCY n=%d p50_ms=%d p95_ms=%d max_ms=%d" % (len(v), rank(50), rank(95), v[-1]))'
+  ok "start latency: ${START_RUNS} sequential runs reached RUNNING"
+  m="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/metrics")"
+  printf '%s\n' "${m}" | grep -E '^wardyn_(run_start_phase_seconds|egress_decision_record_seconds)_(sum|count)' | sed 's/^/METRIC /'
+  total="$(printf '%s\n' "${m}" | sed -n 's/^wardyn_run_start_phase_seconds_count{phase="total"} //p')"
+  if [[ "${total:-0}" -ge "${START_RUNS}" ]] \
+    && grep -q '^wardyn_http_request_seconds_bucket{route="/api/v1/runs/{id}"' <<<"${m}" \
+    && grep -Eq '^wardyn_egress_decision_record_seconds_count\{decision="(allow|deny)"\} [1-9]' <<<"${m}"; then
+    ok "/metrics: start phases (total=${total}), route and egress-decision histograms present"
+  else
+    bad "/metrics: start phases total=${total:-<none>} (want >= ${START_RUNS}), or the route or egress-decision histogram missing"
+  fi
+}
+
 # ── 2. create a governed run against the fixture image ─────────────────────--
 log "Creating a governed run (agent=${FIXTURE_AGENT})"
 # A TASK run, against a fixture that can hold one open. The fixture is a bare
@@ -321,15 +393,11 @@ CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${IN_BASE}" -e WARDYN_ADMIN_TOK
 echo "${CREATE}"
 RUN_ID="$(printf '%s\n' "${CREATE}" | awk '/^created run/{print $3; exit}')"
 [[ -n "${RUN_ID}" ]] || die "could not parse created run id"
-# Polled, like the claude-code run's check below: POST /runs dispatches
-# asynchronously, so a read a second after create sees STARTING while the
-# sandbox is still coming up. A terminal state ends the wait early.
-STATE=""
-for _ in $(seq 1 30); do
-  STATE="$(run_state "${RUN_ID}")"
-  case "${STATE}" in RUNNING|COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) break ;; esac
-  sleep 2
-done
+# Polled every 100 ms (wait_running): POST /runs dispatches asynchronously, so a
+# read a second after create sees STARTING while the sandbox is still coming up.
+# A terminal state ends the wait early.
+read -r STATE START_MS < <(wait_running "${RUN_ID}")
+echo "START_MS=${START_MS} run=${RUN_ID}"
 if [[ "${STATE}" == "RUNNING" ]]; then ok "run dispatched to RUNNING (live sandbox created)"; else
   bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"
   # Name the cause HERE: the run row's own reason, the run's failure audit rows
@@ -506,14 +574,21 @@ fi
 echo "login_redirect_pkce_s256=$(echo "$AU" | grep -c 'code_challenge_method=S256') nonce=$(echo "$AU" | grep -c nonce) state=$(echo "$AU" | grep -c state)"
 PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')
-LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$DEX$ACT" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
+PREV="$DEX$ACT"
+LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$PREV" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
 # Dex answers the login POST with a relative redirect and one or more hops before the
-# console's callback (approval is skipped in dex.yaml): follow them, resolving a relative
-# Location against Dex's origin, until one names /auth/callback.
+# console's callback (approval is skipped in dex.yaml): follow them until one names
+# /auth/callback, resolving an absolute-path Location against Dex's origin and a
+# path-relative one against the directory of the URL that sent it.
 N=0
 while [ -n "$LOC" ] && ! printf '%s' "$LOC" | grep -q '/auth/callback' && [ $N -lt 5 ]; do
-  case "$LOC" in /*) LOC="$DEX$LOC" ;; esac
-  LOC=$($C -D - -o /dev/null "$LOC" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p'); N=$((N+1))
+  case "$LOC" in
+    http://* | https://*) ;;
+    /*) LOC="$DEX$LOC" ;;
+    *) DIR="${PREV%%\?*}"; LOC="${DIR%/*}/$LOC" ;;
+  esac
+  PREV="$LOC"
+  LOC=$($C -D - -o /dev/null "$PREV" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p'); N=$((N+1))
 done
 CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://localhost:8080#')
 $C -D /tmp/cb.txt -o /tmp/cb-body.txt "$CB"
@@ -815,6 +890,9 @@ if [[ "${KILL}" == "202" && -z "${GONE}" && "${KSTATE}" == "KILLED" && "${KILL_A
 else
   bad "(e) kill cascade incomplete (kill=${KILL} gone='${GONE}' state=${KSTATE} audit=${KILL_AUDIT})"
 fi
+
+# ── 8. start latency (after the kill above frees its runner slot) ─────────────--
+start_latency_step
 
 # ── summary ─────────────────────────────────────────────────────────────────--
 echo

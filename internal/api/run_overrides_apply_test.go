@@ -11,10 +11,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -325,11 +327,19 @@ func TestOverrides_PolicySourceRecordsTheDiffAndAttribution(t *testing.T) {
 		t.Errorf("run detail source = %+v", view.Source)
 	}
 
-	// The proxy's refusals name the policy as changed.
+	// The proxy's refusals name the policy as changed. The resolve row is written before the sandbox
+	// create, so wait for the create before reading the spec it was given.
 	runner := srv.cfg.Runner.(*fakeRunner)
-	runner.mu.Lock()
-	attr := runner.lastSpec.ProxyConfig.Attribution
-	runner.mu.Unlock()
+	var attr *policyref.Ref
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		runner.mu.Lock()
+		created := runner.createCalls > 0
+		attr = runner.lastSpec.ProxyConfig.Attribution
+		runner.mu.Unlock()
+		if created || time.Now().After(deadline) {
+			break
+		}
+	}
 	if attr == nil || !attr.Overridden {
 		t.Errorf("proxy attribution = %+v, want overridden", attr)
 	}

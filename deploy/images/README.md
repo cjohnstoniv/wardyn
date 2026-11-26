@@ -381,7 +381,7 @@ What the wrap does NOT add — your base must still provide:
 
 - **TLS-MITM trust per runtime.**
   - The per-run proxy CA is delivered at `/tmp/wardyn/mitm-ca.pem` (bare CA) and `/tmp/wardyn/ca-bundle.pem` (system roots + CA).
-  - "Install the CA" is one action PER TOOLCHAIN; dispatch sets all five (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../../internal/runner/trusted_ca.go)).
+  - "Install the CA" is one action PER TOOLCHAIN; dispatch sets all six (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../../internal/runner/trusted_ca.go)).
   - A **replaces** row must always name the COMBINED bundle — the bare CA there costs that runtime every public root.
 
 | Runtime | Variable | Dispatch sets | Adds to / replaces the trust store |
@@ -391,6 +391,7 @@ What the wrap does NOT add — your base must still provide:
 | Python `requests` | `REQUESTS_CA_BUNDLE` | `ca-bundle.pem` | **replaces** |
 | curl | `CURL_CA_BUNDLE` | `ca-bundle.pem` | **replaces** |
 | AWS CLI v2 | `AWS_CA_BUNDLE` | `ca-bundle.pem` | **replaces** — own Python + own CA store, reads none of the four above |
+| git (libcurl-gnutls) | `GIT_SSL_CAINFO` | `ca-bundle.pem` | **replaces** — reads none of the variables above |
 | Java / JVM | none — `cacerts` keystore | nothing | **no variable reaches it** |
 
 > [!WARNING]

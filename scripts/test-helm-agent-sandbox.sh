@@ -89,7 +89,7 @@ fi
 # On: exactly the backend's additions.
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true >"$TMP/on.out"
 role='select(.kind == "Role" and (.metadata.name | test("k8s-runner$")))'
-[[ "$(y "$role | .rules[] | select(.resources[0] == \"pods\" and (.apiGroups[0] == \"\")) | .verbs | join(\",\")" "$TMP/on.out" | head -1)" == "create,get,list,delete,deletecollection,patch" ]] \
+[[ "$(y "$role | .rules[] | select(.resources[0] == \"pods\" and (.apiGroups[0] == \"\")) | .verbs | join(\",\")" "$TMP/on.out" | head -1)" == "create,get,list,watch,delete,deletecollection,patch" ]] \
   || die "on: the runner Role's pods rule is not the base verbs plus patch"
 [[ "$(y -o=json -I=0 "$role | .rules[] | select(.apiGroups[0] == \"agents.x-k8s.io\")" "$TMP/on.out")" == '{"apiGroups":["agents.x-k8s.io"],"resources":["sandboxes"],"verbs":["create","get","list","delete"]}' ]] \
   || die "on: the runner Role has no, or a wider, agents.x-k8s.io sandboxes rule"
@@ -180,7 +180,7 @@ done
 ok "keep: two policies and two bindings, one kind each, on wardynd's identity; none with keep off"
 
 # Nothing else changed: the added lines are the rule, the verb, the env and the two policy objects.
-diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create", "get", "list", "delete", "deletecollection"\]' \
+diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create", "get", "list", "watch", "delete", "deletecollection"\]' \
   | grep -v -e '^< *$' -e '^< # Source:' >"$TMP/removed" || true
 [[ ! -s "$TMP/removed" ]] || { cat "$TMP/removed" >&2; die "on: the backend removed or changed lines other than the pods verbs"; }
 ok "on: the diff to off only adds lines (apart from the pods verb list)"

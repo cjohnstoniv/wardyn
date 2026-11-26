@@ -148,6 +148,12 @@ export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it.";
 // later PATCH). "Extend to revive it" would be false for this run, so this
 // sentence stops at the one fact that's actually true.
 export const ENDED_BODY_TASK = "It has no network.";
+// A run its own end kept, whose maximum lifetime has since passed: the lease will not extend it, so revival is not
+// offered. The files stay until the retention deadline.
+export function endedPastCapBody(dateText: string): string {
+  return `It has no network. It is past its maximum lifetime, so it cannot be revived. Its files are kept until ${dateText}.`;
+}
+export const ENDED_PAST_CAP_BODY_NO_DATE = "It has no network. It is past its maximum lifetime, so it cannot be revived.";
 export const ENDED_EXTEND_AND_REVIVE = "Extend and revive";
 // UXR-15: one verb for stopping a run on the run page. The header's End run and the banner's button both open the same
 // confirm, whose own button says "End run".

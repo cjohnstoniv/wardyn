@@ -623,9 +623,17 @@ func TestPG_CLISession_SessionCutsEndCLISessionsAtOnce(t *testing.T) {
 				if code, _ := e.me(personal.Token); code != http.StatusOK {
 					t.Fatalf("the personal API token after Sign out everywhere = %d, want it to keep working", code)
 				}
+			}
+			// The receipt counts what this cut ended; an admin cut repeated after it ends none, so says 0.
+			if c.name != "SCIM suspension" {
 				ev := lastAuditEvent(t, e.h.audit.snapshot(), "session.revoke")
 				if !strings.Contains(string(ev.Data), `"cli_sessions_ended":1`) {
-					t.Fatalf("session.revoke = %s, want cli_sessions_ended 1", ev.Data)
+					t.Fatalf("session.revoke after %s = %s, want cli_sessions_ended 1", c.name, ev.Data)
+				}
+				c.cut(e)
+				ev = lastAuditEvent(t, e.h.audit.snapshot(), "session.revoke")
+				if !strings.Contains(string(ev.Data), `"cli_sessions_ended":0`) {
+					t.Fatalf("a second %s = %s, want cli_sessions_ended 0: the sessions were already ended", c.name, ev.Data)
 				}
 			}
 		})
@@ -848,5 +856,31 @@ func TestPG_CLISession_EndedDuringRefreshIsNotReuse(t *testing.T) {
 	}
 	if got, _ := e.pg.GetCLISession(context.Background(), g.SessionID); got.EndReason != types.CLISessionEndSignedOut {
 		t.Fatalf("session = %+v, want it to keep its own end reason", got)
+	}
+}
+
+// A provider logout cut counts the CLI sessions it ended on its own session.revoke row, as an admin's cut
+// does, and a repeat of it, finding none left, says 0.
+func TestPG_CLISession_ProviderLogoutRowCarriesTheCount(t *testing.T) {
+	ctx := context.Background()
+	e := newCLIEnv(t)
+	_, g := e.signIn(e.super, nil)
+	logout := func() []byte {
+		cctx, _ := store.WithCLIEnded(ctx)
+		if err := oidc.CutSessions(cctx, e.rev, "sub-super"); err != nil {
+			t.Fatal(err)
+		}
+		e.srv.auditIdPLogout(httptest.NewRequest(http.MethodPost, "/auth/backchannel-logout", nil).WithContext(cctx),
+			"idp_back_channel_logout", "sub-super", nil)
+		return lastAuditEvent(t, e.h.audit.snapshot(), "session.revoke").Data
+	}
+	if got := logout(); !strings.Contains(string(got), `"cli_sessions_ended":1`) {
+		t.Fatalf("provider logout row = %s, want cli_sessions_ended 1", got)
+	}
+	if got, _ := e.pg.GetCLISession(ctx, g.SessionID); got.EndedAt == nil {
+		t.Fatalf("CLI session after the provider logout = %+v, want ended", got)
+	}
+	if got := logout(); !strings.Contains(string(got), `"cli_sessions_ended":0`) {
+		t.Fatalf("a repeated provider logout row = %s, want cli_sessions_ended 0", got)
 	}
 }

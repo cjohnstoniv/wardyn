@@ -90,10 +90,13 @@ const (
 	// EventMacWindowUnexpected carries a MacWindowUnexpected: a window opened on a macOS VM run through
 	// its helper's control socket, not through a mac_window call. Event.RunID is the run.
 	EventMacWindowUnexpected = "mac_window_unexpected"
+	// EventDeviceCert carries a DeviceCertReport: the MDM device certificates a Mac presents, each with a
+	// signature by its key over a message that names this runner's key. Only a Mac runner sends it.
+	EventDeviceCert = "device_cert"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected, EventDeviceCert}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -235,6 +238,9 @@ const (
 	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
 	// such a runner is refused a run that has rules.
 	ProxySettingHostRules = "host_rules"
+	// ProxySettingPushHoldRemovals is push_hold_removals. Dropped, the run's proxy would forward a push
+	// that removes a review path, so such a runner is refused a run that sets it.
+	ProxySettingPushHoldRemovals = "push_hold_removals"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -261,7 +267,7 @@ var ProxySettings = []string{
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
 	ProxySettingMCPSendOnce, ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
-	ProxySettingHostRules,
+	ProxySettingHostRules, ProxySettingPushHoldRemovals,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -275,7 +281,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
 		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
-		len(pc.Policy.HostRules) != 0} {
+		len(pc.Policy.HostRules) != 0,
+		pc.PushHoldRemovals} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
@@ -332,12 +339,21 @@ type MacVMCaps struct {
 	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
 	// never sent a macOS VM run with one.
 	DiskDrives bool `json:"disk_drives,omitempty"`
+	// PriorSessions is how many sessions this runner process had completed with an organisation (AUTH_OK received)
+	// before the one these caps are sent on, counted from the process's start. 0 on a fresh session says the process
+	// is new: no earlier process's delete can still be running on this Mac. Absent from a runner that does not
+	// count, and never taken as evidence.
+	PriorSessions *int `json:"prior_sessions,omitempty"`
 	// Window says the runner serves mac_window: it opens an attended window onto a macOS VM run it holds.
 	// A runner without it (older) is never sent the call.
 	Window bool `json:"window,omitempty"`
 	// KeptMachines says the runner keeps a person's kept machines (SandboxSpec.KeptMachine) and deletes
 	// them (kept_machine). A runner without it is never sent a macOS VM run with one.
 	KeptMachines bool `json:"kept_machines,omitempty"`
+	// KeptConditionalDelete says the runner executes kept_machine's delete_expired op, which rechecks the
+	// machine's own deadline under its lock. The organisation starts no expiry-driven delete on a runner
+	// that does not say so; such a Mac still removes its own expired machines in its sweep.
+	KeptConditionalDelete bool `json:"kept_conditional_delete,omitempty"`
 	// Kept is the Mac's kept machines and the disk they may take; nil when the runner keeps none or has
 	// not counted yet.
 	Kept *MacVMKept `json:"kept,omitempty"`
@@ -382,6 +398,17 @@ type MacVMKeptMachine struct {
 	// not in use. The org releases a machine only from the run it names, so an older snapshot cannot
 	// release a newer run's hold.
 	RunID string `json:"run_id,omitempty"`
+	// StopRunID is the run whose stop wrote this machine's current deadline and scrub state, from the
+	// Mac's own record. Absent from a runner that does not record it: such a report is unversioned, and
+	// never settles a newer use.
+	StopRunID string `json:"stop_run_id,omitempty"`
+}
+
+// ObservesStopOf reports whether this idle report was produced by the stop of run: only then does it say
+// what that run left behind. A report of an older stop, or an unversioned one, is a view of a use that
+// may since have been replaced, and settles nothing.
+func (k MacVMKeptMachine) ObservesStopOf(run string) bool {
+	return !k.InUse && run != "" && k.StopRunID == run
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.

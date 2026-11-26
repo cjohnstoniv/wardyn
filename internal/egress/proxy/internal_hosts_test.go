@@ -25,7 +25,7 @@ import (
 func newInternalHostsProxy(t *testing.T, spec types.RunPolicySpec, res resolver, hosts []types.InternalHost, localSubnets []*net.IPNet, cpIP net.IP, upstreamAddr string) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	var cpIPs []net.IP
 	if cpIP != nil {
 		cpIPs = []net.IP{cpIP}
@@ -273,7 +273,7 @@ func TestInternalHost_ApprovalReleasedKeepsApprovalAttribution(t *testing.T) {
 		RunID:         uuid.New(),
 		Policy:        CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"known.test"}, FirstUseApproval: types.FirstUseDenyWithReview}),
 		Approval:      ap,
-		Sink:          &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:          &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:      fakeResolver{m: map[string][]net.IP{"svc.corp.internal": ips("100.64.0.10")}},
 		Dial:          redirectDial(upstreamAddr(up)),
 		InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}},

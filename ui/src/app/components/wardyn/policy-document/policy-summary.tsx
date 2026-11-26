@@ -70,6 +70,8 @@ type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; a
  */
 export interface PolicyPresetNotes {
   chip?: { label: string; fields: ReadonlySet<string> };
+  /** The same chip for each agent whose rules decided fields (provenance layer agent_rules), after the preset's. */
+  agentRulesChips?: { label: string; fields: ReadonlySet<string> }[];
   pushesUnstoppable?: boolean;
 }
 
@@ -109,6 +111,7 @@ const mono = (t: string, extra?: Partial<Value>): Value => ({ text: t, mono: tru
 
 const hostChip = (inspected: boolean): ChipSpec =>
   inspected ? { label: SUMMARY.inspected, tone: "info" } : { label: SUMMARY.tunnelOnly, tone: "neutral" };
+const partlyChip: ChipSpec = { label: SUMMARY.partlyInspected, tone: "info" };
 
 export function cpuText(millis?: number): string {
   return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
@@ -182,9 +185,9 @@ function summarize(
   const add = (heading: string, rows: Row[]) => rows.length > 0 && groups.push({ heading, rows });
   // A row built from spec fields the wall preset decided carries the preset's chip on its first value.
   const row = (label: string, values: Value[], ...fields: string[]): Row => {
-    const chip = notes?.chip;
-    if (!chip || values.length === 0 || !fields.some((f) => chip.fields.has(f))) return { label, values };
-    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), { label: chip.label, tone: "info" }] };
+    const hit = [...(notes?.chip ? [notes.chip] : []), ...(notes?.agentRulesChips ?? [])].filter((c) => fields.some((f) => c.fields.has(f)));
+    if (hit.length === 0 || values.length === 0) return { label, values };
+    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), ...hit.map((c): { label: string; tone: "info" } => ({ label: c.label, tone: "info" }))] };
     return { label, values: [first, ...values.slice(1)] };
   };
   const entries = (items: string[], field: string): Value[] => [
@@ -213,12 +216,26 @@ function summarize(
     if (hostMarks) meanings.push({ text: SUMMARY.tunnelOnlyAllowAll });
   } else if (allowed || outside.length > 0) {
     const inspected = new Set(hostMarks?.inspected);
-    const hosts = entries(allowed ?? [], "allowed_domains").map((v) =>
-      hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
-    );
+    const partial = hostMarks?.partial ?? {};
+    // An entry opened only in part is followed by a quieter line naming the destinations that are opened.
+    const hosts = entries(allowed ?? [], "allowed_domains").flatMap((v): Value[] => {
+      if (!hostMarks || !v.text || v.mark === "removed") return [v];
+      const subset = Object.prototype.hasOwnProperty.call(partial, v.text) ? partial[v.text] : undefined;
+      // A wildcard in an older server's inspected list (it recorded no partial) names hosts the proxy may not
+      // open, so it reads as opened in part, which destinations unknown.
+      const legacyWildcard = hostMarks.partial === undefined && inspected.has(v.text) && v.text.startsWith("*");
+      if (subset || legacyWildcard) {
+        const opened = subset?.length ? [text(SUMMARY.opens(subset.join(", ")), { note: true })] : [];
+        return [{ ...v, end: partlyChip }, ...opened];
+      }
+      return [{ ...v, end: hostChip(inspected.has(v.text)) }];
+    });
     network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)], "allow_all_egress", "allowed_domains"));
     if (hosts.concat(outside).some((v) => v.end?.label === SUMMARY.inspected)) {
       meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
+    }
+    if (hosts.some((v) => v.end?.label === SUMMARY.partlyInspected)) {
+      meanings.push({ chip: partlyChip, text: SUMMARY.partlyInspectedMeaning });
     }
     if (hosts.some((v) => v.end?.label === SUMMARY.tunnelOnly)) {
       meanings.push({ chip: hostChip(false), text: SUMMARY.tunnelOnlyMeaning });

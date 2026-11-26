@@ -324,6 +324,16 @@ test.describe("Tier B computed styles", () => {
     const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
     const title = dialog.getByRole("heading", { name: "New policy" });
     await expect(title).toBeVisible();
+    // The dialog zooms in: measure once its finite animations have finished, or the dialog's box and the title's are
+    // read at two different scales. A looping animation inside it (a spinner) would never finish, so it is not waited on.
+    await dialog.evaluate((el) =>
+      Promise.all(
+        el
+          .getAnimations({ subtree: true })
+          .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
+          .map((a) => a.finished.catch(() => undefined)),
+      ),
+    );
     return { dialog, title };
   }
 

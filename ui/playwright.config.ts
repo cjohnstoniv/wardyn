@@ -57,7 +57,19 @@ export default defineConfig({
     video: process.env.CI ? "on-first-retry" : "retain-on-failure",
   },
   projects: [
-    { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "walk/**", "live-local/**"], use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "walk/**", "live-local/**", "walls-*.spec.ts", "walls/**"], use: { ...devices["Desktop Chrome"] } },
+    {
+      // walls: the 3D walls view's checks. Top-level e2e/walls-*.spec.ts run through scripts/run-ui-e2e.sh like any
+      // other spec; the script passes no project flag, so this project takes them and chromium's testIgnore drops
+      // them. e2e/walls/ is kept for pixel baselines that run only on a developer machine. The CI runner has no GPU,
+      // so Chromium draws WebGL in software (SwiftShader), and these flags keep that path on when headless.
+      name: "walls",
+      testMatch: ["walls-*.spec.ts", "walls/**/*.spec.ts"],
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: { args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] },
+      },
+    },
     {
       // walk: the kind SSO walk (e2e/walk/*.spec.ts) — specs that drive a REAL,
       // already-running Wardyn rather than the hermetic `-runner none` backend.

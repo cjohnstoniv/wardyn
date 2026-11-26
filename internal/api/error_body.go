@@ -32,7 +32,7 @@ type errorBody struct {
 	// Present only on a capability_feature refusal.
 	Feature string `json:"feature,omitempty"`
 	// Detail narrows a reason that covers several causes (attach_local_unavailable: flag_off,
-	// not_your_runner, runner_too_old, runner_offline). Present only on such a reason.
+	// not_your_runner, runner_too_old, runner_offline, issuer_portal). Present only on such a reason.
 	Detail string `json:"detail,omitempty"`
 	// Policy (deny-f2) names the policy whose ceiling refused the request and how
 	// to ask for a change. Present only on a ceiling refusal that carries one.

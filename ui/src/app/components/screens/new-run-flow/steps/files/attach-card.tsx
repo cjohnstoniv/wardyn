@@ -34,7 +34,7 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
   const kind = item.kind === "computer" ? "folder" : item.kind;
   const bodyId = `nr-attach-body-${item.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const access = item.kind === "repo"
-    ? <span className="font-mono text-[13px]">{item.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</span>
+    ? <span className="font-mono text-body">{item.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</span>
     // A drive an admin made read-only says so; a folder is read-only by its own source, with no one to name.
     : item.locked && item.kind !== "folder" ? <LockedAccess id={bodyId} />
       : <span>{item.readOnly ? NR_FILES.ACCESS_READ : NR_FILES.ACCESS_EDIT}</span>;

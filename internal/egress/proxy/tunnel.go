@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -75,6 +76,10 @@ const resolveBypassedCause = "this name is on the upstream proxy's bypass list, 
 // destination: that side is the one that broke. An upstream reset that lands
 // while the client's bytes are still being written would otherwise be claimed
 // by the client-to-upstream copy as the client having closed.
+//
+// Each copy goes through the wrappers until the upstream's guard has settled
+// (tunnelWatch.settled), then socket to socket (relayHalf), where the kernel
+// moves the bytes.
 func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	type end struct {
 		src net.Conn
@@ -84,7 +89,7 @@ func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		w := &writeFailed{Writer: dst}
-		_, err := io.Copy(w, src)
+		err := relayHalf(w, dst, src)
 		side := src
 		if w.failed {
 			side = dst
@@ -443,4 +448,25 @@ func (p *Proxy) emitDialledAllow(dl egress.DecisionLog, host string) {
 	}
 	dl.Via = p.viaHop(host)
 	p.sink.emit(dl)
+}
+
+// takeTunnelSlot takes one of the run's maxTunnels slots for a CONNECT tunnel, opaque
+// (openTunnel) or terminated (mitmConnect), before its dial or hijack. Past the cap it answers
+// w with a temporary 503 and a retry hint, records a builtin:tunnel-limit deny for req when
+// req is non-nil, and reports false; it never evicts an established tunnel. Temporary, so not
+// X-Wardyn-Egress: denied: a retry succeeds once a tunnel closes. release gives the slot back.
+func (p *Proxy) takeTunnelSlot(w http.ResponseWriter, req *egress.Request, host string) (release func(), ok bool) {
+	if p.openTunnels.Add(1) > p.maxTunnels {
+		p.openTunnels.Add(-1)
+		if req != nil && p.sink != nil {
+			p.sink.emit(decisionLog(*req, egress.Deny, ruleSourceTunnelLimit))
+		}
+		w.Header().Set(egressHeaderReason, ruleSourceTunnelLimit)
+		w.Header().Set(egressHeaderHost, host)
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("X-Should-Retry", "true")
+		http.Error(w, "wardyn: the run holds the most open tunnels it may; retry once one closes", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	return func() { p.openTunnels.Add(-1) }, true
 }

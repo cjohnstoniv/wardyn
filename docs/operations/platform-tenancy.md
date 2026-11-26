@@ -6,6 +6,7 @@
 - Without an envelope, a change to a unit's own walls could be approved by a peer. Since the strict approver rule, a change to a unit itself is decided strictly from above it ([four-eyes](unit-admins.md#four-eyes)).
 - An envelope lets a platform's unit admins move fast inside walls the security tier sets.
 - It changes no run. It changes which of a unit admin's writes need a second person.
+- For hard isolation between business units, run one deployment for each: [one deployment per unit](#one-deployment-per-unit).
 
 ## The envelope
 
@@ -96,6 +97,19 @@ The table is for a unit admin who governs the unit. A security admin's writes fo
 ## Data that leaves a run
 
 What a run may send out is the [`data_out`](../POLICIES.md#data_out) rule, set by a policy, a unit's walls, a restriction or the boundary.
+
+## One deployment per unit
+
+- An envelope and the units under it share one deployment: its database, sign-in, audit log and runners. The envelope changes who decides a write, not what a run may reach.
+- For hard isolation between business units, run one Wardyn deployment for each. Two deployments share no Wardyn data: each has the parts below.
+
+| Each deployment has its own | The cost |
+|---|---|
+| Database and servers | Database and server spend grow with the number of deployments |
+| Sign-in setup: an identity provider registration and its role map | Each is set up and kept on its own. A person who works in two units signs in to each |
+| Audit log | There is no single audit view; export or collect each log |
+| Units, profiles, policies and boundary | No policy applies across deployments. A rule every unit needs is written in each |
+| Runners | A runner registers with one deployment and runs only its runs |
 
 ## In the console
 

@@ -225,6 +225,7 @@ export function RunLifetimeBanner({
       // and only the on-time / late sentence is left out.
       if (!offline && !unknown && stoppedLate === null) return null;
       const seen = run.runner_last_seen_at ? absoluteTime(run.runner_last_seen_at) : "—";
+      const copyOut = run.kept_copy_out === true;
       return (
         <Banner
           data-testid={unknown ? "run-lifetime-local-unknown" : offline ? "run-lifetime-local-lapse" : "run-lifetime-local-stopped"}
@@ -235,11 +236,15 @@ export function RunLifetimeBanner({
               ? LOCAL_RUN.UNKNOWN_BODY(runner, seen)
               : offline
                 ? LOCAL_RUN.LAPSE_BODY(runner, seen)
-                : stoppedLate === "failed" || containmentPending
+                : containmentPending
                   ? undefined
-                  : stoppedLate
-                    ? LOCAL_RUN.STOPPED_LATE(runner)
-                    : LOCAL_RUN.STOPPED_BODY(runner)
+                  : copyOut
+                    ? LOCAL_RUN.COPY_OUT_BODY(runner)
+                    : stoppedLate === "failed"
+                      ? undefined
+                      : stoppedLate
+                        ? LOCAL_RUN.STOPPED_LATE(runner)
+                        : LOCAL_RUN.STOPPED_BODY(runner)
           }
         >
           {offline && <p className="mt-1 text-xs text-muted-foreground">{LOCAL_RUN.REVIVE_WHEN_BACK(runner)}</p>}
@@ -247,9 +252,11 @@ export function RunLifetimeBanner({
             <div className="mt-2.5 flex flex-wrap gap-2">
               {!offline && (
                 <>
-                  <Button size="sm" onClick={() => void revive()} disabled={busy}>
-                    {action === "revive" ? RL.REVIVING : RL.REVIVE}
-                  </Button>
+                  {!copyOut && (
+                    <Button size="sm" onClick={() => void revive()} disabled={busy}>
+                      {action === "revive" ? RL.REVIVING : RL.REVIVE}
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
                     {RL.ENDS_EXTEND}
                   </Button>
@@ -319,16 +326,20 @@ export function RunLifetimeBanner({
       // time — the grace is counted from lost_at, not from a later PATCH).
       // Offering Extend here would be a button that does nothing; End run is
       // the only real action left.
+      // Past its maximum lifetime the run only waits out its files: a revival is refused, so none is offered.
+      const pastCap = !!run.lifetime_cap_at && Date.parse(run.lifetime_cap_at) <= Date.now();
+      const keptBody = run.kept_until ? RL.endedBody(keptUntilText(run.kept_until)) : RL.ENDED_BODY_NO_DATE;
+      const pastCapBody = run.kept_until ? RL.endedPastCapBody(keptUntilText(run.kept_until)) : RL.ENDED_PAST_CAP_BODY_NO_DATE;
       return (
         <Banner
           data-testid="run-lifetime-ended"
           tone="plain"
           title={RL.ENDED_TITLE}
-          body={run.interactive ? (run.kept_until ? RL.endedBody(keptUntilText(run.kept_until)) : RL.ENDED_BODY_NO_DATE) : RL.ENDED_BODY_TASK}
+          body={run.interactive ? (pastCap ? pastCapBody : keptBody) : RL.ENDED_BODY_TASK}
         >
           {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">
-              {run.interactive && (
+              {run.interactive && !pastCap && (
                 <Button size="sm" onClick={() => void extendAndRevive()} disabled={busy}>
                   {RL.ENDED_EXTEND_AND_REVIVE}
                 </Button>

@@ -69,6 +69,7 @@ function Facts({ s }: { s: SCIMStatus }) {
       <div>
         <Fact label={SCIM.TOKEN_LABEL}>{token}</Fact>
         {s.last_token_slot === "next" && <p className="pb-1.5 text-meta text-warning">{SCIM.TOKEN_NEXT_HINT}</p>}
+        {s.last_token_slot === "primary" && <p className="pb-1.5 text-meta text-muted-foreground">{SCIM.TOKEN_PRIMARY_HINT}</p>}
       </div>
       <Fact label={SCIM.PURGE_DELAY}>{purgeDelay(s.purge_after_seconds)}</Fact>
       <Fact label={SCIM.WORKSPACES}>{s.keep_workspaces ? SCIM.WS_KEEP : SCIM.WS_REASSIGN}</Fact>

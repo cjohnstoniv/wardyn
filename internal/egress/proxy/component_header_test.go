@@ -90,7 +90,7 @@ func componentProxy(t *testing.T, allowed ...string) (p *Proxy, origin *captured
 		RunID:           uuid.New(),
 		Policy:          pol,
 		Injector:        inj,
-		Sink:            &decisionSink{out: decisions, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: decisions, ch: make(chan queuedDecision, 64)},
 		CA:              ca,
 		MITMHosts:       []string{componentHost + ":443"}, // what dispatch authors
 		Resolver:        publicResolver{},

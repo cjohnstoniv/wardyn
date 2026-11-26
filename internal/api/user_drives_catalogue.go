@@ -33,6 +33,9 @@ type reachableDrive struct {
 	// held marks a kept work folder whose run has not ended: listed, but a run cannot attach it
 	// (runDrivesFor), because that run alone holds it until then.
 	held bool
+	// legacyHeld marks a person's drive that existed when migration 0299 ran and is not yet settled
+	// (types.UserDrive.LegacyUnsettled): listed, but a run cannot attach it, and refuses with legacyDriveHeldMsg.
+	legacyHeld bool
 }
 
 // target is where this drive mounts (runner.DriveTargetFor).

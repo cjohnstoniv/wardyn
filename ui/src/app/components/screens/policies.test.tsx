@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -43,6 +43,12 @@ vi.mock("../../lib/api/runs", () => ({
 const getSetupStatusMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
 vi.mock("../../lib/api/setup", () => ({
   setup: { getSetupStatus: () => getSetupStatusMock() },
+}));
+
+// The Agent rules section under the table reads its own list; an empty one keeps it out of these tests.
+vi.mock("../../lib/api/agent-rules", async (orig) => ({
+  ...(await orig<typeof import("../../lib/api/agent-rules")>()),
+  agentRules: { list: () => Promise.resolve([]), put: vi.fn(), remove: vi.fn() },
 }));
 
 // The person's own Azure DevOps rows; [] (no row) unless a test sets one.
@@ -623,6 +629,15 @@ describe("PoliciesScreen — the door to the Wardyn boundary", () => {
   it("a security admin gets a Wardyn boundary link to its page", async () => {
     renderAs(true);
     expect(await screen.findByRole("link", { name: BOUNDARY.TITLE })).toHaveAttribute("href", "/admin/policies/boundary");
+  });
+
+  it("a security admin gets the Agent rules section; an admin who isn't one gets none", async () => {
+    renderAs(true);
+    expect(await screen.findByTestId("agent-rules-section")).toBeInTheDocument();
+    cleanup();
+    renderAs(false);
+    await screen.findByRole("button", { name: /New policy/ });
+    expect(screen.queryByTestId("agent-rules-section")).toBeNull();
   });
 
   it("an admin who isn't a security admin gets none", async () => {

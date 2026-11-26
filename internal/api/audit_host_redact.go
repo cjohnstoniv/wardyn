@@ -43,6 +43,8 @@ var auditHostViews = map[string]auditHostView{
 	// target: the scratch database's host:port/database.
 	"recovery.rehearse.begin": {allow: []string{"manifest_head_seq", "set_id"}},
 	"recovery.rehearse":       {allow: []string{"checks", "manifest_head_seq", "set_id", "verdict"}},
+	// The CRL URL, often an internal host, is a row's before/after (the CA's fingerprints share the pair).
+	"runners.mdm_device.set": {withhold: []string{"after", "before"}},
 	// What GET /site-config keeps super-only: the logo's host file, the internal host suffixes, the upstream
 	// proxy and the egress redirects with their targets (go_checksum_db_off is the go redirects' targets).
 	"site_config.write": {withhold: []string{"branding_logo_path", "egress_redirects", "go_checksum_db_off",
@@ -63,6 +65,14 @@ var auditHostViews = map[string]auditHostView{
 	"workload.policy_pin.set": {withhold: []string{"policy_pin", "previous"}},
 	"workload.launch_refused": {withhold: []string{"policy_pin", "policy_digest"}},
 	"workload.delete":         {withhold: []string{"policy_pin"}},
+	// A service grant's token endpoint host: GET /model-providers keeps the record super-only, and the endpoint may
+	// be a private host apart from the gateway. A mint row's audience and scope are as free-form (an audience is
+	// often a private API's URL), so they go with it. A refused secret write also names its form's hosts, which
+	// no one configured. base_host is served: the configured gateway is the host the member-safe provider view
+	// names (providerHost).
+	"model_provider.service_grant.mint":          {withhold: []string{"audience", "scope", "token_host"}},
+	"model_provider.service_grant.secret_write":  {withhold: []string{"body_base_host", "body_token_host", "token_host"}},
+	"model_provider.service_grant.secret_delete": {withhold: []string{"token_host"}},
 }
 
 // withoutHostDetail is evs as a reader below the super-admin tier is served them (auditHostViews). Only the

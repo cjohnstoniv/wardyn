@@ -191,6 +191,8 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
 	p.RequireManagedDevice = requiresManagedDevice(sc)
+	p.MachineKind, p.MachineKindDenials = types.MachineKind(req.MachineKind).Normalize(), machineKindDenialsOf(sc)
+	p.MacOSHostGateLater = true // macOSHostGate, in the capability step, answers a macOS VM off a managed Mac
 	// A bound folder's runner is the run's too (kindTargets holds the run to it).
 	mountRunner, refusal := boundMountsRunner(p.Spec.Mounts)
 	if refusal != nil {

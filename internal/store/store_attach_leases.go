@@ -33,6 +33,9 @@ type AttachLease struct {
 	Support bool
 }
 
+// AttachLeaseKey names one lease: its run and the holder that must still hold it.
+type AttachLeaseKey struct{ RunID, HolderID uuid.UUID }
+
 // AttachLeaseStore is the attach lease record. Optional like RunOutputStore: the api layer
 // type-asserts, and a store without it keeps the writer slot in the process.
 type AttachLeaseStore interface {
@@ -43,8 +46,9 @@ type AttachLeaseStore interface {
 	// the row is gone, has lapsed or is still l.HolderID's, for ttl. It never takes a live row of
 	// another holder, a reservation for a take-over's taker included. It reports whether it did.
 	ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Duration) (bool, error)
-	// RenewAttachLease extends holderID's lease by ttl, reporting whether holderID still held it.
-	RenewAttachLease(ctx context.Context, runID, holderID uuid.UUID, ttl time.Duration) (bool, error)
+	// RenewAttachLeases extends by ttl each lease in keys that its holder still holds, unlapsed, and reports the
+	// keys it extended. A key it leaves out was not extended: the row is gone, lapsed, or another holder's.
+	RenewAttachLeases(ctx context.Context, keys []AttachLeaseKey, ttl time.Duration) (map[AttachLeaseKey]bool, error)
 	// HoldsAttachLease reports whether holderID holds runID's lease right now, unlapsed.
 	HoldsAttachLease(ctx context.Context, runID, holderID uuid.UUID) (bool, error)
 	// ReleaseAttachLease deletes the lease if holderID holds it, reporting whether it did.
@@ -100,7 +104,7 @@ func (s PG) ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Du
 	return tag.RowsAffected() == 1, nil
 }
 
-// RenewAttachLease — see AttachLeaseStore.
+// RenewAttachLease extends holderID's lease by ttl, reporting whether holderID still held it: RenewAttachLeases' rule for one key.
 func (s PG) RenewAttachLease(ctx context.Context, runID, holderID uuid.UUID, ttl time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE run_attach_leases SET expires_at = now() + $3::interval
@@ -109,6 +113,35 @@ func (s PG) RenewAttachLease(ctx context.Context, runID, holderID uuid.UUID, ttl
 		return false, fmt.Errorf("store: renew the attach lease: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// RenewAttachLeases — see AttachLeaseStore. RenewAttachLease's rule for every key, in one statement.
+func (s PG) RenewAttachLeases(ctx context.Context, keys []AttachLeaseKey, ttl time.Duration) (map[AttachLeaseKey]bool, error) {
+	runs, holders := make([]uuid.UUID, len(keys)), make([]uuid.UUID, len(keys))
+	for i, k := range keys {
+		runs[i], holders[i] = k.RunID, k.HolderID
+	}
+	rows, err := s.Pool.Query(ctx, `
+		UPDATE run_attach_leases AS l SET expires_at = now() + $3::interval
+		FROM unnest($1::uuid[], $2::uuid[]) AS k(run_id, holder_id)
+		WHERE l.run_id = k.run_id AND l.holder_id = k.holder_id AND l.expires_at > now()
+		RETURNING l.run_id, l.holder_id`, runs, holders, ttl.String())
+	if err != nil {
+		return nil, fmt.Errorf("store: renew the attach leases: %w", err)
+	}
+	defer rows.Close()
+	renewed := make(map[AttachLeaseKey]bool, len(keys))
+	for rows.Next() {
+		var k AttachLeaseKey
+		if err := rows.Scan(&k.RunID, &k.HolderID); err != nil {
+			return nil, fmt.Errorf("store: renew the attach leases: %w", err)
+		}
+		renewed[k] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: renew the attach leases: %w", err)
+	}
+	return renewed, nil
 }
 
 // HoldsAttachLease — see AttachLeaseStore.

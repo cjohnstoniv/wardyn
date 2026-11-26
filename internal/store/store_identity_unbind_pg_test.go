@@ -239,6 +239,43 @@ func TestPG_UnbindIdentity_RefusesWhileItHoldsRunners(t *testing.T) {
 	}
 }
 
+// TestPG_UnbindIdentity_RefusesWhileADenyNamesTheSub: a person-keyed capability deny on the old sub refuses the
+// unbind, since after the re-bind it would name nobody; an allow on the sub and a deny on the person's email do not.
+func TestPG_UnbindIdentity_RefusesWhileADenyNamesTheSub(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	row, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "Sub-Deny", Issuer: "https://login.example/" + uuid.NewString() + "/v2.0",
+		TenantID: uuid.NewString(), ObjectID: uuid.NewString()}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := func(subject, effect string) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO capability_grants (id, subject_type, subject, capability, value, effect, created_by)
+			VALUES ($1, 'user', $2, 'launch_runs', 'true', $3, 'admin')`, id, subject, effect); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	grant("Sub-Deny", "allow")
+	grant("deny@corp.example", "deny")
+	deny := grant("sub-deny", "deny") // case differs from the principal: matched like the leaver purge matches
+
+	var inUse *store.PrincipalInUseError
+	if err := st.UnbindIdentity(ctx, row.ID, "Sub-Deny"); !errors.As(err, &inUse) || *inUse != (store.PrincipalInUseError{CapabilityDenies: 1}) {
+		t.Fatalf("unbind while a deny names the sub = %v, want *PrincipalInUseError with exactly one capability deny", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM capability_grants WHERE id = $1`, deny); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UnbindIdentity(ctx, row.ID, "Sub-Deny"); err != nil {
+		t.Fatalf("unbind once only an allow on the sub and a deny on the email remain: %v", err)
+	}
+}
+
 // TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner: with an identity guard on the context the
 // mint is refused for a deactivated owner and goes through for a live one.
 func TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner(t *testing.T) {
@@ -264,5 +301,35 @@ func TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner(t *testing.T) {
 	}
 	if err := mint(guarded); !errors.Is(err, store.ErrIdentityDeactivated) {
 		t.Fatalf("mint for a deactivated owner = %v, want ErrIdentityDeactivated", err)
+	}
+}
+
+// TestPG_CreateRunner_RefusesADeactivatedOwnerUnderTheGuard: with an identity guard on the context the
+// runner insert is refused for a deactivated owner and creates no row; without one it still inserts.
+func TestPG_CreateRunner_RefusesADeactivatedOwnerUnderTheGuard(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	row, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-runner-owner", Issuer: "https://login.example/" + uuid.NewString() + "/v2.0"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded := store.WithIdentityGuard(ctx, store.IdentityGuard{Principal: "sub-runner-owner", Epoch: -1})
+	if _, err := st.CreateRunner(guarded, newRunner("sub-runner-owner")); err != nil {
+		t.Fatalf("create for a live owner: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET deactivated_at = now() WHERE id = $1`, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRunner(guarded, newRunner("sub-runner-owner")); !errors.Is(err, store.ErrIdentityDeactivated) {
+		t.Fatalf("create for a deactivated owner = %v, want ErrIdentityDeactivated", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runners WHERE owner = 'sub-runner-owner'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("runners of the owner = %d, %v; want 1 (the refused insert left no row)", n, err)
+	}
+	if _, err := st.CreateRunner(ctx, newRunner("sub-runner-owner")); err != nil {
+		t.Fatalf("create with no guard on the context: %v", err)
 	}
 }

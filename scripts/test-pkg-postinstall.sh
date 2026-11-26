@@ -58,6 +58,8 @@ stub rm 'for a; do case "$a" in -*) ;; *) find "$a" -printf "%i\n" 2>/dev/null |
 stub install 'args=(); dir=0; while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; -d) dir=1; shift ;; *) args+=("$1"); shift ;; esac; done
 if [ "$dir" = 1 ]; then /usr/bin/install -d "${args[@]}"; else /usr/bin/install "${args[@]}"; fi; mark "$(readlink -f "${args[-1]}")"'
 stub launchctl 'exit 0'
+# sysctl reports the host: SYSCTL_ARM64 unset or 1 is Apple silicon, 0 is Intel, `missing` is a kernel without the key.
+stub sysctl 'case "${SYSCTL_ARM64:-1}" in missing) exit 1 ;; *) echo "${SYSCTL_ARM64:-1}" ;; esac'
 
 # fresh <name>: a new temp root that carries the helper, so the package would install the ledger. The helper
 # is a stand-in that records its arguments: what ledger-setup does inside the base is tested in Go
@@ -69,7 +71,7 @@ fresh() {
     >"$R/usr/local/wardyn/bin/wardyn-macvm"
   chmod +x "$R/usr/local/wardyn/bin/wardyn-macvm"
 }
-post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" WARDYN_PKG_PATH="$T" SWAP_PATH="${SWAP_PATH:-}" SWAP_TO="${SWAP_TO:-}" sh "$POST" >"${WORK}/out" 2>&1; }
+post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" WARDYN_PKG_PATH="$T" SWAP_PATH="${SWAP_PATH:-}" SWAP_TO="${SWAP_TO:-}" SYSCTL_ARM64="${SYSCTL_ARM64:-1}" sh "$POST" >"${WORK}/out" 2>&1; }
 run() { post || { cat "${WORK}/out" >&2; fail "postinstall failed ($1)"; }; }
 ino() { /usr/bin/stat -c %i "$1"; }
 root_owned() { [ -e "$OWN/$(ino "$1")" ]; }
@@ -130,6 +132,18 @@ fresh helper-fails; echo 1 >"$R/helper.rc"
 fresh shared-not-sticky; chmod 777 "$R/Users/Shared"
 ! post || fail "postinstall succeeded over a non-sticky /Users/Shared"
 [ ! -e "$(B)" ] && [ ! -e "$R/ledger-setup.args" ] || fail "postinstall touched a non-sticky /Users/Shared"
+
+# 6d. An Intel host (the universal package carries the arm64-only helper): the helper is present but unusable,
+# the install still succeeds, and no VM setup runs. A kernel without hw.optional.arm64 is Intel too.
+for arm in 0 missing; do
+  fresh "intel-$arm"; echo 1 >"$R/helper.rc"
+  SYSCTL_ARM64="$arm" run "intel-$arm"
+  [ ! -e "$(B)" ] && [ ! -e "$R/ledger-setup.args" ] || fail "VM setup ran on an Intel host (hw.optional.arm64 $arm)"
+done
+# On Apple silicon the same failing helper still fails the install.
+fresh arm64-helper-fails; echo 1 >"$R/helper.rc"
+! SYSCTL_ARM64=1 post || fail "postinstall succeeded when ledger-setup failed on Apple silicon"
+grep -q 'macOS VMs stay off' "${WORK}/out" && [ -e "$R/ledger-setup.args" ] || fail "no fail-closed message on Apple silicon"
 
 # victim <name>: a login's directory and file the script must never change; prints their state.
 victim_state() { printf '%s %s %s %s\n' "$(mode "$R/victim")" "$(root_owned "$R/victim" && echo root || echo user)" \

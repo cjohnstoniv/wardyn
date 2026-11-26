@@ -16,6 +16,7 @@
 | `wardyn_sweep_last_tick_seconds{sweep,result}` | Gauge, Unix seconds. `result="attempt"` is when the sweep last started a tick, `result="success"` when it last finished one without error. A follower reports the leader's ticks. See [Substrate and sweep health](#substrate-and-sweep-health). |
 | `wardyn_audit_partitions_ahead` | Gauge. Months past the current one that already have an audit partition. A write into a month with none fails and waits in the spool; `/setup/status` warns (`audit_partitions`) below 3. See [Audit retention](../OPERATIONS.md#audit-retention-the-attested-partition-drop). |
 | `wardyn_audit_spool_lines` | Gauge. Audit events waiting in the local JSONL fallback spool. A value that never returns to 0 means the drain loop isn't working; mid-drain it can read lower than the file's line count. |
+| `wardyn_portal_issuer_refresh_failures_total{issuer_key,portal,source,cause}` | Counter. A failed refresh of an issuer portal's discovery document or keys. `portal` is the live portals' delegate id (empty if none), `source` is `scheduled` or `unknown_kid`; `cause` is the coarse cause. Meanwhile its exchanges answer 503. |
 | `wardyn_audit_spool_quarantined_total` | Events the store permanently refused, moved aside by the drain. Non-zero means the trail is missing those events even though the spool drained. |
 | `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable, such as a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never parsed far enough to be replayed, so they are not in the quarantine count. |
 | `wardyn_audit_outcome_refused_total` | Audit events refused before the store because their `outcome` was not `success`, `failure` or `denied`, each also logged at error level with its action. Non-zero is a code defect: report the logged action. |
@@ -37,6 +38,9 @@
 | `wardyn_drive_probe_errors_total` | Counter. Docker `host_path` drive agent-readability probes that could not run at all. The probe fails open: the caller falls back to "cannot tell" rather than refusing (`WARDYN_DRIVE_PROBE_IMAGE`, [ENV.md](../ENV.md)). |
 | `wardyn_runner_pool_queue_depth{pool_id}`, `wardyn_runner_pool_slots_used{pool_id}` | Gauges. Runs waiting in each runner pool's queue and runs holding a slot there, from a 15-second snapshot; aggregate with `max()` across replicas, never `sum()`. The label is the pool's id, never its name or an owner. |
 | `wardyn_runner_pool_queue_wait_seconds{outcome}` | Histogram. How long runs waited in a pool's queue, by how they left it: `started`, `timeout`, `cancelled` or `refused`. |
+| `wardyn_run_start_phase_seconds{phase}` | Histogram, for runs that reached RUNNING: `before_dispatch` (creation to dispatch, any pool queue wait included), `prepare`, `create` (the runner's sandbox create), `confirm` (the proxy's confirmation) and `total`. |
+| `wardyn_http_request_seconds{route}` | Histogram. Time to answer a request, by the route pattern it matched, or `unmatched`. An attach or stream counts its whole session, so read those routes apart. Per replica. |
+| `wardyn_egress_decision_record_seconds{decision}` | Histogram. From a proxy taking a request to wardynd recording its `allow`, `deny` or `hold` decision, for proxies that post directly; a runner's spooled rows are not counted. Includes any approval wait. Clock skew reads as 0. |
 | `wardyn_run_start_wait_seconds{reason}` | Summary (sum and count). Time a sandbox still being created spent waiting on each substrate reason, such as pulling an image, waiting for a node, or a reference that will not pull. See [Start deadlines](../OPERATIONS.md#the-start-deadlines). |
 | `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`, `spent`, `transport_error` or `unavailable`. It graphs the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check make. |
 | `wardyn_credential_reauth_total{outcome}` | Counter. Mid-run model-credential re-auth workflows, by outcome: `requested`, `resolved`, `expired`, `cancelled` or `timeout`. The timeout series is the one to watch for a sign-in nobody answered; the egress deny counter does not count it. |
@@ -53,6 +57,7 @@
 - The held figures are summed per runner kind, never across kinds: the basis is requests for `k8s` and caps for `docker`. They are configured reservations, not observed use.
 - `wardyn_sso_refresh_total{outcome="spent"}` increments once per refresh token AWS retires, at the `CreateToken` call that discovers it. Later dispatches on that token short-circuit uncounted, so the series reads how many sessions AWS retired, not how many times people hit a dead one.
 - A climbing `transport_error` or `unavailable` series means the SSO-OIDC endpoint itself is in trouble.
+- `wardyn_audit_partitions_ahead` is left out when wardynd cannot read it (`/setup/status` then warns that it could not be checked), so alert on its absence while `wardyn_store_up` is 1, as well as on a value below 3.
 
 ## Model token usage
 
@@ -103,7 +108,7 @@
 
 ## Substrate and sweep health
 
-- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it.
+- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it where `readinessProbe.path` is `/readyz`; the default is `/healthz`.
 - A substrate fault that pulled every replica out of the Service would take the console down with them, and the console is the one place the fault is visible.
 - A broken substrate and a stalled sweep show instead on two gauges and on one `/setup/status` row, `substrate_health`, which an operator sees and a member does not.
 
@@ -163,6 +168,8 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 - `healthy` needs fresh heartbeats whose kernel event counts (`observed_total` plus `dropped_unmapped`) rose in the last 15 minutes. A sensor that stops can read `healthy` for up to 15 minutes after its last such heartbeat.
 - A fresh heartbeat whose counts last rose over 15 minutes ago reads `idle` with "No new kernel events in the last 15 minutes". Tetragon or its export may have stopped, or the host ran nothing Tetragon exports.
 - With no rise on record it reads `idle` with "Whether new kernel events still arrive is not yet known". That is a node's first heartbeat, the first after a gap of over 15 minutes, and any heartbeat with no node row. After upgrading to this version, every sensor reads so until its counts next rise.
+- The missing connect kind, `kernel.network.connect`, is listed under `missing_kinds` only while the overall sensor state is `partial`. `degraded` and `idle` take precedence, and `/healthz` then omits `missing_kinds`.
+- The check reads event counts alone. If the supported connect hook has recorded connects, the counts cannot show that another hook's connects were dropped. Neither `healthy` nor a `partial` that omits the connect kind proves every connect was recorded.
 - The node's row keeps when its counts last rose, so every server reads the same verdict, one that just started included.
 - A failed write of a node's row is logged and does not fail the heartbeat.
 - With two or more live nodes, a run's recent kernel events are read from the node its newest event came from, and are empty if it has none.

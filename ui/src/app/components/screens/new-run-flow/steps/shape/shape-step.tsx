@@ -116,7 +116,7 @@ function WorkloadButton({ title, body, sub, onChoose }: { title: string; body: s
       className="group flex w-full items-center justify-between gap-4 rounded-[9px] border border-border bg-card p-[17px] text-left transition-[border-color,background-color,transform] outline-none hover:translate-x-0.5 hover:border-primary hover:bg-primary/10 focus-visible:ring-[3px] focus-visible:ring-ring motion-reduce:transition-none motion-reduce:hover:translate-x-0"
     >
       <span className="flex min-w-0 flex-col gap-1">
-        <strong id={`${id}-title`} className="text-[13px] font-semibold">{title}</strong>
+        <strong id={`${id}-title`} className="text-body font-semibold">{title}</strong>
         <span id={`${id}-body`} className="text-xs leading-[1.45] text-muted-foreground">{body}</span>
         <small id={`${id}-sub`} className="text-meta leading-[1.45] text-muted-foreground">{sub}</small>
       </span>

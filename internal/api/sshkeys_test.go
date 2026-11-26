@@ -5,11 +5,15 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -146,6 +150,34 @@ func TestSSHKeysREST_DuplicateFingerprintConflicts(t *testing.T) {
 	// Go constant.
 	if got := errorReason(w); got != "ssh_key_registration_refused" {
 		t.Errorf("reason = %q, want the literal \"ssh_key_registration_refused\"; body=%s", got, w.Body.String())
+	}
+}
+
+// TestSSHKeysREST_QuotaAnswersBeforeDuplicate pins the order the guide documents: a caller already holding the cap
+// who re-submits a key of their own gets the 422 quota refusal, not the 409 duplicate one.
+func TestSSHKeysREST_QuotaAnswersBeforeDuplicate(t *testing.T) {
+	srv, _ := sshKeysTestServer(t)
+	var first string
+	for i := range sshMaxKeysPerPrincipal {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k, err := ssh.NewPublicKey(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"public_key":"` + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))) + `"}`
+		if i == 0 {
+			first = body
+		}
+		if w := do(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", adminToken, body); w.Code != http.StatusCreated {
+			t.Fatalf("key %d: code = %d, want 201; body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", adminToken, first)
+	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonSSHKeyCapReached {
+		t.Fatalf("a registered key re-added at the cap: code = %d reason %q, want 422 %s; body=%s", w.Code, errorReason(w), reasonSSHKeyCapReached, w.Body.String())
 	}
 }
 

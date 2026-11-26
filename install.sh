@@ -4,7 +4,7 @@
 #
 # install.sh — install Wardyn on this machine.
 #
-#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install.sh | sh
+#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.11.0-rc.3/install.sh | sh
 #
 # That URL is a release asset covered by the signed SHA256SUMS. Curling this
 # file from `main` also works, but nothing signs tip-of-main. README.md carries
@@ -233,6 +233,9 @@ IMG="ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
 # The agent images this release publishes, as `<catalog name>:<image name>` —
 # the fresh .env seeds the map below from these, and the upgrade merges into
 # whatever map the box already has, row by row.
+# claude-code names agent-base, which ships no coding agent: Wardyn publishes no
+# Claude Code image (deploy/images/THIRD-PARTY-TERMS.md). Setup reports that pin as
+# unable to sign in; docs/operations/build-images.md "Claude sign-in image" builds one.
 AGENT_IMAGE_ROWS="claude-code:agent-base codex-cli:agent-codex-cli aws-sso:agent-aws-sso"
 say "Installing Wardyn ${VERSION} into ${HOME_DIR}"
 

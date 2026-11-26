@@ -1028,8 +1028,8 @@ func TestKeptStopThatCannotLockReportsPending(t *testing.T) {
 	if rec := readKept(t, dir, id); rec.ActiveRun != "" || !rec.ExpiresAt.Equal(now.AddDate(0, 0, 1)) {
 		t.Fatalf("the recovered machine %+v, want the launched 1 day", rec)
 	}
-	if k, err := r.d.KeptMachines(); err != nil || k.Machines[0].InUse || !k.Machines[0].ExpiresAt.Equal(now.AddDate(0, 0, 1)) {
-		t.Fatalf("the inventory after recovery: %+v, %v", k, err)
+	if k, err := r.d.KeptMachines(); err != nil || k.Machines[0].InUse || !k.Machines[0].ExpiresAt.Equal(now.AddDate(0, 0, 1)) || k.Machines[0].StopRunID != run.String() {
+		t.Fatalf("the inventory after recovery: %+v, %v, want idle, the launched 1 day and the stop of run %s", k, err, run)
 	}
 }
 

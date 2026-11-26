@@ -52,7 +52,7 @@ export function ReplayActionLog({ actions, gaps, active, duration, onJump, onGoA
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span>{a.text}</span>
-            {a.detail && <span className="truncate font-mono text-[11px] text-muted-foreground">{a.detail}</span>}
+            {a.detail && <span className="truncate font-mono text-meta text-muted-foreground">{a.detail}</span>}
           </span>
           <span className={`text-meta font-medium ${OUTCOME_CLASS[a.outcome]}`}>{a.outcome}</span>
         </button>

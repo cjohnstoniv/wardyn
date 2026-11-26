@@ -46,7 +46,10 @@ type webAttach struct {
 // fail ends a connection whose exec could not be opened or replaced: the
 // outcome is audited and the socket closed with a status the console can tell
 // from a dropped link. A capability the sandbox lacks is no fault: it closes
-// normally with the reason, which the console prints and does not retry.
+// normally with the reason, which the console prints and does not retry. A
+// promotion refused because the run is gone or can no longer take a command
+// (startRefused) is the session's end: it closes 4401, as the authority check
+// that ends the other sockets does, not 1011.
 func (wa *webAttach) fail(err error, promotion bool) {
 	wa.failed.Store(true)
 	data := map[string]any{"state": "attaching", "error": attachAuditError(wa.finishCtx, wa.run.ID, err)}
@@ -58,6 +61,8 @@ func (wa *webAttach) fail(err error, promotion bool) {
 	// library tear the connection down without one.
 	if errors.Is(err, runner.ErrObserveUnsupported) {
 		_ = wa.c.Close(websocket.StatusNormalClosure, "this sandbox does not support watching a terminal")
+	} else if promotion && errors.As(err, new(startRefused)) {
+		_ = wa.c.Close(attachAuthEndedCode, attachAuthEndedReason)
 	} else {
 		_ = wa.c.Close(websocket.StatusInternalError, "attach failed")
 	}

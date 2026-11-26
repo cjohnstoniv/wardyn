@@ -142,6 +142,7 @@
 - **Under a governance ceiling that sets no positive maximum of its own, the composer clamp leaves this field exactly as authored**.
   - So a run there is never idle-reaped whether the field is absent, `0`, or negative: the reaper skips every policy value `<= 0`, which makes those three the same run.
 - A ceiling that wants member runs reaped states a positive maximum, which the clamp then binds them to.
+- An outage does not count as idleness: no run is idle-stopped while the database recovers, or while its registered runner cannot reach the server, and its idle time starts again after each ([Run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run)).
 
 ### `git_push_any_branch`
 
@@ -533,6 +534,8 @@ What the check does and does not settle:
 |---|---|
 | `always_deny` | Hard-deny the unknown domain and log it. No approval is ever raised. |
 | `deny_with_review` | Raise a pending approval **and** deny the in-flight request. Once approved, a retry passes. The connection is never held; a stalled control plane delays the request by at most 5 s. |
+| | While an approval is pending, a retry waits for a rate-limited status check. A request that joins a check already in progress can still see the earlier pending state; retry again after that response. |
+| | With the control plane responding, starting a new check waits at most about a quarter second. Waiting and the check share the existing timeout. |
 | `wait_for_review` | Raise a pending approval and **hold the connection** until it is decided or the hold deadline passes (`first_use_hold_seconds`, default 30s; at most `max_holds` concurrent holds, default 16). |
 | | Approved in time, the same in-flight request completes; on deadline it fails closed (403) with the approval still pending. |
 
@@ -643,6 +646,58 @@ What the check does and does not settle:
 | `wardyn walls presets delete <name\|id> [--mine \| --group G \| --org]` | Deletes a preset you may change. Runs already launched with it keep it |
 
 - The file is the one `wardyn walls set` reads, and `push_rules.deny_all: true` is read like any other knob. A preset that names no limit is refused (`422` `wall_preset_invalid`).
+
+## Agent rules
+
+- Agent rules are an organisation's limits for one agent harness (`claude-code`, `codex-cli` or any catalogue harness). They are the same narrow-only walls a person sets for themselves ([Your walls](#your-walls)), plus an optional requirement on the harness's own sandbox and approvals.
+- Every run that includes the harness is narrowed by them, the same way a person's walls narrow it: they only ever remove what the run could do. A super admin's own run is bound too.
+- They bind the whole sandbox, wherever it is placed: the server's Docker, an organisation cluster runner or a person's own laptop. A sandbox's network cannot tell which process sent a request, so anyone sharing the desktop with the agent is bound too.
+- A run launched without the harness ("Your own tools") is not bound. That is the one-click sandbox without the agent.
+- The run's effective policy names the layer: each value the rules decided has the provenance layer `agent_rules`, named by the harness id, and the `run.create` row's `policy_source.agent_rules` lists what each harness's rules narrowed.
+
+| Knob | Effect on each run that includes the harness |
+|---|---|
+| `allowed_domains`, `denied_domains` | The run reaches only the listed sites, and never the denied ones. The agent's model host and the run's own setup stay reachable under an allowlist, as for your walls |
+| `allow_all_egress` | `false` only. Turns open egress off |
+| `first_use_approval`, `min_confinement_class` | The stricter of the run's and the rule's stands |
+| `desktop` | Each named direction is blocked |
+| `withheld_grants` | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
+| `tool_rules`, `push_rules` | Added to the run's: a hold or deny for a tool, paths added to the push deny list, or every push refused |
+| `recording` | A floor: the run is recorded at least at that level, read at dispatch |
+| `auto_stop_after_sec` | A cap on the idle seconds before the sandbox stops. The shorter stands |
+| `inner_walls` | The harness's own walls: see below |
+
+- `github_capabilities` and `azure_devops_capabilities` are refused (`422` `agent_rules_invalid`) for now, because Wardyn would not enforce them on every run. Use `push_rules`, `withheld_grants` or a restriction.
+- Every value only narrows. `allow_all_egress: true`, an `inner_walls` sandbox of `off` or approvals of `none`, and rules that name nothing are refused as `agent_rules_invalid`. A harness the catalogue does not have is `agent_rules_harness_unknown`.
+- `inner_walls` sets `sandbox_mode` (`workspace-write` or `read-only`) and `approvals` (`harness` or `wardyn`) for the agent's own walls.
+  - The stricter sandbox mode wins over the policy's. Approvals must match the policy's when both set them, or the run is refused `agent_rules_conflict`.
+  - An inner-walls rule binds every catalogue agent in the run.
+  - A rule looser than the agent's lane refuses the run: `approvals: harness` on a hold-lane run, or `sandbox_mode: workspace-write` on a read-only launch. It never launches the agent looser.
+- Rules that cannot be read refuse the run, and a stored rule the walls rules now refuse refuses it too (`agent_rules_invalid`). At a credential mint, rules that cannot be read answer a retryable `503`.
+
+**When a change reaches a run.**
+
+- Denies, blocked desktop directions, withheld credentials and a refusal of every push reach a running run at its next dispatch or revive.
+- The recording floor is read when a run is dispatched, so it also reaches a run that is still queued or starting. Once a run is recorded its level does not change.
+- Tool rules, `push_rules.deny_paths`, `auto_stop_after_sec`, `first_use_approval`, `min_confinement_class`, `inner_walls` and the allowlist reach only runs created after the change.
+- A queued run is resolved again when it starts, from its stored request, with the rules in force then. A change made while it waited binds it, and a rule it can no longer meet ends the start with the refusal.
+
+**Runs the rules bind.**
+
+- A workspace record or verify session runs the agent, so the rules for `claude-code` narrow its policy as they narrow a run's. A rule it cannot meet refuses the launch before it is claimed:
+  - `422` `agent_rules_conflict` for a confinement floor the runner cannot give, or inner walls the session cannot launch with.
+  - `422` `agent_rules_invalid` for a stored rule that no longer passes.
+  - `403` `governance_overlay_unsatisfiable` when a rule's allowlist has nothing in common with the confined session's.
+- A harness login is a run of the vendor CLI. The rules for that agent bind it through the seal, the recording floor and the mint only: no create step narrows its allowlist or tool rules.
+- A source scan and a workspace step that is not an interactive session start no agent. They carry the step's default agent name but are not bound, so a withheld credential cannot fail their clone.
+
+**Routes**, on the security tier (`admin` or `security_admin`). Writes and deletes are audited and covered by strict audit; `GET /agent-rules` is not audited:
+
+- `GET /agent-rules` lists the rules, sorted by harness.
+- `PUT /agent-rules/{harness}` writes them. The body is `spec`, `inner_walls` and `version`: `0` creates, any other value must be the stored version, or the write is `409` `agent_rules_version_conflict`.
+- `DELETE /agent-rules/{harness}?version=<n>` removes them at that version.
+
+With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, every PUT and DELETE is held for a second security admin (`202` `pending_change`). The break-glass admin token writes directly and leaves an `admin_token_break_glass` audit row, as for every other held governance write.
 
 ## `deny_kept_machines`
 
@@ -843,7 +898,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`, and `"accepts_once": true` when the proxy can keep a `once` decision.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval for the run lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline for the run refuses them all. The answer lives in the run's proxy, so a new proxy asks again.
-- A decision `once` answers only the request waiting, or the next one sent if none waits. The next request with that host, method and path asks again.
+- An approval decided `once` is spent by one waiting request, or by the next one sent if none waits; any other waiting request asks again. A decline decided `once` refuses every request already waiting on that approval. The next request with that host, method and path asks again.
 - On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. The call is asked about again once that engine is let go, which happens:
   - when it has had nothing open for 10 minutes;
   - when the run is kept, its runner goes offline, or two reads of the run fail in a row;
@@ -1133,6 +1188,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
 | `inbound` | `bool` | `false` | Makes the port a service port: the run's owner and its `callers` reach it through the gateway on any run, a background run included. Declaring it needs the restricted `feature` value `inbound`. See [Inbound](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). |
 | `callers` | `[]string` | `[]` | Who besides the owner may call an `inbound` app: `user:<sub or email>`, `group:<name>` or `service:<name>`, lower-case, each once, at most 32. Refused without `inbound`; `all` is not a caller. Fixed at create. |
+| `kind` | `string` | none | `desktop` marks a desktop app: whatever its name, the relay filters its clipboard, records it and closes it under `deny_interactive`. A helper needs the web apps and desktop doors. `novnc` is one without it. Other values are refused. |
 
 ## `desktop` — `DesktopControls`
 
@@ -1146,9 +1202,11 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
   asked decides it.
 - An approval releases those bytes once; a file changed since is refused. `allowed` < `review` < `blocked`, so a layer
   below can only make it stricter.
-- The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
-  under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
-  port forward to the desktop's VNC port is outside the relay.
+- The clipboard rules bind the relay of every desktop app: the app named `novnc`, and any app declared with
+  `kind: desktop`. A desktop declared under another name without the kind relays unfiltered, so declare the kind on
+  it, or on the ceiling's entry for it: a policy under that ceiling keeps the kind.
+- An SSH port forward to the desktop's VNC port is outside the relay. A ceiling that blocks copy out should list its
+  `ui_apps`: a policy under a ceiling with no list may declare any app.
 - The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
   a run built to get data out.
 
@@ -1194,7 +1252,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The upgrade sets `blocked` on each other existing run with no policy record left that is older than the newest record retention removed, plus a day. A run still queued, pending or starting with no sandbox is left alone. The desktop's socket and its Files panel refuse a run whose policy records were removed with 503 `desktop_rules_unreadable`.
 - Network egress is outside this rule. An agent can still send content to any host in `allowed_domains`, through MCP tool calls and the model lane. Narrow those with `allowed_domains`, `denied_domains` and tool rules.
 - Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
-- The desktop app (`novnc`) is exempt because it is a display. Its server runs in the sandbox, so anything that server answers over plain HTTP also leaves. `deny_interactive` closes the desktop app.
+- The desktop app (`novnc`) is exempt because it is a display. Its server runs in the sandbox, so anything that server answers over plain HTTP also leaves. `deny_interactive` closes the desktop app. An app declared with `kind: desktop` under another name is not exempt: under `review` or `blocked` it is refused like any other web app.
 - With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
 - Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A web app's refusals write it; a refused call to an `inbound` app with an API token writes it only within the audit rate limit shared with failed authentication.
 - A refused Files panel download keeps its `desktop.file.transfer` row. A 503 `data_out_unreadable` writes no row; it is logged.
@@ -1234,9 +1292,10 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 
 **It narrows; it never widens.**
 
-- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default. A routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
-- The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
-- That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
+- Routing a run to the gated lane never loosens it: a routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
+- An explicit `allow` runs that tool without asking, so a rule that allows too much removes the human decision for that tool.
+- Tools no rule names on a supervised run keep their hold default unless the policy sets a different default.
+- A member's `inline_policy` may narrow the operator's rules, never widen them: a member's rules cannot weaken the operator's ceiling.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
 - So a tool the operator denies stays denied in a run whose policy never mentioned it.
 
@@ -1417,8 +1476,8 @@ Residual: a rule constrains requests addressed to its host name, not every route
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
-| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; on the Azure DevOps Entra lane, a push whose paths could not be worked out is instead a rejected ref whose reason git prints | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
-| A path matched `require_review_paths` on an **unattended** run | `403`; on the Azure DevOps Entra lane, a rejected ref whose reason git prints | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked; or an admin approved a push over 1 MiB | `403`. A push whose paths could not be worked out, or an approved one over 1 MiB, is a rejected ref whose reason git prints. A client that did not ask for git's push report gets `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths` on an **unattended** run | A rejected ref whose reason git prints; `403` for a client that did not ask for git's push report | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
 
 - `415` `brokered:git:push-uninspectable`: A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too.
 
@@ -1518,12 +1577,15 @@ So an entry a pattern matches is judged one of two ways:
   - A run that checks out an older commit, or never pulls after a workflow changed on the default branch, can push a branch whose workflows are the older ones.
   - That includes one the default branch has since fixed.
   - The rule is that a push does not *change* a denied path relative to the commit it builds on — not that every branch carries the newest version of it.
-- **Removals are invisible.** These rules judge what a push *introduces*.
+- **Removals are invisible.** These rules judge what a push *introduces*. With `WARDYN_PUSH_HOLD_REMOVALS` on, a review path also holds a removal (below).
 
 **What the person pushing sees.**
 
-- git renders a receive-pack `403` as `error: RPC failed; HTTP 403` without the response body, so the paths are read from the run's decision stream and the sidecar's structured log rather than from the terminal.
-- A sideband report-status would render, and is deliberately not used: it would mean claiming `unpack ok` for a pack the broker never forwarded.
+- A refusal at a review path on an unattended run, and a push whose paths could not be worked out, are answered in git's own terms.
+  - git prints `! [remote rejected] <ref> (<reason>)`, and the reason names the paths and what to do.
+  - The answer says the pack was not unpacked; it never claims `unpack ok` for a pack the broker did not forward.
+  - A client that did not ask for git's push report gets a `403` instead.
+- git renders every other receive-pack `403` as `error: RPC failed; HTTP 403` without the response body, so those paths are read from the run's decision stream and the sidecar's structured log rather than from the terminal.
 
 **Pattern language.**
 
@@ -1540,6 +1602,7 @@ So an entry a pattern matches is judged one of two ways:
 
 - A path a review pattern matches — same pattern language, same forge comparison, a directory the push does not carry matched when a pattern could match beneath it — does not refuse the push.
 - The broker holds the request open and raises a `push_content` approval for an admin, then forwards the buffered bytes unchanged if it is approved.
+  - A held push over 1 MiB is not kept: once approved, git says to push the same commits again, and they go through.
 - A deny match always wins: a path both lists match is refused and nothing is asked.
 
 - **Admins decide, members do not** — not even on their own run.
@@ -1547,11 +1610,16 @@ So an entry a pattern matches is judged one of two ways:
   - A decision carries no `decision_scope` (`400` if one is sent): an approval covers exactly the commits it names.
 - **An unattended run does not hold.**
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
+  - Git prints the refusal as a remote rejection that names the paths and how to land them.
   - The control plane refuses such a raise as well.
   - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
-- **A push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
+- **By default, a push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
   - These rules judge what a push introduces, so the push goes through. A `**` pattern does hold a push that replaces the directory itself with a file.
   - The forge's own branch policy is what protects that file.
+  - With `WARDYN_PUSH_HOLD_REMOVALS` on, a push to GitHub or Azure DevOps that removes such a file from a branch it updates is held, or refused on an unattended run. That includes a GitHub force-push that rewinds the branch. A branch the push creates has no tip to compare with, so nothing is removed from it.
+  - A `git_pat` remote the broker cannot read is held, or refused on an unattended run, as a push whose paths could not be worked out. That is an Azure DevOps remote not spelled `<project>/_git/<repository>`, such as a `_git/_full/` form, or any Azure DevOps Server remote.
+  - On such a remote every push that moves an existing branch is held, whatever it changes, so an unattended run there can only create branches.
+  - Turn it on only when every runner is 0.10.4 or later: an older runner is refused each run (`runner_proxy_setting_unsupported`).
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
   - When the comparison cannot be made, the push is still held or refused. Git prints the refusal as a remote rejection. It says the paths could not be worked out on this lane, and why, rather than that the push touches them. The listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.
@@ -1665,9 +1733,9 @@ So an entry a pattern matches is judged one of two ways:
 - Bounded at write time to **0..32**, the most a pack can carry.
 - A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above)
   - and refused, as "size not carried by the pack", when it cannot be shown unchanged;
-  - on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change,
+  - on a connection whose code host cannot be read (every host but github.com and Azure DevOps), a file the push does not carry is refused when Wardyn cannot establish its size;
   - so the push is refused whatever the sizes;
-  - set it to `0` on that lane, or push through a GitHub lane.
+  - use a supported connection or change the size rule: set it to `0` on that lane, or push through a GitHub or Azure DevOps lane.
 - A complete clone does not help: git never sends objects the remote already holds.
 - A file past `max_inspect_pack_mib`, or past `internal/gitpack`'s own compiled-in ceilings, is refused as too large before this rule sees it.
 - A deny, like a `deny_paths` match (`403`, `brokered:git:push-rules`).

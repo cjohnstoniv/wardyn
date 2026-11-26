@@ -251,12 +251,20 @@ fi
 CI_YML="$ROOT/.github/workflows/ci.yml"
 pr_branch="$(awk '/if \[ -n "\$PR_HEAD" \]; then/{f=1;next} f && /elif \[ -n "\$BASE" \]; then/{exit} f' "$CI_YML")"
 [ -n "$pr_branch" ] || fail "case 6: could not find ci.yml's PR-range branch (if [ -n \"\$PR_HEAD\" ]; then ... elif)"
-pr_cmd="$(printf '%s\n' "$pr_branch" | grep 'make dco')"
+pr_cmd="$(printf '%s\n' "$pr_branch" | grep 'make dco' | head -1)"
 [ -n "$pr_cmd" ] || fail "case 6: no 'make dco' invocation found in ci.yml's PR-range branch"
 case "$pr_cmd" in
 	*DCO_ALLOW_GITHUB_MERGES*)
 		fail "case 6: ci.yml's PR-range dco invocation carries DCO_ALLOW_GITHUB_MERGES — that exemption must apply only on push/merge_group (#1070): $pr_cmd" ;;
 esac
+# The only other dco call in the branch is the release-line pass: GitHub's merges are exempt there only over
+# the commits the PR carries from a release branch (its merge-base with that line), never over the PR's own range.
+while IFS= read -r l; do
+	case "$l" in
+		*'DCO_RANGE="$carried ^origin/main ^$BASE" DCO_ALLOW_GITHUB_MERGES=1'*) ;;
+		*) fail "case 6: an extra dco call in ci.yml's PR-range branch is not the release-line pass: $l" ;;
+	esac
+done < <(printf '%s\n' "$pr_branch" | grep 'make dco' | tail -n +2)
 
 r6="$TMP/case6"
 mkrepo "$r6"
@@ -309,6 +317,7 @@ case "$range7" in
 	*'^origin/main'*) ;;
 	*) fail "case 7: ci.yml's PR range does not exclude origin/main: $range7" ;;
 esac
+range7="${range7//\$(printf \'^%s \' \$RELEASE_LINES)/}" # this repo has no release lines
 range7="${range7//\$BASE/$pr7_base}"
 range7="${range7//\$PR_HEAD/$pr7_head}"
 range7="${range7//origin\/main/$main7}"

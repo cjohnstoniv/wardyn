@@ -27,7 +27,7 @@ func ServePort(ctx context.Context, path string, h http.Handler) error {
 	l := newPortListener(ctx, f, 200*time.Millisecond)
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
-	srv := &http.Server{Handler: h, Protocols: &protocols, ReadHeaderTimeout: time.Minute}
+	srv := &http.Server{Handler: h, Protocols: &protocols, HTTP2: agentHTTP2Config(), ReadHeaderTimeout: time.Minute}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
@@ -304,8 +304,19 @@ func (c *portConn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Close ends the session. A host still connected to it is told with a record no session carries (an empty hello):
+// its next read fails and it closes its socket, so a redial is served at once instead of waiting behind the open one
+// (QEMU accepts one host at a time). A host that has gone, or a next host past its hello, is told nothing: the epoch
+// has moved.
 func (c *portConn) Close() error {
-	c.once.Do(func() { close(c.closed) })
+	c.once.Do(func() {
+		c.l.wmu.Lock()
+		defer c.l.wmu.Unlock()
+		if c.epoch == c.l.epoch {
+			_, _ = c.l.w.Write(appendRecord(nil, recHello, nil))
+		}
+		close(c.closed)
+	})
 	return nil
 }
 

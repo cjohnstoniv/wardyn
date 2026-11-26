@@ -5,9 +5,10 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgentRun } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { filterBySegment, runSegment, segmentCounts } from "./runs-segment";
 
-const run = (over: Partial<AgentRun> = {}): AgentRun => ({ id: "r", agent: "", ...over }) as AgentRun;
+const run = (over: Partial<AgentRun> = {}): AgentRun => makeRun({ id: "r", agent: "", ...over });
 const service: AgentRun["service"] = { restart: "on_failure" };
 
 describe("runSegment", () => {

@@ -109,7 +109,7 @@ func acquireMigrateOnly(ctx context.Context, dsn string, connectTimeout time.Dur
 func acquireQuiet(ctx context.Context, dsn string, connectTimeout time.Duration, verb string) (*migrateOnlySession, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	pool, err := db.Connect(connectCtx, dsn)
+	pool, err := db.Connect(connectCtx, dsn, toolDBOption("migrate"))
 	if err != nil {
 		return nil, &exitCodeError{code: exitMigrateFailed, err: fmt.Errorf("connect db: %w", err)}
 	}
@@ -173,7 +173,7 @@ func otherClients(ctx context.Context, conn *pgxpool.Conn) ([]string, error) {
 	rows, err := conn.Query(ctx, `
 		SELECT pid, COALESCE(usename::text, ''), COALESCE(application_name, '')
 		FROM pg_stat_activity
-		WHERE datname = current_database() AND pid <> pg_backend_pid() AND (backend_type = 'client backend' OR (backend_type IS NULL AND usename IS NOT NULL))
+		WHERE datname = current_database() AND pid <> pg_backend_pid() AND `+db.OtherClientSQL+`
 		ORDER BY pid`)
 	if err != nil {
 		return nil, fmt.Errorf("list other connections: %w", err)

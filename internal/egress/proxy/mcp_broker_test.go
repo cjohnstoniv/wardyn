@@ -117,7 +117,7 @@ func newMCPFixture(t *testing.T, spec types.RunPolicySpec, res resolver, urls ma
 	if res == nil {
 		res = publicResolver{}
 	}
-	sink := &decisionSink{out: f.buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: f.buf, ch: make(chan queuedDecision, 64)}
 	addr := upstreamAddr(f.up.srv)
 	f.p = newProxy(Options{
 		RunID: uuid.New(), Policy: CompilePolicy(spec), Sink: sink, Resolver: res,
@@ -454,6 +454,9 @@ func TestMCPBroker_RebindingPinned(t *testing.T) {
 	if got := f.dialled(); len(got) == 0 || got[len(got)-1] != "93.184.216.34:443" || res.calls["mcp.linear.test"] != 1 {
 		t.Fatalf("dials %v after %d resolves; want the pinned public address from one resolve", got, res.calls["mcp.linear.test"])
 	}
+	// The proxy reuses an answer for dnsCacheTTL: the rebound one is looked up once that has passed, which an
+	// empty cache over the same resolver stands for.
+	f.p.res = newCachedResolver(res, time.Now)
 	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpInit); rec.Code != http.StatusBadGateway || f.up.hitCount() != 1 {
 		t.Fatalf("rebound: status %d hits %d; want 502", rec.Code, f.up.hitCount())
 	}
@@ -491,7 +494,7 @@ func TestMCPBroker_ConfiguredUpstreamUnchanged(t *testing.T) {
 	}
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
-		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}, Resolver: publicResolver{}, Upstream: up})
+		Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}, Resolver: publicResolver{}, Upstream: up})
 	p.mcp = newMCPBroker([]MCPServerConfig{{Key: "linear", URL: "https://mcp.linear.test/mcp"}}, []MCPBinding{mcpBindingFor("codex-cli", "linear")})
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, "/wardyn/mcp/"+mcpToken("codex-cli")+"/linear", strings.NewReader(mcpInit)))

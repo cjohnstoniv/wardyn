@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -59,11 +60,15 @@ func TestRunPause_DecideResumesAPausedRun(t *testing.T) {
 }
 
 // pauseMarks is a minimal store.RunPauser for the wiring fixtures: one paused
-// flag, and a count of presence stamps.
+// flag, and a count of presence stamps. A test may hold a stamp (stampHold: it
+// returns once the channel closes, and counts only then) or fail the next one
+// (stampErr, returned once).
 type pauseMarks struct {
-	pmu    sync.Mutex
-	paused bool
-	stamps int
+	pmu       sync.Mutex
+	paused    bool
+	stamps    int
+	stampHold chan struct{}
+	stampErr  error
 }
 
 func (s *pauseMarks) ListPauseCandidates(context.Context) ([]store.PauseCandidate, time.Time, error) {
@@ -72,7 +77,17 @@ func (s *pauseMarks) ListPauseCandidates(context.Context) ([]store.PauseCandidat
 
 func (s *pauseMarks) StampRunActive(context.Context, uuid.UUID) (bool, error) {
 	s.pmu.Lock()
+	hold, err := s.stampHold, s.stampErr
+	s.stampErr = nil
+	s.pmu.Unlock()
+	if hold != nil {
+		<-hold
+	}
+	s.pmu.Lock()
 	defer s.pmu.Unlock()
+	if err != nil {
+		return false, err
+	}
 	s.stamps++
 	return s.paused, nil
 }
@@ -344,6 +359,70 @@ func TestRunPause_SSHKeystrokesArePresence(t *testing.T) {
 			t.Fatal("the ssh exec bridge never returned")
 		}
 	})
+}
+
+// TestRunPause_AKeystrokeNeverWaitsForADueStamp: a writer's keystroke is written
+// while its presence stamp is still held by the store.
+func TestRunPause_AKeystrokeNeverWaitsForADueStamp(t *testing.T) {
+	srv, st, fr, run := newWiredPauseServer(t)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	readAttachMode(t, c)
+	waitFor(t, "the holder's session to open", func() bool { return fr.session(0) != nil })
+	wsWrite(t, c, websocket.MessageBinary, []byte("a"))
+	waitFor(t, "the first keystroke to reach the sandbox", func() bool { return fr.session(0).written() >= 1 })
+
+	forgetPresence(srv, run.ID)
+	_, before := st.state()
+	hold := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	defer release()
+	st.pmu.Lock()
+	st.stampHold = hold
+	st.pmu.Unlock()
+	wsWrite(t, c, websocket.MessageBinary, []byte("b"))
+	waitFor(t, "the second keystroke to arrive while its stamp is held", func() bool { return fr.session(0).written() >= 2 })
+	if _, held := st.state(); held != before {
+		t.Fatalf("stamps = %d while held, want %d", held, before)
+	}
+	release()
+	waitFor(t, "the held stamp to land", func() bool { _, n := st.state(); return n >= before+1 })
+}
+
+// TestRunPause_AnInputAfterAStampThatFailedWaitsForTheNext: a stamp that did not
+// reach the store leaves the next input to stamp in line, so it is not written
+// ahead of a thaw the stamp owes.
+func TestRunPause_AnInputAfterAStampThatFailedWaitsForTheNext(t *testing.T) {
+	srv, st, fr, run := newWiredPauseServer(t)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	readAttachMode(t, c)
+	waitFor(t, "the holder's session to open", func() bool { return fr.session(0) != nil })
+
+	forgetPresence(srv, run.ID)
+	st.pmu.Lock()
+	st.stampErr = errors.New("presence table unreachable")
+	st.pmu.Unlock()
+	wsWrite(t, c, websocket.MessageBinary, []byte("a"))
+	waitFor(t, "the first keystroke to reach the sandbox", func() bool { return fr.session(0).written() >= 1 })
+
+	hold := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	defer release()
+	st.pmu.Lock()
+	st.stampErr, st.stampHold = nil, hold
+	st.pmu.Unlock()
+	wsWrite(t, c, websocket.MessageBinary, []byte("b"))
+	time.Sleep(200 * time.Millisecond)
+	if n := fr.session(0).written(); n != 1 {
+		t.Fatalf("written = %d while the stamp is held, want 1: the input must wait for its stamp", n)
+	}
+	release()
+	waitFor(t, "the second keystroke to follow its stamp", func() bool { return fr.session(0).written() >= 2 })
 }
 
 // TestAttachHolder_OnlyAWritersInputIsPresence: writeGated tells onInput only

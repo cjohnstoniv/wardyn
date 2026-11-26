@@ -17,7 +17,7 @@ import (
 )
 
 // decisionLogFieldsNotIngested are egress.DecisionLog's top-level JSON fields
-// handlePostDecision (internal.go) deliberately does NOT fold into the
+// decisionEvents (internal_decisions_batch.go) deliberately does NOT fold into the
 // audit row's flat Data map: Request is exploded into host/port/method/path
 // instead; Decision drives the action suffix ("egress."+Decision) and the
 // outcome, never a Data field of its own; Scan becomes its OWN separate
@@ -29,12 +29,13 @@ import (
 // (TestPostDecision_DNSQueryIsItsOwnRow).
 var decisionLogFieldsNotIngested = map[string]bool{"request": true, "decision": true, "scan": true, "usage": true, "dns": true}
 
-// TestHandlePostDecisionCarriesEveryDecisionLogField pins handlePostDecision's
-// CLOSED map[string]any literal (internal.go) to egress.DecisionLog's actual
+// TestHandlePostDecisionCarriesEveryDecisionLogField pins decisionEvents'
+// CLOSED map[string]any literal (internal_decisions_batch.go) to egress.DecisionLog's actual
 // field set BY JSON TAG, reflectively — nothing pinned this before this lane
 // (see the Cause/Via fields it was written for): a field added to
 // DecisionLog is silently dropped at the one ingest chokepoint that turns a
-// proxy decision into an audit row, with no test net to catch it.
+// proxy decision into an audit row, with no test net to catch it. That chokepoint is decisionEvents, which both
+// the single post (handlePostDecision) and the batch post (handlePostDecisionBatch) call, so one pin covers both.
 func TestHandlePostDecisionCarriesEveryDecisionLogField(t *testing.T) {
 	src := readIngestSource(t)
 	typ := reflect.TypeOf(egress.DecisionLog{})
@@ -48,34 +49,34 @@ func TestHandlePostDecisionCarriesEveryDecisionLogField(t *testing.T) {
 			continue
 		}
 		if !strings.Contains(src, `"`+tag+`"`) {
-			t.Errorf("egress.DecisionLog.%s (json %q) is not referenced anywhere in handlePostDecision — "+
+			t.Errorf("egress.DecisionLog.%s (json %q) is not referenced anywhere in decisionEvents — "+
 				"a field silently dropped at the one place that turns a proxy decision into an audit row",
 				f.Name, tag)
 		}
 	}
 }
 
-// readIngestSource returns handlePostDecision's own function body (internal.go,
+// readIngestSource returns decisionEvents' own function body (internal_decisions_batch.go,
 // from its signature to the next top-level func), so the guard above is
-// scoped to the ingest handler and cannot be satisfied by an unrelated mention
+// scoped to the ingest row builder and cannot be satisfied by an unrelated mention
 // of the same word elsewhere in the file.
 func readIngestSource(t *testing.T) string {
 	t.Helper()
-	// go test's cwd is the package directory, so "internal.go" (this package's
+	// go test's cwd is the package directory, so "internal_decisions_batch.go" (this package's
 	// own file) resolves without needing to locate the repo root.
-	b, err := os.ReadFile("internal.go")
+	b, err := os.ReadFile("internal_decisions_batch.go")
 	if err != nil {
-		t.Fatalf("read internal.go: %v", err)
+		t.Fatalf("read internal_decisions_batch.go: %v", err)
 	}
 	full := string(b)
-	start := strings.Index(full, "func (s *Server) handlePostDecision(")
+	start := strings.Index(full, "func (s *Server) decisionEvents(")
 	if start < 0 {
-		t.Fatal("handlePostDecision not found in internal/api/internal.go — re-anchor this guard")
+		t.Fatal("decisionEvents not found in internal/api/internal_decisions_batch.go — re-anchor this guard")
 	}
 	rest := full[start+1:]
 	end := strings.Index(rest, "\nfunc ")
 	if end < 0 {
-		t.Fatal("could not find the end of handlePostDecision — re-anchor this guard")
+		t.Fatal("could not find the end of decisionEvents — re-anchor this guard")
 	}
 	return full[start : start+1+end]
 }

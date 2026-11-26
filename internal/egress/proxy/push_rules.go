@@ -72,6 +72,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"path"
 	"slices"
@@ -421,9 +422,21 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	}
 	// Held outside the inspection slot (already released by inspectPush): a
 	// hold lasts minutes and the slot belongs to the whole engine.
-	if len(review.paths) > 0 && !p.holdPush(w, r, rules, review, target, subject, deny) {
-		release()
-		return nil, noRelease, false
+	if len(review.paths) > 0 {
+		if target.writeToGit == nil {
+			// git prints a rejected ref's reason but not a 403's body: answer the refusals
+			// holdPush writes to git (unattended, or paths not worked out) from the push's own head.
+			head := receivePackHead(buf)
+			target.writeToGit = func(w http.ResponseWriter, msg string) { writeADOGitRefusal(w, head, msg) }
+		}
+		if len(buf) > maxHeldPushBytes {
+			// Not kept for the hold: the run's LLM inspection shares the budget it is charged to.
+			target.dropPush = func() { buf = nil; release() }
+		}
+		if !p.holdPush(w, r, rules, review, target, subject, deny) {
+			release()
+			return nil, noRelease, false
+		}
 	}
 	return bytes.NewReader(buf), release, true
 }
@@ -480,7 +493,8 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				rules.inspectMax>>20))
 		return nil, pushReview{}, noRelease, false
 	}
-	free, err := p.scan.takeSlot(r.Context())
+	// The whole scan budget: a pack's heap follows what it inflates to, not its size.
+	free, err := p.scan.takeSlot(r.Context(), math.MaxInt64)
 	if err != nil {
 		busy()
 		return nil, pushReview{}, noRelease, false
@@ -540,7 +554,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				"\nsend one update for each ref")
 		return nil, pushReview{}, noRelease, false
 	}
-	denied, why, err := p.matchedPaths(r, rules.deny, res, forge.forRule(adoClears.denyPaths), subject)
+	denied, why, err := p.matchedPaths(r, rules.deny, res, forge.forRule(adoClears.denyPaths), subject, false)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
@@ -567,14 +581,15 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		return nil, pushReview{}, noRelease, false
 	}
 	review := pushReview{cmds: res.Commands}
-	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge.forRule(adoClears.reviewPaths), subject); err != nil {
+	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge.forRule(adoClears.reviewPaths), subject, p.pushHoldRemovals); err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\nask an operator to shorten push_rules.require_review_paths")
 		return nil, pushReview{}, noRelease, false
 	}
 	review.unresolved = review.why != "" && review.why != whyChanged && review.why != whyTipChanged && review.why != whyBranchDeleted
-	// The buffer outlives the slot, forwarded or held from here, and stays charged.
+	// The buffer outlives the slot, forwarded or held from here, and stays charged (a large held push gives it
+	// back: maxHeldPushBytes).
 	kept = true
 	return buf, review, release, true
 }
@@ -596,9 +611,10 @@ func namedTwice(cmds []gitpack.Command) string {
 // matchedPaths is the verdict of one pattern list on one inspected push:
 // every path it claims, and why when the forge was asked. A push the pack
 // alone passes is still asked what the tip of each branch it updates holds
-// (tipChanges).
+// (tipChanges). With removals, the tip comparison also reports what the push
+// removes from a branch (forgeRepo.removedFromTip).
 func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo,
-	subject slog.Attr) (paths []string, why string, err error) {
+	subject slog.Attr, removals bool) (paths []string, why string, err error) {
 	if len(pats) == 0 {
 		return nil, "", nil
 	}
@@ -609,7 +625,7 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 	// every path. The first comparison's reason for what it left stands unless
 	// this one could not finish, which leaves the push unresolved.
 	if err == nil && (why == "" || why == whyChanged) {
-		more, tipWhy, err := p.tipChanges(r, pats, res, forge)
+		more, tipWhy, err := p.tipChanges(r, pats, res, forge, removals)
 		if err != nil {
 			return nil, "", err
 		}

@@ -43,9 +43,9 @@ describe("templates api", () => {
 
     fetchMock.mockReset();
     fetchMock.mockResolvedValueOnce(json(201, {}));
-    await templatesApi.publishToOrg("t1");
+    await templatesApi.publishToOrg("t1", 3);
     expect(call()).toMatchObject({ url: expect.stringMatching(/\/templates\/t1\/copy$/), method: "POST" });
-    expect(JSON.parse(call().body as string)).toEqual({ scope: "org" });
+    expect(JSON.parse(call().body as string)).toEqual({ scope: "org", expected_revision: 3 });
   });
 
   it("a refusal carries the server's reason and sentence", async () => {

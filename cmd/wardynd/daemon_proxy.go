@@ -9,13 +9,18 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"golang.org/x/net/http/httpproxy"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -59,6 +64,30 @@ const (
 	// through something they did not intend.
 	daemonProxyBothSetRefusal = "refusing to start: both WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET " +
 		"are set — unset one; they name the same knob two different ways"
+	// daemonProxyAlwaysNoProxyRefusal is the BOOT REFUSAL when WARDYN_DAEMON_PROXY_ALWAYS
+	// lists a host but no daemon proxy exists to send it to.
+	daemonProxyAlwaysNoProxyRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but no daemon proxy " +
+		"is configured (WARDYN_DAEMON_PROXY_URL, WARDYN_DAEMON_PROXY_SECRET or HTTPS_PROXY); set one or unset the list"
+	// daemonProxyAlwaysEnvProxyRefusal is the BOOT REFUSAL when HTTPS_PROXY, the only proxy
+	// the list can use, is not an address the transport can dial. It never carries the value.
+	daemonProxyAlwaysEnvProxyRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but HTTPS_PROXY (or " +
+		"https_proxy) is not a usable proxy address; without one those hosts would be reached directly. Fix it, or set " +
+		"WARDYN_DAEMON_PROXY_URL"
+	// daemonProxyAlwaysDirectHostRefusal is the BOOT REFUSAL when WARDYN_DAEMON_PROXY_ALWAYS is set
+	// and a host wardynd always reaches directly cannot be compared with the list's names (it does
+	// not convert to its IDNA-ASCII form). Never the host's text.
+	daemonProxyAlwaysDirectHostRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but one of the hosts wardynd " +
+		"always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a portal internal issuer host) is not a valid host name, " +
+		"so the list cannot be checked against it; fix that setting or unset the list"
+	// daemonProxyAlwaysPortRefusal is the BOOT REFUSAL when the daemon proxy the list uses names a
+	// port outside 1 to 65535: every listed host would fail at dial. Never the proxy's text.
+	daemonProxyAlwaysPortRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but the daemon proxy's port " +
+		"is not a number from 1 to 65535; fix it or unset the list"
+	// daemonProxyAlwaysEntryRefusal is the BOOT REFUSAL for one unusable entry. %d is its
+	// 1-based position and %s says why. Never the entry's text: a pasted proxy URL carries a
+	// credential, and the refusal is written to the daemon log.
+	daemonProxyAlwaysEntryRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS entry %d is %s — " +
+		"the list takes exact host names that WARDYN_DAEMON_NO_PROXY or NO_PROXY bypasses"
 )
 
 // installDaemonProxy sets tr.Proxy from WARDYN_DAEMON_PROXY_URL, scoped to the
@@ -193,10 +222,24 @@ func classifyProxyURLShape(rawURL string) (u *url.URL, classification string) {
 	if pu.Scheme != "http" && pu.Scheme != "https" {
 		return nil, "an unsupported scheme"
 	}
-	if pu.Hostname() == "" {
+	if proxyHostEmpty(pu) {
 		return nil, "missing a host"
 	}
 	return pu, ""
+}
+
+// proxyHostEmpty reports whether a proxy URL names no host once the host is converted the way
+// net/http converts it before it dials: a host made only of characters the conversion drops
+// (a soft hyphen) is empty there, and the dial goes to the local machine. A host that does not
+// convert is judged as given, which is what net/http dials.
+func proxyHostEmpty(u *url.URL) bool {
+	h := u.Hostname()
+	if strings.ContainsFunc(h, func(r rune) bool { return r >= 0x80 }) {
+		if c, err := idna.Lookup.ToASCII(h); err == nil {
+			h = c
+		}
+	}
+	return h == ""
 }
 
 // wireDaemonProxy is installDaemonProxy's and installDaemonProxySecret's
@@ -226,10 +269,14 @@ func wireDaemonProxy(tr *http.Transport, u *url.URL, noProxy string, autoBypass 
 // process-global state. A DefaultTransport that is not a *http.Transport
 // (never true in this binary) is a silent no-op, matching installTrustedCA's
 // own existing behavior.
-func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) error {
+//
+// The returned RoundTripper is the service grant's token-request transport
+// (bootDaemonProxy); nil means the shared transport itself. The returned route
+// is the always list's, for issuer portals; nil when the list is empty.
+func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) (http.RoundTripper, *alwaysRoute, error) {
 	tr, ok := rt.(*http.Transport)
 	if !ok {
-		return nil
+		return nil, nil, nil
 	}
 	installTrustedCA(tr, trustedCAPool)
 	return bootDaemonProxy(tr, f)
@@ -249,7 +296,12 @@ var linkLocalCredentialHosts = []string{"169.254.169.254", "169.254.170.2", "169
 // userinfo or file content — neither install path ever hands one back
 // through effective's scheme://host display) and the effective bypass list,
 // so an operator can grep for it.
-func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
+//
+// It also returns the transport for the service grant's token request
+// (serviceGrantTransport) and the always list's route (resolveAlwaysRoute):
+// both nil when WARDYN_DAEMON_PROXY_ALWAYS is empty, which leaves that request
+// on the shared transport exactly as before and every portal fetch direct.
+func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, *alwaysRoute, error) {
 	autoBypass := []string{
 		os.Getenv("KUBERNETES_SERVICE_HOST"),
 		daemonProxyBypassHost(*f.awsSSOEndpointOverride),
@@ -259,14 +311,24 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 	// agent) are reached only from the host itself, never through a proxy.
 	autoBypass = append(autoBypass, linkLocalCredentialHosts...)
 
+	// A portal internal issuer host is reached directly too, so the list may not name it; it is not added to
+	// the bypass list.
+	direct := slices.Clone(autoBypass)
+	if f.portalInternalHosts != nil {
+		direct = append(direct, portalInternalHostList(*f.portalInternalHosts)...)
+	}
+	always, err := parseDaemonProxyAlways(f.daemonProxyAlways, direct)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	plainURL := strings.TrimSpace(*f.daemonProxyURL)
 	secretFile := strings.TrimSpace(*f.daemonProxySecretFile)
 	if plainURL != "" && secretFile != "" {
-		return errors.New(daemonProxyBothSetRefusal)
+		return nil, nil, errors.New(daemonProxyBothSetRefusal)
 	}
 
 	var effective, source string
-	var err error
 	if secretFile != "" {
 		source = "WARDYN_DAEMON_PROXY_SECRET"
 		effective, err = installDaemonProxySecret(tr, secretFile, *f.daemonNoProxy, autoBypass...)
@@ -275,7 +337,7 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 		effective, err = installDaemonProxy(tr, plainURL, *f.daemonNoProxy, autoBypass...)
 	}
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if effective != "" {
 		// scheme://host only — never u.String()'s full form, which could carry
@@ -288,9 +350,278 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 		slog.Info("wardynd: daemon egress proxy configured ("+source+")",
 			slog.String("proxy", display),
 			slog.String("no_proxy", *f.daemonNoProxy),
-			slog.String("auto_bypass", strings.Join(filterEmpty(autoBypass), ",")))
+			slog.String("auto_bypass", strings.Join(filterEmpty(autoBypass), ",")),
+			slog.String("always", strings.Join(sortedHosts(always), ",")))
 	}
-	return nil
+	var daemonProxy *url.URL
+	if effective != "" {
+		daemonProxy, _ = url.Parse(effective) // effective is u.String() of a URL parsed above
+	}
+	route, err := resolveAlwaysRoute(tr, daemonProxy, always)
+	if err != nil {
+		return nil, nil, err
+	}
+	grant, err := serviceGrantTransport(tr, route)
+	if err != nil {
+		return nil, nil, err
+	}
+	return grant, route, nil
+}
+
+// parseDaemonProxyAlways reads WARDYN_DAEMON_PROXY_ALWAYS: comma-separated EXACT
+// host names, lower-cased with any trailing dot removed. No suffix and no
+// wildcard is understood, so `login.corp.example` never covers
+// `x.login.corp.example` or `corp.example`. raw is nil in a bootFlags that
+// does not carry the flag (a test's partial flags); direct is the hosts
+// wardynd always reaches without the proxy (the autoBypass list), which the
+// list may not name. The result is empty when the variable is.
+func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	out := map[string]struct{}{}
+	var entries []string
+	for _, entry := range strings.Split(*raw, ",") {
+		entries = append(entries, strings.TrimSpace(entry))
+	}
+	listed := false
+	for _, e := range entries {
+		listed = listed || e != ""
+	}
+	if !listed {
+		return out, nil
+	}
+	// The hosts wardynd always reaches directly are compared with an entry, and with the
+	// request's host, in one form: IDNA-ASCII, lower-case, no trailing dot, no port. One that
+	// does not convert cannot be checked, so boot is refused rather than leaving it unprotected.
+	skip := map[string]struct{}{}
+	for _, h := range direct {
+		if strings.TrimSpace(h) == "" {
+			continue
+		}
+		if hostPart, _, err := net.SplitHostPort(h); err == nil {
+			h = hostPart
+		}
+		c, err := asciiProxyHost(h)
+		if err != nil {
+			return nil, errors.New(daemonProxyAlwaysDirectHostRefusal)
+		}
+		skip[c] = struct{}{}
+	}
+	for i, entry := range entries {
+		if entry == "" {
+			continue
+		}
+		host := normalizeProxyHost(entry)
+		why := ""
+		canon, cerr := asciiProxyHost(entry)
+		_, protected := skip[canon]
+		switch {
+		case net.ParseIP(strings.Trim(host, "[]")) != nil:
+			why = "an IP address"
+		case host == "localhost":
+			why = "localhost"
+		case cerr == nil && protected:
+			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer, a portal internal issuer host or a link-local credential endpoint)"
+		case !isFullHostName(host):
+			why = "not an exact host name (no port, path, suffix, wildcard or other text)"
+		case numericHostName(host):
+			why = "a numeric name (an address spelled as a name), not a host name"
+		}
+		if why != "" {
+			return nil, fmt.Errorf(daemonProxyAlwaysEntryRefusal, i+1, why)
+		}
+		out[host] = struct{}{}
+	}
+	return out, nil
+}
+
+// parseEnvironmentProxy reads an HTTPS_PROXY value the way x/net's httpproxy does: a
+// URL with a host, or the host:port shorthand (no "://"), which httpproxy retries with
+// "http://" in front. It accepts only what the transport can dial (an http, https or
+// socks5 scheme and a host), and refuses what httpproxy would turn into a proxy that
+// does not exist, such as a value with "://" that is not a URL.
+func parseEnvironmentProxy(raw string) (*url.URL, bool) {
+	u, err := url.Parse(raw)
+	if (err != nil || u.Scheme == "" || u.Host == "") && !strings.Contains(raw, "://") {
+		if u2, err2 := url.Parse("http://" + raw); err2 == nil && (u2.Path == "" || u2.Path == "/") {
+			u, err = u2, nil
+		}
+	}
+	if err != nil || proxyHostEmpty(u) || !proxyPortUsable(u) {
+		return nil, false
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		return u, true
+	}
+	return nil, false
+}
+
+// proxyPortUsable reports whether u's explicit port, if it has one, is a number from 1 to 65535.
+// url.Parse accepts any digits, so 0 and 70000 would boot and fail at every dial.
+func proxyPortUsable(u *url.URL) bool {
+	port := u.Port()
+	if port == "" {
+		return true
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// isFullHostName reports whether host (already lower-cased, one trailing dot removed) is a
+// DNS host name: 1 to 253 characters in dot-separated labels of 1 to 63 characters from
+// a-z, 0-9 and "-", none starting or ending with "-". A single label is allowed: the list
+// takes exact host names, and a cluster-internal name has no dot. An internationalised
+// name is listed in its punycode form.
+func isFullHostName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			if c := label[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// numericHostName reports whether host (already a valid DNS name) is one a resolver reads as
+// an address: its last label is all digits (127.1, 2130706433) or starts with 0x (0x7f.0.0.1).
+func numericHostName(host string) bool {
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	if strings.HasPrefix(last, "0x") {
+		return true
+	}
+	for i := 0; i < len(last); i++ {
+		if last[i] < '0' || last[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiProxyHost is the one form a host is compared in, for the list, the hosts wardynd always
+// reaches directly and a request's host alike: net/http converts a non-ASCII host to its
+// IDNA-ASCII form before it dials, so the comparison does too (a fullwidth letter, an ideographic
+// dot or a U-label spells the same host), then lower-cases it and drops a trailing dot. A host
+// that does not convert is an error: a request is never sent direct over it and boot is refused.
+func asciiProxyHost(host string) (string, error) {
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			ascii, err := idna.Lookup.ToASCII(host)
+			if err != nil {
+				return "", fmt.Errorf("service grant token host is not a valid internationalised host name: %w", err)
+			}
+			host = ascii
+			break
+		}
+	}
+	return normalizeProxyHost(host), nil
+}
+
+// normalizeProxyHost lower-cases a host and drops one trailing dot, the form a
+// request URL's host is compared in.
+func normalizeProxyHost(h string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+}
+
+func sortedHosts(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for h := range set {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// alwaysRoute is the always list with the proxy it uses: the service grant's
+// token request and an issuer portal's discovery and key fetches share it.
+type alwaysRoute struct {
+	proxy      *url.URL
+	hosts      map[string]struct{}
+	proxyRoots *x509.CertPool // an https proxy's own certificate: the shared transport's roots
+}
+
+// listed reports whether a host is on the always list, compared in the list's
+// one form (asciiProxyHost); a host that does not convert is an error.
+func (r *alwaysRoute) listed(host string) (bool, error) {
+	h, err := asciiProxyHost(host)
+	if err != nil {
+		return false, err
+	}
+	_, ok := r.hosts[h]
+	return ok, nil
+}
+
+// resolveAlwaysRoute resolves the proxy the always hosts go to:
+// daemonProxy (WARDYN_DAEMON_PROXY_URL or _SECRET) or, when that is nil,
+// HTTPS_PROXY. With neither, or an HTTPS_PROXY that is not a usable address,
+// boot is refused; a listed host never goes direct. An empty list returns nil.
+func resolveAlwaysRoute(tr *http.Transport, daemonProxy *url.URL, always map[string]struct{}) (*alwaysRoute, error) {
+	if len(always) == 0 {
+		return nil, nil
+	}
+	// The proxy is resolved and validated here, once, so a listed host is sent to a
+	// usable proxy or boot is refused: httpproxy's own function drops a value it
+	// cannot parse and then answers "direct".
+	proxy := daemonProxy
+	if proxy != nil && !proxyPortUsable(proxy) {
+		return nil, errors.New(daemonProxyAlwaysPortRefusal)
+	}
+	if proxy == nil {
+		env := httpproxy.FromEnvironment().HTTPSProxy
+		if env == "" {
+			return nil, errors.New(daemonProxyAlwaysNoProxyRefusal)
+		}
+		var ok bool
+		if proxy, ok = parseEnvironmentProxy(env); !ok {
+			return nil, errors.New(daemonProxyAlwaysEnvProxyRefusal)
+		}
+	}
+	route := &alwaysRoute{proxy: proxy, hosts: always}
+	if tr.TLSClientConfig != nil {
+		route.proxyRoots = tr.TLSClientConfig.RootCAs
+	}
+	return route, nil
+}
+
+// serviceGrantTransport is the transport of the service grant's token request:
+// a clone of the shared transport (so it keeps the trusted CA roots
+// installBootTransport put on it) whose Proxy function sends a host in always
+// to the daemon proxy, ignoring WARDYN_DAEMON_NO_PROXY and NO_PROXY, and every
+// other host wherever the shared transport's own function sends it. The shared
+// transport itself is not changed, so every other daemon call, including the
+// hosts wardynd reaches directly, routes as it did before the list existed.
+//
+// The always hosts go to the route's proxy (resolveAlwaysRoute). A nil route
+// (an empty list) returns nil: the request uses the shared transport.
+func serviceGrantTransport(tr *http.Transport, route *alwaysRoute) (http.RoundTripper, error) {
+	if route == nil {
+		return nil, nil
+	}
+	proxy, always := route.proxy, route.hosts
+	rest := tr.Proxy
+	clone := tr.Clone()
+	clone.Proxy = func(req *http.Request) (*url.URL, error) {
+		host, err := asciiProxyHost(req.URL.Hostname())
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := always[host]; ok {
+			return proxy, nil
+		}
+		if rest == nil {
+			return nil, nil
+		}
+		return rest(req)
+	}
+	return clone, nil
 }
 
 // filterEmpty drops blank entries (after trimming), preserving order — used

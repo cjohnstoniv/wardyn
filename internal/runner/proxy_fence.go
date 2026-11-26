@@ -37,6 +37,14 @@ type ProxyFencer interface {
 	FenceProxy(ctx context.Context, ref string) error
 }
 
+// FencedStarter is an OPTIONAL Runner capability: start again a stopped sandbox, for a pass back over its kept files,
+// cut off every network first (as ProxyFencer cuts it) and with nothing but its task idle main process, so the start
+// runs no agent. It refuses a sandbox whose main process is anything else, or that is running, and then changes
+// nothing. A runner that cannot returns ErrEndUnsupported.
+type FencedStarter interface {
+	StartFenced(ctx context.Context, ref string) error
+}
+
 // ProxyGenerationStopper is an OPTIONAL Runner capability: StopProxy and EndSandbox that name the policy
 // generation the caller acts for. A call naming a generation older than the one the running proxy was
 // started for is refused with ErrProxyGenerationNewer and touches nothing. gen 0 means none: the call

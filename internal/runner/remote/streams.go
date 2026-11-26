@@ -25,6 +25,16 @@ func (s *Substrate) pin() (session, error) {
 	return s.t, nil
 }
 
+// startOpts passes the start cutoff the caller set on ctx (runner.WithStartCutoff) to the link's writer,
+// which refuses the start CALL once the cutoff has passed. Call's error is returned unchanged, so
+// errors.Is(err, runner.ErrStartCutoff) holds for the caller.
+func startOpts(ctx context.Context) []runnerwire.CallOption {
+	if by, ok := runner.StartCutoff(ctx); ok {
+		return []runnerwire.CallOption{runnerwire.AdmitBy(by)}
+	}
+	return nil
+}
+
 // Attach opens a pty stream on the runner. Close resets the stream only.
 func (s *Substrate) Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error) {
 	if err := s.own(ref); err != nil {
@@ -35,7 +45,7 @@ func (s *Substrate) Attach(ctx context.Context, ref string, opts runner.AttachOp
 		return nil, err
 	}
 	var res runnerwire.StreamResult
-	if err := sess.Call(ctx, runnerwire.MethodAttach, runnerwire.AttachArgs{Ref: ref, Options: opts}, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodAttach, runnerwire.AttachArgs{Ref: ref, Options: opts}, &res, startOpts(ctx)...); err != nil {
 		return nil, err
 	}
 	st, err := sess.TakeStream(res.Stream)
@@ -124,7 +134,7 @@ func (s *Substrate) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCl
 		return nil, err
 	}
 	var res runnerwire.StreamResult
-	if err := sess.Call(ctx, runnerwire.MethodDialDesktop, runnerwire.DialDesktopArgs{Ref: ref}, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodDialDesktop, runnerwire.DialDesktopArgs{Ref: ref}, &res, startOpts(ctx)...); err != nil {
 		return nil, err
 	}
 	st, err := sess.TakeStream(res.Stream)
@@ -221,7 +231,7 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 		return nil, err
 	}
 	var res runnerwire.ExecStreamResult
-	if err := sess.Call(ctx, runnerwire.MethodExecStream, runnerwire.ExecStreamArgs{Ref: ref, Spec: spec}, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodExecStream, runnerwire.ExecStreamArgs{Ref: ref, Spec: spec}, &res, startOpts(ctx)...); err != nil {
 		return nil, err
 	}
 	ex, err := sess.TakeStream(res.Exec)
@@ -265,6 +275,8 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 			})
 			return closeErr
 		},
+		// The hard stop: the exec stream's input ends at once, with no I/O on the shared link.
+		Abort: func() { ex.Abort(runnerwire.ResetCancelled) },
 	}
 	if stderr != nil {
 		es.Stderr = stderr

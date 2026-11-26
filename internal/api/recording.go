@@ -41,35 +41,46 @@ import (
 // auditRecordingRead is an operator's replay of a recording of a run someone else created.
 const auditRecordingRead = "recording.read"
 
-func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, runIDPrefix string) bool {
+func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, runIDPrefix string) (bool, func()) {
 	id, err := uuid.Parse(runIDPrefix)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	// An operator reads every recording (recordingReader). Replaying another person's session is
-	// audited, as attaching to it live is; an owner's own replay is not.
+	// audited, as attaching to it live is; an owner's own replay is not. The row is the receipt
+	// recording.Handler calls once the recording has opened, before any of it is sent, so a replay
+	// that finds no recording writes none. A run whose owner cannot be read is audited as another
+	// person's, marked owner_unknown: a failed read never serves a replay without its receipt.
 	if s.isOperator(r.Context()) {
-		if run, err := s.cfg.Store.GetRun(r.Context(), id); err == nil && run.CreatedBy != principalFromRequest(r) {
-			actorType, actor := actorFromRequest(r)
-			s.recordAudit(r.Context(), s.auditEvent(&id, actorType, actor, auditRecordingRead, chi.URLParam(r, "runID"), "success", nil))
+		run, err := s.cfg.Store.GetRun(r.Context(), id)
+		if err == nil && run.CreatedBy == principalFromRequest(r) {
+			return true, nil
 		}
-		return true
+		var data []byte
+		if err != nil {
+			data = mustJSON(map[string]bool{"owner_unknown": true})
+		}
+		actorType, actor := actorFromRequest(r)
+		key := chi.URLParam(r, "runID")
+		return true, func() {
+			s.recordAudit(r.Context(), s.auditEvent(&id, actorType, actor, auditRecordingRead, key, "success", data))
+		}
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), id)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	if s.recordingReader(r, run) {
 		// data_out review or blocked keeps a recording from its owner, and says so; a rule that cannot be read
 		// answers 503. refuseDataOutReader writes the answer, so the handler does not add its 404.
-		return !s.refuseDataOutReader(w, r, run, "recording", dataOutRecordingMsg, false)
+		return !s.refuseDataOutReader(w, r, run, "recording", dataOutRecordingMsg, false), nil
 	}
 	// Audited only once the run is confirmed to genuinely exist — a
 	// malformed prefix or an unknown run (both branches above) stays silent;
 	// only a POSITIVELY identified foreign run reaches this audit. The 404
 	// recording.Handler writes on a false return is unaffected either way.
 	s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
-	return false
+	return false, nil
 }
 
 // recordingReader is the one rule for who may read a run's recording, and
@@ -357,10 +368,8 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	if reg == nil {
 		return src
 	}
-	snap := reg.Snapshot(runID)
-	if len(snap) == 0 && guard == nil {
-		return src
-	}
+	// Wrapped even with no secret yet: one registered for the run while this upload waits in the store's queue,
+	// or while its body is read, is masked as well (refresh).
 	// The upload body is asciicast JSON: asciinema (which wardyn-rec execs)
 	// json-encodes each terminal-output chunk into an "o" event, so a secret containing any byte
 	// JSON escapes (newline, quote, backslash, control char) never appears
@@ -374,18 +383,36 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	// across two asciicast events by wardyn-rec's PTY read boundaries is still not
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
-	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src, guard: guard, mask: secretmask.NewMasker(snap), limit: recording.MaxCastBytes}
+	//
+	// The Masker is the registry's JSON-variant one (JSONEscapedVariants of the run's snapshot), and refresh derives
+	// it again, after the bytes it masks arrived, whenever the corpus moved since this one.
+	mask, gen := reg.JSONVariantMaskerGen(runID)
+	r := &recordingMaskReader{src: src, guard: guard, reg: reg, runID: runID, gen: gen, mask: mask, limit: recording.MaxCastBytes}
 	r.masker = secretmask.NewMaskingWriter(&r.output, r.mask)
 	return r
 }
 
+// freshBatch is how many body bytes a server with a shared masking corpus reads before it proves the corpus fresh
+// and masks them. A proof per read would cost a corpus read per read, at most one per 50 ms, and a 32 MiB part
+// would outrun its read window. The bytes wait in memory, never handed on, until the proof.
+const freshBatch = 1 << 20
+
+// errMaskStale ends an upload when this server cannot prove it has read every masking value committed before a
+// part of the body arrived, or cannot hold its masker still across the coverage check (maskAdoptTries). It
+// answers as an uncovered run does, 503 mask_state_unavailable, and as any read error does, the store keeps
+// nothing of the upload.
+var errMaskStale = fmt.Errorf("api: the shared masking corpus was not read after the upload's bytes arrived: %w", errMaskUncovered)
+
 type recordingMaskReader struct {
 	src    io.Reader
 	output bytes.Buffer
+	reg    *secretmask.Registry
+	runID  uuid.UUID
+	gen    uint64 // the registry generation mask was built at
 	mask   secretmask.Masker
 	masker *secretmask.MaskingWriter
 	chunk  [32 << 10]byte
+	raw    []byte // the bytes fill read, not yet masked
 	// held are the last bytes read, kept from the masker until the end says whether they are a log cut marker.
 	held  []byte
 	err   error
@@ -455,19 +482,88 @@ func (r *recordingMaskReader) finish(eof bool) error {
 	return cmp.Or(err, r.masker.Close())
 }
 
+// fill reads the next bytes to mask: one read, or with a shared corpus up to freshBatch bytes, so one proof of
+// freshness covers them. It stops early at an error or an empty read, and ends with errMaskUncovered, dropping
+// what it read, when the guard says the run is no longer covered.
+func (r *recordingMaskReader) fill() ([]byte, error) {
+	want := 1
+	if r.reg.Persisted() {
+		want = freshBatch
+	}
+	r.raw = r.raw[:0]
+	for {
+		if r.guard != nil && !r.guard() {
+			return nil, errMaskUncovered
+		}
+		n, err := r.src.Read(r.chunk[:])
+		r.raw = append(r.raw, r.chunk[:n]...)
+		if err != nil || n == 0 || len(r.raw) >= want {
+			return r.raw, err
+		}
+	}
+}
+
+// maskAdoptTries bounds refresh's attempts to adopt a masker whose generation held still across its coverage
+// check. Past it the upload fails as a stale corpus does, 503, for the recorder to send again.
+const maskAdoptTries = 8
+
+// refresh makes the masker answer for a corpus read after arrived, by when every byte about to be masked had
+// arrived, and proven covered at the generation it adopts. Its order:
+//
+//  1. Fresh: a value another server committed before arrived is in the registry, and so is any erasure's drop.
+//  2. The Masker and its generation, read together under the registry's lock, so the Masker is that corpus.
+//  3. The guard, after both: its answer is read at or after that generation (Watch reads Covered again once
+//     the generation moved), so a corpus an erasure made smaller is never adopted on an answer from before.
+//  4. The generation again: had it moved, the guard may have loaded values the Masker lacks, or a drop came
+//     after it, so steps 2 to 4 run again.
+//
+// A registration that ended before arrived moved the generation before step 2. The swap keeps the bytes the
+// masker holds as they arrived, and r.held is not masked yet, so both are masked against the adopted corpus. A
+// value registered after arrived is not in any byte already masked: the run is handed a value only after it is
+// registered. It runs before anything of a batch is masked, flushed or handed on, the end of the body included.
+func (r *recordingMaskReader) refresh(arrived time.Time) error {
+	if !r.reg.Fresh(arrived) {
+		return errMaskStale
+	}
+	for range maskAdoptTries {
+		mask, gen := r.reg.JSONVariantMaskerGen(r.runID)
+		if r.guard != nil && !r.guard() {
+			return errMaskUncovered
+		}
+		if r.reg.Generation() != gen {
+			continue
+		}
+		if gen != r.gen {
+			r.mask, r.gen = mask, gen
+			r.masker.SetMasker(mask)
+		}
+		return nil
+	}
+	return errMaskStale
+}
+
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	for r.output.Len() <= r.holdBack() && r.err == nil {
-		if r.guard != nil && !r.guard() {
-			r.err = errMaskUncovered
+		raw, readErr := r.fill()
+		if errors.Is(readErr, errMaskUncovered) {
+			r.err = readErr
 			return 0, r.err
 		}
-		n, readErr := r.src.Read(r.chunk[:])
-		r.held = append(r.held, r.chunk[:n]...)
+		n := len(raw)
+		if n == 0 && readErr == nil {
+			return 0, nil
+		}
+		// Every byte masked from here on, r.held's included, has arrived: none was masked yet.
+		if err := r.refresh(time.Now()); err != nil {
+			r.err = err
+			return 0, r.err
+		}
+		r.held = append(r.held, raw...)
 		if room := len(castHeadPrefix) - len(r.head); room > 0 {
-			r.head = append(r.head, r.chunk[:min(n, room)]...)
+			r.head = append(r.head, raw[:min(n, room)]...)
 		}
 		var maskErr error
 		if over := len(r.held) - recording.LogCutMarkerMax; over > 0 {
@@ -484,9 +580,6 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 				r.err = closeErr
 			}
 			r.capOutput()
-		}
-		if n == 0 && r.err == nil {
-			return 0, nil
 		}
 	}
 	n, _ := r.output.Read(p[:min(len(p), r.output.Len()-r.holdBack())])

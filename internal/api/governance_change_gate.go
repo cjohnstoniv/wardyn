@@ -37,6 +37,10 @@ const envGovernanceSecondHuman = "WARDYN_GOVERNANCE_SECOND_HUMAN"
 // cmd/wardynd's boot checks, so the env name and the truthiness rule keep one definition.
 func GovernanceSecondHumanEnabled() bool { return envEnabled(envGovernanceSecondHuman) }
 
+// GovernanceMinApprovals is WARDYN_GOVERNANCE_MIN_APPROVALS: the fewest approvals a held change of a kind with
+// more than one decider needs. Zero (unset) leaves every held change to one approver, as before.
+func (s *Server) GovernanceMinApprovals() int { return s.cfg.GovernanceMinApprovals }
+
 // defaultGovernanceChangeTTL is how long a pending change waits when the deployment sets none.
 const defaultGovernanceChangeTTL = 72 * time.Hour
 
@@ -58,6 +62,8 @@ const (
 	govKindUserType     = types.GovernanceTargetUserTypePriority
 	govKindRoleMapping  = types.GovernanceTargetRoleMapping
 	govKindKeyDomain    = types.GovernanceTargetKeyDomainAssignment
+	// govKindApprovalCounts is an edit of how many approvals each kind needs (governance_approval_counts.go).
+	govKindApprovalCounts = types.GovernanceTargetApprovalCounts
 )
 
 // govChangeTarget is the authz.denied target of every refusal a change decision gives.
@@ -187,12 +193,15 @@ type govApplied struct {
 	// afterCommit, when set, runs once the decision has committed and returns more audit data (a
 	// role mapping's revocation of the tokens it demoted runs here, as it runs after the write today).
 	afterCommit func() map[string]any
+	// approvalData, when set, is the keys the governance.change.approve row gains from the approval rules.
+	approvalData map[string]any
 }
 
 // governanceChangeKinds is the single table of covered targets and who may approve each. A role
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
+	govKindAssistantSettings:   {approver: operatorApprover, apply: applyAssistantSettingsChange},
 	govKindUnit:                {approver: securityApprover, apply: applyUnitChange},
 	govKindMembership:          {approver: securityApprover, apply: applyMembershipChange},
 	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
@@ -210,6 +219,8 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
 	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
+	// An issuer-portal registration is a super admin's alone, held or not (delegate_governance.go).
+	govKindDelegate:            {approver: operatorApprover, apply: applyDelegateChange},
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
 	govKindComponentOwningUnit: {approver: securityApprover, apply: applyComponentOwningUnitChange},
@@ -217,6 +228,8 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},
 	govKindEnvelope:            {approver: securityApprover, apply: applyEnvelopeChange},
+	govKindApprovalCounts:      {approver: securityApprover, apply: applyApprovalCountsChange},
+	govKindAgentRules:          {approver: securityApprover, apply: applyAgentRulesChange},
 	// An elevation's approver is its unit's rule (forChange, requestApprover).
 	types.GovernanceTargetElevation: {apply: applyElevationChange, rejectAction: "governance.elevation.reject"},
 	// An image request's approver is the met image rule at its unit (forChange, requestApprover).
@@ -297,6 +310,9 @@ type govProposal struct {
 	// warnings are advisory sentences for the proposer, carried on the 202's pending_change only (a deciders
 	// write's decidersSaveWarnings); they are not stored with the change.
 	warnings []string
+	// review is what the check that held the write found, stored as diff.review; nil stores not_checked,
+	// and a request (an elevation or an image request) stores none.
+	review *changeReview
 }
 
 // heldChangeAnswer is a 202's pending_change: the held change, and the proposer's warnings when there are any.
@@ -314,15 +330,23 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	_, proposer := actorFromRequest(r)
+	review := p.review
+	if review == nil && p.kind != types.GovernanceTargetElevation && p.kind != types.GovernanceTargetImageRequest {
+		review = notCheckedReview()
+	}
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, heldReads{shift: p.shift, belongsBy: p.belongsBy}),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, heldReads{shift: p.shift, belongsBy: p.belongsBy, review: review}),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
 		ProposedByEmail: oidcEmailFromContext(r.Context()),
 		Note:            p.note,
+	}
+	if ch.RequiredApprovals, ch.RequireSecurity, err = s.requiredApprovals(r.Context(), p.kind, p.key); err != nil {
+		writeServerError(w, r, "read governance approval counts", err)
+		return
 	}
 	saved, expired, err := s.cfg.Store.ProposeGovernanceChange(r.Context(), ch, s.governanceChangeTTL())
 	var pending *store.ErrGovernanceChangePending
@@ -357,6 +381,9 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	if units, _, scoped := unitChangeScope(saved); scoped {
 		proposed["units"] = unitIDStrings(units)
 	}
+	if s.GovernanceMinApprovals() > 0 && !singleDecider(p.kind) {
+		proposed["required"], proposed["require_security"] = saved.RequiredApprovals, saved.RequireSecurity
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success", mustJSON(proposed)))
 	if p.answer != nil {
 		p.answer(w, saved)
@@ -387,13 +414,18 @@ type governanceDiffBody struct {
 	// BelongsBy lists, for a unit admin's membership add or delete, the units they are granted that its
 	// subject holds another membership below.
 	BelongsBy []uuid.UUID `json:"belongs_by,omitempty"`
+	// Review is why the change was held (changeReview); absent on a request and on a change stored
+	// before reviews were.
+	Review *changeReview `json:"review,omitempty"`
 }
 
 // heldReads is what a held change records for its decision to read again: a legacy shift (H3), and
-// the units a unit admin's add or delete was admitted by (heldBelongsStale).
+// the units a unit admin's add or delete was admitted by (heldBelongsStale). review rides with them
+// for the reader; no decision reads it.
 type heldReads struct {
 	shift     legacyShift
 	belongsBy []uuid.UUID
+	review    *changeReview
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
@@ -403,6 +435,7 @@ func renderGovernanceDiff(before, after any, changed, notes []string, held ...he
 	body := governanceDiffBody{Changed: changed, Notes: notes}
 	if len(held) > 0 {
 		body.Activates, body.Vacates, body.BelongsBy = held[0].shift.activates, held[0].shift.vacates, held[0].belongsBy
+		body.Review = held[0].review.settled()
 	}
 	if body.Changed == nil {
 		body.Changed = []string{}

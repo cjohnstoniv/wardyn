@@ -211,6 +211,9 @@ type Tools struct {
 	// fdaOpen opens the path the Full Disk Access probe names and closes it; nil is a plain read-only open
 	// (tests answer).
 	fdaOpen func(path string) error
+	// listDir names the entries of a directory; nil is os.ReadDir's (tests answer). An app item's zip install
+	// reads its stage with it.
+	listDir func(dir string) ([]string, error)
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
 	// in memory only, so a boot installs only what that boot listed; nil until a `-l` has run.
@@ -337,10 +340,35 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	if run == nil {
 		run = runCombined
 	}
-	out, code, err := run(r.Context(), in.Argv)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	steps := appInstallSteps(in.Argv)
+	if steps == nil {
+		steps = []installStep{{argv: in.Argv}}
+	}
+	var out []byte
+	code := 0
+	for _, step := range steps { // the first step that fails is the answer
+		argvs := [][]string{step.argv}
+		if step.clearOld != "" {
+			var err error
+			if argvs, err = t.clearOldSteps(step.clearOld); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		for _, argv := range argvs {
+			o, c, err := run(r.Context(), argv)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			out, code = append(out, o...), c
+			if c != 0 {
+				break
+			}
+		}
+		if code != 0 {
+			break
+		}
 	}
 	if update && in.Argv[1] == "-l" {
 		t.listCLTLabels(string(out))
@@ -808,9 +836,9 @@ func itemPushAllowed(dest string) bool {
 //	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed)
 //	/bin/rm -rf S/<name>                              an item's stage directory, after its install
 //	/usr/sbin/installer -pkg S/<name>/item.pkg -target /
-//	/usr/bin/ditto -x -k S/<name>/item.zip /Applications
+//	/usr/bin/ditto -x -k S/<name>/item.zip /Applications       run as appInstallSteps: made root's first
 //	/usr/bin/hdiutil attach -nobrowse -readonly -noautoopen -mountpoint S/<name>/mnt S/<name>/item.dmg
-//	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app
+//	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app   run as appInstallSteps too
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
 //	/usr/bin/profiles list                            the profiles installed, read back
 //	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer

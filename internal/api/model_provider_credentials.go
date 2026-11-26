@@ -89,10 +89,12 @@ const (
 	mpcNotFound = "No model provider %q is available to you"
 	mpcSignIn   = "%q is connected by signing in, not with a key"
 	mpcSignsIn  = "%q signs people in, so a token cannot be pasted for it. Use Sign in"
-	mpcNoPerson = "The admin token is a shared credential rather than a person, so it cannot hold a model credential of its own — sign in to the console, or use your own wdn_ API token"
-	mpcBody     = `Body must be {"value":"<your key or token>"}`
-	mpcTooShort = "Your key or token must be at least %d characters"
-	mpcNoStore  = "No secret store configured"
+	// mpcServiceGrant is the sentence for a service identity on a row with a service grant.
+	mpcServiceGrant = "This provider gets a token for service identities itself; there is nothing to store."
+	mpcNoPerson     = "The admin token is a shared credential rather than a person, so it cannot hold a model credential of its own — sign in to the console, or use your own wdn_ API token"
+	mpcBody         = `Body must be {"value":"<your key or token>"}`
+	mpcTooShort     = "Your key or token must be at least %d characters"
+	mpcNoStore      = "No secret store configured"
 )
 
 // keyDoorSaveUnavailable (design packet F, canon KEY_DOOR.SAVE_UNAVAILABLE) is
@@ -212,7 +214,11 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, o
 	}
 	// A row that signs people in takes no pasted token. A delete still reaches the person's own sign-in.
 	if p.OIDC != nil && granted {
-		writeErrorReason(w, http.StatusConflict, reasonModelProviderCredentialSignsIn, fmt.Sprintf(mpcSignsIn, id))
+		msg := fmt.Sprintf(mpcSignsIn, id)
+		if p.OIDC.ServiceGrant != nil && isServicePrincipal(principalFromRequest(r)) {
+			msg = mpcServiceGrant
+		}
+		writeErrorReason(w, http.StatusConflict, reasonModelProviderCredentialSignsIn, msg)
 		return types.ModelProvider{}, false
 	}
 	return p, true

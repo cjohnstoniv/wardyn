@@ -13,7 +13,7 @@ import { HeartPulse } from "lucide-react";
 import type { RunDetail, RunService, RunServiceProbe, RunServiceStatus } from "../../../lib/types";
 import { cn } from "../../ui/utils";
 import {
-  DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_HEALTH, SERVICE_PANEL as T, agoText, probeOn, serviceHealthRenews, shownProbeHealth,
+  DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_HEALTH, SERVICE_PANEL as T, agoText, probeOn, serviceHealthRenews, serviceRenewalLength, shownProbeHealth, shownSandboxHealth,
 } from "../../wardyn/copy/run-service";
 import { Chip, WidgetCard } from "../../wardyn/primitives";
 import { keptUntilText } from "./run-ends-row";
@@ -68,6 +68,8 @@ function leaseText(run: RunDetail, uncapped: boolean, checked: boolean, now: num
   if (!run.ends_at) return T.LEASE_NONE;
   const ends = keptUntilText(run.ends_at, now);
   if (uncapped) return ends;
+  // A capped service renews only when the run captured a renewal length; without one the end is just the end.
+  if (!serviceRenewalLength(run)) return T.LEASE_NO_RENEWAL(ends);
   if (!checked) return T.LEASE_RENEWED(ends);
   return serviceHealthRenews(run, now) ? T.LEASE_BOTH(ends) : T.LEASE_NOT_NOW(ends);
 }
@@ -76,7 +78,7 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
   const s = run.service;
   if (!s || run.state !== "RUNNING") return null;
   const st = run.service_status;
-  const health = SERVICE_HEALTH[st?.health ?? "starting"] ?? SERVICE_HEALTH.unknown;
+  const health = SERVICE_HEALTH[shownSandboxHealth(run, now)] ?? SERVICE_HEALTH.unknown;
   const reason = reasonOf(s, st);
   const checked = probeOn(s);
   const probe = st?.probe;
@@ -91,6 +93,8 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
   const restarts = st?.restarts ?? 0;
   // The server renews a service's lease only under a lifetime cap (planServiceRenewal), so an uncapped one ends at its lease.
   const uncapped = !!run.ends_at && !run.lifetime_cap_at;
+  // With no end and no cap nothing ends the service but a person (run_service.go serviceNoEndWarning, said before launch too).
+  const noEnd = !run.ends_at && !run.lifetime_cap_at;
   return (
     // The card is the root (not a wrapper div), so the tile's fill rule reaches it and the footnote is never clipped.
     <WidgetCard title={T.TITLE} Icon={HeartPulse} data-testid="service-panel" bodyClassName="space-y-3 px-3 py-2.5 text-body">
@@ -146,6 +150,11 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
       {uncapped && (
         <p role="note" className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-foreground">
           {T.NO_CAP}
+        </p>
+      )}
+      {noEnd && (
+        <p role="note" className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-foreground">
+          {T.NO_END}
         </p>
       )}
       <p className="text-xs text-muted-foreground">{checked ? T.FOOTNOTE_PROBE : T.FOOTNOTE}</p>

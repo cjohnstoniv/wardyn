@@ -806,21 +806,11 @@ func (s PG) SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map
 	})
 }
 
-// ExitQueuedRun moves a QUEUED run to a terminal state through LeaveRunQueue and, in the same
+// ExitQueuedRun moves a QUEUED run to a terminal state through LeaveRunQueueIn and, in the same
 // statement, writes the reason the queue ended it: status_detail ("queue: <token>") and the sentence
 // for failure_hint. false means another exit won first.
 func (s PG) ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, detail, hint string) (bool, error) {
-	var moved int
-	if err := s.Pool.QueryRow(ctx, `
-		WITH moved AS (
-			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
-			WHERE id=$1 AND state=$5 RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
-		SELECT count(*) FROM moved`,
-		id, string(to), detail, hint, string(types.RunQueued)).Scan(&moved); err != nil {
-		return false, fmt.Errorf("store: exit queued run: %w", err)
-	}
-	return moved > 0, nil
+	return LeaveRunQueueIn(ctx, s.Pool, id, to, QueueExit{Detail: detail, Hint: hint})
 }
 
 // cancelPoolQueue ends every run waiting for poolID as KILLED with the removal reason, deleting the
@@ -831,7 +821,8 @@ func cancelPoolQueue(ctx context.Context, q Querier, poolID uuid.UUID, detail, h
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
 			WHERE state=$5 AND id IN (SELECT run_id FROM run_queue WHERE pool_id=$1) RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id)
+		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id),
+		held AS (`+keptDriveHoldSQL+`)
 		SELECT id FROM moved`,
 		poolID, string(types.RunKilled), detail, hint, string(types.RunQueued))
 	if err != nil {

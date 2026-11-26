@@ -333,7 +333,7 @@ type approvalRuleReport struct {
 }
 
 // handleApprovalRuleDryRun reports what a drafted rule (the body), or a stored one (a body naming only a rule),
-// would do: every PENDING row through the same dry-run decide() the live switch runs, and the rows requested in the
+// would do (a stored one only when the body holds `name` and no other key): every PENDING row through the same dry-run decide() the live switch runs, and the rows requested in the
 // last seven days by predicate alone. It writes nothing: the report decider makes recordAudit drop every row.
 func (s *Server) handleApprovalRuleDryRun(w http.ResponseWriter, r *http.Request) {
 	rs, ok := s.approvalRuleStore(w)
@@ -341,11 +341,17 @@ func (s *Server) handleApprovalRuleDryRun(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body types.ApprovalRuleWrite
-	if !decodeStrict(w, r, &body) {
+	present, msg := decodeStrictKeys(w, r, &body)
+	if present == nil {
+		if msg != "" {
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
+		}
 		return
 	}
 	rule := types.ApprovalRule{ID: uuid.New(), Name: cmp.Or(body.Name, "draft"), Version: 1}
-	if len(body.Kinds) == 0 && body.Name != "" {
+	// Only a body holding the name key and nothing else selects the stored rule. Any other body is a draft and is
+	// validated as one, so an edited draft that omits or empties kinds is refused, never answered with the saved rule.
+	if len(present) == 1 && present["name"] && body.Name != "" {
 		stored, err := rs.GetApprovalRule(r.Context(), body.Name)
 		if err != nil {
 			if notFoundIf(w, err, "approval rule", reasonApprovalRuleNotFound) {
@@ -424,32 +430,31 @@ func (s *Server) approvalRuleDryRun(ctx context.Context, rule types.ApprovalRule
 		return report, nil
 	}
 	cutoff := s.boundNow(ctx).Add(-approvalRuleHistory) // requested_at is the database's stamp
-	for scanned := 0; ; {
-		page, err := pager.ListApprovalsPage(ctx, "", store.Page{Limit: 200, Offset: scanned})
+	// One bounded read, newest first, not OFFSET pages: a request raised during the scan lands at the head of the feed
+	// and would shift every later page by one, reading a row twice or skipping one. The row past the bound says the
+	// look back was cut short.
+	page, err := pager.ListApprovalsPage(ctx, "", store.Page{Limit: approvalRuleHistoryScan + 1})
+	if err != nil {
+		return report, err
+	}
+	for scanned, ap := range page {
+		if ap.RequestedAt.Before(cutoff) {
+			return report, nil
+		}
+		if scanned == approvalRuleHistoryScan {
+			report.RecentTruncated = true
+			return report, nil
+		}
+		if ap.State == types.ApprovalPending {
+			continue
+		}
+		m, ok, err := match(ap)
 		if err != nil {
 			return report, err
 		}
-		for _, ap := range page {
-			if ap.RequestedAt.Before(cutoff) {
-				return report, nil
-			}
-			if scanned++; scanned > approvalRuleHistoryScan {
-				report.RecentTruncated = true
-				return report, nil
-			}
-			if ap.State == types.ApprovalPending {
-				continue
-			}
-			m, ok, err := match(ap)
-			if err != nil {
-				return report, err
-			}
-			if ok {
-				report.Recent = append(report.Recent, row(ap, m, "predicate_match", ""))
-			}
-		}
-		if len(page) < 200 {
-			return report, nil
+		if ok {
+			report.Recent = append(report.Recent, row(ap, m, "predicate_match", ""))
 		}
 	}
+	return report, nil
 }

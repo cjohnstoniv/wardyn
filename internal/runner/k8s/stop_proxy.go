@@ -378,6 +378,8 @@ func (d *Driver) awaitEvidence(ctx context.Context, runID uuid.UUID, component, 
 		if pe == nil || pe.DeleteAt == nil || d.now().Sub(*pe.DeleteAt) >= bound {
 			return false, last
 		}
+		// A poll, not the pod watch: the arms rest on the node as well as the pod (gone, or tainted out of
+		// service), which rings no pod bell, and this runs only for a stopping pod, within its stop bound.
 		select {
 		case <-ctx.Done():
 			return false, errors.Join(last, ctx.Err())

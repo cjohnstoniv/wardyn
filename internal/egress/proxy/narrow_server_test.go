@@ -26,7 +26,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -88,7 +87,7 @@ func (e *narrowEnv) newProxy() *Proxy {
 	return newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test", "keep.test"}}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if strings.HasSuffix(addr, ":8080") {

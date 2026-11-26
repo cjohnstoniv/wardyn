@@ -463,8 +463,8 @@ func readMembershipTreeState(ctx context.Context, q store.Querier, p membershipT
 }
 
 // holdMembershipMove stores a move as a pending change, after a dry run of the move has shown the
-// store would accept it.
-func (s *Server) holdMembershipMove(w http.ResponseWriter, r *http.Request, p membershipTreePayload) {
+// store would accept it. review is what the check that held it found; none stores not_checked.
+func (s *Server) holdMembershipMove(w http.ResponseWriter, r *http.Request, p membershipTreePayload, review ...*changeReview) {
 	ctx := r.Context()
 	var st membershipTreeState
 	var moved types.GovernanceMembership
@@ -487,11 +487,15 @@ func (s *Server) holdMembershipMove(w http.ResponseWriter, r *http.Request, p me
 		return
 	}
 	before, after := s.newMembershipDiffView(st.row, st.fromChain), s.newMembershipDiffView(moved, st.toChain)
-	s.proposeGovernanceChange(w, r, govProposal{
+	held := govProposal{
 		kind: govKindMembership, op: "move", key: membershipKey(st.row.UnitID, st.row.SubjectType, st.row.Subject),
 		payload: p, before: before, after: after, changed: changedPaths(before, after), baseState: st.state(),
 		shift: shift,
-	})
+	}
+	if len(review) > 0 {
+		held.review = review[0]
+	}
+	s.proposeGovernanceChange(w, r, held)
 }
 
 // membershipLegacyView is a membership as a promotion's reviewer reads it: the assignment view and

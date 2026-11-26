@@ -34,6 +34,10 @@ const SearchDisplayName = "displayName"
 // ErrScimGroupExists is a create whose externalId already names a group.
 var ErrScimGroupExists = errors.New("store: scim group exists")
 
+// ErrGroupRemovalOwed is a group delete refused because a membership it would remove has not been cut yet: a member
+// is still recorded, or a removal's sessions or tokens step is still pending. The group stays.
+var ErrGroupRemovalOwed = errors.New("store: a scim group member's removal is still owed")
+
 // ScimGroup is a group the identity provider reported. ExternalID is the provider's id for it.
 type ScimGroup struct {
 	ID          uuid.UUID
@@ -45,6 +49,10 @@ type ScimGroup struct {
 // ScimGroupStore is optional, like LeaverStore: callers type-assert it.
 type ScimGroupStore interface {
 	CreateScimGroup(ctx context.Context, externalID, displayName string, now time.Time) (ScimGroup, error)
+	// CreateScimGroupWithMembers stores a group and records identities as its members in one transaction: a
+	// failure leaves no group, so the create can be retried. An externalId a group holds is ErrScimGroupExists.
+	// It returns the members it recorded, in ScimGroupMembers' order.
+	CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, []uuid.UUID, error)
 	GetScimGroup(ctx context.Context, id uuid.UUID) (ScimGroup, error)
 	SearchScimGroups(ctx context.Context, attr, value string, limit int) ([]ScimGroup, error)
 	RenameScimGroup(ctx context.Context, id uuid.UUID, displayName string) error
@@ -54,8 +62,9 @@ type ScimGroupStore interface {
 	StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) error
 	ResumeGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) (bool, error)
 	GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
+	// DeleteScimGroup deletes the group only when nothing it removes is still owed (ErrGroupRemovalOwed).
 	DeleteScimGroup(ctx context.Context, id uuid.UUID) error
-	PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
+	PendingGroupRemovals(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
 	GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
 }
 
@@ -69,6 +78,12 @@ var _ ScimGroupStore = PG{}
 
 const scimGroupCols = `id, external_id, display_name, created_at`
 
+// scimAddMembersSQL takes the group id, the identity ids and the time.
+const scimAddMembersSQL = `
+		INSERT INTO scim_group_members (group_id, identity_id, added_at)
+		SELECT $1, i.id, $3 FROM principal_identities i WHERE i.id = ANY($2::uuid[])
+		ON CONFLICT DO NOTHING`
+
 func scanScimGroup(r pgx.Row) (ScimGroup, error) {
 	var g ScimGroup
 	err := r.Scan(&g.ID, &g.ExternalID, &g.DisplayName, &g.CreatedAt)
@@ -81,17 +96,46 @@ func scanScimGroup(r pgx.Row) (ScimGroup, error) {
 // CreateScimGroup stores a group. An externalId any group already holds, in any case, is
 // ErrScimGroupExists.
 func (s PG) CreateScimGroup(ctx context.Context, externalID, displayName string, now time.Time) (ScimGroup, error) {
-	g, err := scanScimGroup(s.Pool.QueryRow(ctx, `
+	g, _, err := s.CreateScimGroupWithMembers(ctx, externalID, displayName, nil, now)
+	return g, err
+}
+
+// CreateScimGroupWithMembers stores a group and its initial members in one transaction; an id that names
+// no identity row is skipped, as AddScimGroupMembers skips it. The member ids come from the insert itself,
+// ordered by id, which is ScimGroupMembers' order for a group whose members were all added at now: the
+// caller answers with them and never reads the members again after the commit.
+func (s PG) CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, []uuid.UUID, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return ScimGroup{}, nil, fmt.Errorf("store: create scim group: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	g, err := scanScimGroup(tx.QueryRow(ctx, `
 		INSERT INTO scim_groups (external_id, display_name, created_at) VALUES ($1, $2, $3)
 		RETURNING `+scimGroupCols, strings.TrimSpace(externalID), displayName, now))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return ScimGroup{}, ErrScimGroupExists
+		return ScimGroup{}, nil, ErrScimGroupExists
 	}
 	if err != nil {
-		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
+		return ScimGroup{}, nil, fmt.Errorf("store: create scim group: %w", err)
 	}
-	return g, nil
+	var members []uuid.UUID
+	if len(identities) > 0 {
+		members, err = collect(ctx, tx, "add", "scim group members",
+			`WITH added AS (`+scimAddMembersSQL+` RETURNING identity_id) SELECT identity_id FROM added ORDER BY identity_id`,
+			[]any{g.ID, identities, now}, func(r pgx.Row) (uuid.UUID, error) {
+				var v uuid.UUID
+				return v, r.Scan(&v)
+			})
+		if err != nil {
+			return ScimGroup{}, nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ScimGroup{}, nil, fmt.Errorf("store: create scim group: %w", err)
+	}
+	return g, members, nil
 }
 
 // GetScimGroup is the group stored under id, or ErrNotFound.
@@ -100,20 +144,21 @@ func (s PG) GetScimGroup(ctx context.Context, id uuid.UUID) (ScimGroup, error) {
 }
 
 // SearchScimGroups is the groups a SCIM filter `attr eq value` selects, at most limit. Both attributes
-// match case-insensitively.
+// match case-insensitively. An externalId ignores outer spaces, as its unique key does; a displayName is
+// compared whole, spaces included, since a create stores the name as sent.
 func (s PG) SearchScimGroups(ctx context.Context, attr, value string, limit int) ([]ScimGroup, error) {
-	var where string
+	var where, arg string
 	switch attr {
 	case SearchExternalID:
-		where = `lower(btrim(external_id)) = $1`
+		where, arg = `lower(btrim(external_id)) = $1`, strings.ToLower(strings.TrimSpace(value))
 	case SearchDisplayName:
-		where = `lower(display_name) = $1`
+		where, arg = `lower(display_name) = lower($1)`, value
 	default:
 		return nil, fmt.Errorf("store: search scim groups: unknown attribute %q", attr)
 	}
 	return collect(ctx, s.Pool, "search", "scim groups", `SELECT `+scimGroupCols+` FROM scim_groups
 		WHERE `+where+` ORDER BY created_at, id LIMIT $2`,
-		[]any{strings.ToLower(strings.TrimSpace(value)), limit}, scanScimGroup)
+		[]any{arg, limit}, scanScimGroup)
 }
 
 // RenameScimGroup changes a group's display name; its externalId never changes.
@@ -138,15 +183,25 @@ func (s PG) ScimGroupMembers(ctx context.Context, id uuid.UUID) ([]uuid.UUID, er
 }
 
 // AddScimGroupMembers records each identity as a member, leaving one already recorded as it is and
-// skipping an id that names no identity row.
+// skipping an id that names no identity row. A group that is gone is ErrNotFound. The group row is held
+// FOR KEY SHARE first, the lock DeleteScimGroup's FOR UPDATE waits on: an add that a deletion finds in
+// flight commits before the deletion reads the members, and an add that starts while a deletion holds the
+// row waits for it and then finds no group.
 func (s PG) AddScimGroupMembers(ctx context.Context, id uuid.UUID, identities []uuid.UUID, now time.Time) error {
-	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO scim_group_members (group_id, identity_id, added_at)
-		SELECT $1, i.id, $3 FROM principal_identities i WHERE i.id = ANY($2::uuid[])
-		ON CONFLICT DO NOTHING`, id, identities, now); err != nil {
-		return fmt.Errorf("store: add scim group members: %w", err)
-	}
-	return nil
+	return s.inTx(ctx, func(q Querier) error {
+		var one int
+		err := q.QueryRow(ctx, `SELECT 1 FROM scim_groups WHERE id = $1 FOR KEY SHARE`, id).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: lock scim group for an add: %w", err)
+		}
+		if _, err := q.Exec(ctx, scimAddMembersSQL, id, identities, now); err != nil {
+			return fmt.Errorf("store: add scim group members: %w", err)
+		}
+		return nil
+	})
 }
 
 // StartGroupRemoval opens the ledger of one person leaving one group, in one transaction with the
@@ -161,6 +216,17 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 		return fmt.Errorf("store: start group removal: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = startGroupRemoval(ctx, tx, groupID, identityID); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit group removal: %w", err)
+	}
+	return nil
+}
+
+// startGroupRemoval is StartGroupRemoval's work on tx, which the caller commits.
+func startGroupRemoval(ctx context.Context, tx Querier, groupID, identityID uuid.UUID) error {
 	target := groupID.String()
 	tag, err := tx.Exec(ctx, `DELETE FROM scim_group_members WHERE group_id = $1 AND identity_id = $2`, groupID, identityID)
 	if err != nil {
@@ -172,11 +238,12 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 	// sign-in names its own groups. A blank one cannot be told from any group, so it takes them all, as
 	// the token step reads it, and marks the record partial: what is left cannot be told complete. Nothing
 	// is ever added, and a person with no record keeps none.
+	// A removal also clears roles, so no role is left that the narrowed groups no longer show.
 	if _, err = tx.Exec(ctx, `
 		UPDATE principal_groups p SET groups = COALESCE((
 			SELECT jsonb_agg(x) FROM jsonb_array_elements_text(p.groups) AS x
 			WHERE btrim(g.external_id) <> '' AND lower(btrim(x)) <> lower(btrim(g.external_id))), '[]'::jsonb),
-			truncated = p.truncated OR btrim(g.external_id) = ''
+			truncated = p.truncated OR btrim(g.external_id) = '', roles = NULL
 		FROM principal_identities i, scim_groups g
 		WHERE i.id = $2 AND g.id = $1 AND p.principal = i.principal AND jsonb_typeof(p.groups) = 'array'`, groupID, identityID); err != nil {
 		return fmt.Errorf("store: remove the group from the sign-in record: %w", err)
@@ -201,9 +268,6 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 				return fmt.Errorf("store: open group removal ledger: %w", err)
 			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("store: commit group removal: %w", err)
 	}
 	return nil
 }
@@ -258,15 +322,19 @@ const pendingGroupRemovalWhere = `j.kind = 'group_remove' AND j.state = 'pending
 	AND NOT EXISTS (SELECT 1 FROM scim_group_members m WHERE m.identity_id = j.identity_id AND m.group_id::text = j.target)`
 
 // PendingGroupRemovals is the pendingGroupRemovalWhere removals that no step of the same removal has
-// touched for idleFor (a request still working on it is not one the sweeper may race), at most limit.
-func (s PG) PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error) {
+// touched for idleFor (a request still working on it is not one the sweeper may race), at most limit. Only
+// a person of the given issuer, and of the tenant when one is given and the row records one, is listed,
+// and that is decided before the limit: a pending removal of another issuer's person must not fill the batch.
+func (s PG) PendingGroupRemovals(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error) {
 	return collect(ctx, s.Pool, "list", "pending group removals", `
 		SELECT DISTINCT j.target::uuid, j.identity_id FROM deprovision_jobs j
+		  JOIN principal_identities pi ON pi.id = j.identity_id
 		 WHERE `+pendingGroupRemovalWhere+`
+		   AND pi.issuer = $3 AND ($4::text = '' OR pi.tenant_id = '' OR pi.tenant_id = $4::text)
 		   AND NOT EXISTS (SELECT 1 FROM deprovision_jobs x WHERE x.identity_id = j.identity_id
 		                  AND x.kind = 'group_remove' AND x.target = j.target
 		                  AND x.updated_at > now() - $1::bigint * interval '1 microsecond')
-		 ORDER BY 2, 1 LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingGroupRemoval, error) {
+		 ORDER BY 2, 1 LIMIT $2`, []any{idleFor.Microseconds(), limit, issuer, tenant}, func(r pgx.Row) (PendingGroupRemoval, error) {
 		var p PendingGroupRemoval
 		return p, r.Scan(&p.GroupID, &p.IdentityID)
 	})
@@ -288,14 +356,36 @@ func (s PG) GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionF
 	})
 }
 
-// DeleteScimGroup removes the group row and, by cascade, its members. Its ledger rows stay.
+// DeleteScimGroup removes the group row, or answers ErrNotFound. The row is locked FOR UPDATE first, so a member
+// add in flight (AddScimGroupMembers) commits before the check below and a later one finds no group. The delete is
+// refused with ErrGroupRemovalOwed, and nothing changes, while any member of any issuer is still recorded or any
+// removal from the group has its sessions or tokens step pending: the caller cuts those people first (as a mover,
+// another issuer's included) and asks again. So the group never goes while someone it held still has access
+// through it. A pending audit step does not hold the delete; its row follows.
 func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM scim_groups WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("store: delete scim group: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.inTx(ctx, func(q Querier) error {
+		var one int
+		err := q.QueryRow(ctx, `SELECT 1 FROM scim_groups WHERE id = $1 FOR UPDATE`, id).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: lock scim group for its delete: %w", err)
+		}
+		var owed bool
+		if err := q.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM scim_group_members WHERE group_id = $1)
+			    OR EXISTS (SELECT 1 FROM deprovision_jobs WHERE kind = $2 AND target = $3 AND state = 'pending'
+			               AND step = ANY($4::text[]))`,
+			id, JobKindGroupRemove, id.String(), []string{GroupStepSessions, GroupStepTokens}).Scan(&owed); err != nil {
+			return fmt.Errorf("store: read what a scim group delete still owes: %w", err)
+		}
+		if owed {
+			return ErrGroupRemovalOwed
+		}
+		if _, err := q.Exec(ctx, `DELETE FROM scim_groups WHERE id = $1`, id); err != nil {
+			return fmt.Errorf("store: delete scim group: %w", err)
+		}
+		return nil
+	})
 }
