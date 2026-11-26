@@ -137,21 +137,26 @@ func (s *Server) openMCPProxyConfig(row store.RunMCPSandbox) (proxy.Config, erro
 	return cfg, nil
 }
 
-// mcpPolicyAgain is a server's MCP policy derived again on b, its size capped at what its row reserved. Its
-// digest differs from the row's only when something narrowed it. "own" was clamped at dispatch to the
-// creator's ceiling, which a restart has no request to read again: the policy its row sealed is its base,
-// held to the run's knobs and finished with today's layers and denies, so it can only narrow.
+// mcpPolicyAgain is a server's MCP policy derived again on b, its size held through mcpSandboxResources to the
+// size its sandbox was made with (the sealed config's, CPU, memory and disk; the row's reservation when none
+// was kept). Its digest differs from the row's only when something narrowed it. "own" was clamped at dispatch
+// to the creator's ceiling, which a restart has no request to read again: the policy its row sealed is its
+// base, held to the run's knobs and finished with today's layers and denies, so it can only narrow.
 func (s *Server) mcpPolicyAgain(ctx context.Context, b mcpPolicyBase, srv mcpServer, row store.RunMCPSandbox) (mcpPolicy, error) {
-	b.ceiling.Limits.MaxCPUMillis, b.ceiling.Limits.MaxMemoryMiB = int(row.Reserved.CPUMillis), int(row.Reserved.MemoryMiB)
+	cfg, cerr := s.openMCPProxyConfig(row)
+	made := &types.ResourceLimits{CPUMillis: int(row.Reserved.CPUMillis), MemoryMiB: int(row.Reserved.MemoryMiB)}
+	if cerr == nil && cfg.Policy.Resources != nil {
+		made = cfg.Policy.Resources
+	}
+	b.ceiling.Limits.MaxCPUMillis, b.ceiling.Limits.MaxMemoryMiB, b.ceiling.Limits.MaxEphemeralDiskMiB = made.CPUMillis, made.MemoryMiB, made.DiskMiB
 	if mcpPolicyModeOf(srv.def) != types.ComponentMCPSandboxOwn {
 		return s.mcpSandboxPolicy(ctx, b, srv.index)
 	}
-	cfg, err := s.openMCPProxyConfig(row)
-	if err != nil {
-		return mcpPolicy{}, err
+	if cerr != nil {
+		return mcpPolicy{}, cerr
 	}
 	out := mcpPolicy{mode: types.ComponentMCPSandboxOwn, spec: mcpOnlyKnobs(cfg.Policy, b.run)}
-	out.spec.Resources = cfg.Policy.Resources
+	out.spec.Resources = mcpSandboxResources(cfg.Policy.Resources, cfg.Policy.Resources, b.ceiling.Limits)
 	out.holds = mcpPolicyFinish(&out.spec, b.layers, b.deny)
 	return out, nil
 }

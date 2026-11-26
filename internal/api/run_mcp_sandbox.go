@@ -605,11 +605,12 @@ func mcpGateKind(k types.MachineKind) types.MachineKind {
 
 // mcpPolicyBaseAt is what dispatch derives each server's MCP policy from: the policy the agent's proxy runs
 // under (the sealed policy's sidecar copy, P_run), the layers the seal read, the ceiling's own denies and the
-// per-sandbox caps the agent's sandbox got, and, for a server in "own" mode, the creator's ceiling, read once
-// from the request the dispatch serves.
+// per-sandbox caps the agent's sandbox got (CPU, memory and its disk maximum), and, for a server in "own"
+// mode, the creator's ceiling, read once from the request the dispatch serves.
 func (s *Server) mcpPolicyBaseAt(ctx context.Context, d *mcpSandboxDispatch, pRun types.RunPolicySpec, layers []sealLayer, ceiling dispatchCeiling) (mcpPolicyBase, error) {
 	b := mcpPolicyBase{run: pRun, comps: d.comps, layers: layers, deny: ceiling.deny, ungoverned: s.runUngoverned(ctx)}
 	b.ceiling.Limits.MaxCPUMillis, b.ceiling.Limits.MaxMemoryMiB = ceiling.maxCPUMillis, ceiling.maxMemoryMiB
+	b.ceiling.Limits.MaxEphemeralDiskMiB = ceiling.maxEphemeralDiskMiB
 	if !b.ungoverned && slices.ContainsFunc(d.servers, func(m mcpServer) bool { return mcpPolicyModeOf(m.def) == types.ComponentMCPSandboxOwn }) {
 		c, err := s.effectiveCeiling(ctx)
 		if err != nil {
