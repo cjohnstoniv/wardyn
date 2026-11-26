@@ -169,9 +169,10 @@ func mcpCanonicalDenies(deny []string) []string {
 	return met.Ceiling.DeniedDomains
 }
 
-// mcpSandboxResources is the size of a server's sandbox: what "own" authored, else the default, each capped by
-// the creator's per-sandbox caps.
-func mcpSandboxResources(authored *types.ResourceLimits, limits types.GovernanceLimits) *types.ResourceLimits {
+// mcpSandboxResources is the size of a server's sandbox: what "own" authored, else the default, each field at
+// most bound's ("own" passes its clamp's size, so the creator's ceiling bounds CPU, memory and pids; the other
+// modes pass nil and author nothing) and capped by the creator's per-sandbox caps.
+func mcpSandboxResources(authored, bound *types.ResourceLimits, limits types.GovernanceLimits) *types.ResourceLimits {
 	r := types.ResourceLimits{CPUMillis: mcpSandboxDefaultCPUMillis, MemoryMiB: mcpSandboxDefaultMemoryMiB}
 	if authored != nil {
 		if authored.CPUMillis > 0 {
@@ -181,6 +182,17 @@ func mcpSandboxResources(authored *types.ResourceLimits, limits types.Governance
 			r.MemoryMiB = authored.MemoryMiB
 		}
 		r.PidsLimit = authored.PidsLimit
+	}
+	if bound != nil {
+		atMost := func(v, b int) int { // an unset v (0, the runner's default) takes b
+			if b > 0 && (v <= 0 || v > b) {
+				return b
+			}
+			return v
+		}
+		r.CPUMillis = atMost(r.CPUMillis, bound.CPUMillis)
+		r.MemoryMiB = atMost(r.MemoryMiB, bound.MemoryMiB)
+		r.PidsLimit = atMost(r.PidsLimit, bound.PidsLimit)
 	}
 	if limits.MaxCPUMillis > 0 {
 		r.CPUMillis = min(r.CPUMillis, limits.MaxCPUMillis)
@@ -215,11 +227,10 @@ func mcpOnlyKnobs(spec types.RunPolicySpec, run types.RunPolicySpec) types.RunPo
 func (s *Server) mcpSandboxPolicy(ctx context.Context, b mcpPolicyBase, i int) (mcpPolicy, error) {
 	def := b.comps.attached[i].snapshot.Definition
 	out := mcpPolicy{mode: mcpPolicyModeOf(def)}
-	var authored *types.ResourceLimits
+	var authored, bound *types.ResourceLimits
 	switch out.mode {
-	case types.ComponentMCPSandboxNarrower:
+	case types.ComponentMCPSandboxNarrower: // an overlay's size is not read: narrower takes the default, capped
 		out.spec, out.warns = mcpNarrowerPolicy(mcpSamePolicy(b.run, b.comps, i), def.MCP.Sandbox.Policy.Overlay)
-		authored = out.spec.Resources
 	case types.ComponentMCPSandboxOwn:
 		var own types.RunPolicySpec
 		if sp := def.MCP.Sandbox.Policy.Spec; sp != nil {
@@ -230,11 +241,12 @@ func (s *Server) mcpSandboxPolicy(ctx context.Context, b mcpPolicyBase, i int) (
 		if out.spec, out.warns, err = s.mcpOwnPolicy(ctx, b, own); err != nil {
 			return mcpPolicy{}, err
 		}
+		bound = out.spec.Resources
 	default:
 		out.spec = mcpSamePolicy(b.run, b.comps, i)
 	}
 	out.spec = mcpOnlyKnobs(out.spec, b.run)
-	out.spec.Resources = mcpSandboxResources(authored, b.ceiling.Limits)
+	out.spec.Resources = mcpSandboxResources(authored, bound, b.ceiling.Limits)
 	out.holds = mcpPolicyFinish(&out.spec, b.layers, b.deny)
 	return out, nil
 }

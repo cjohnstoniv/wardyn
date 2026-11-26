@@ -158,6 +158,22 @@ func TestMCPPolicyNarrowerLeqSame(t *testing.T) {
 	}
 }
 
+// TestMCPPolicyNarrowerIgnoresOverlaySize: an overlay that sizes the sandbox at 2000 millicpu and 4096 MiB,
+// on a site with no per-sandbox caps, leaves "narrower" at the default size "same" has, so it stays within it.
+func TestMCPPolicyNarrowerIgnoresOverlaySize(t *testing.T) {
+	cpu, mem := 2000, 4096
+	ov := &types.CeilingOverlay{Resources: &types.ResourcesOverlay{CPUMillis: &cpu, MemoryMiB: &mem}}
+	run := mcpPolicyRun()
+	same := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: run, comps: mcpPolicyComps(nil)})
+	narrower := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: run, comps: mcpPolicyComps(&types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: ov})})
+	if r := narrower.spec.Resources; r == nil || r.CPUMillis != mcpSandboxDefaultCPUMillis || r.MemoryMiB != mcpSandboxDefaultMemoryMiB {
+		t.Errorf("narrower resources = %+v, want the default %dm and %d MiB", r, mcpSandboxDefaultCPUMillis, mcpSandboxDefaultMemoryMiB)
+	}
+	if !composer.Leq(narrower.spec, same.spec, types.GovernanceLimits{}, types.GovernanceLimits{}) {
+		t.Fatalf("narrower %+v is not within same %+v", narrower.spec.Resources, same.spec.Resources)
+	}
+}
+
 // TestMCPPolicyNarrowerRecomputedAfterSeal: a host the overlay names that the seal removed from the run
 // between create and dispatch is absent from "narrower", with a warning, and the derivation does not fail.
 func TestMCPPolicyNarrowerRecomputedAfterSeal(t *testing.T) {
@@ -206,6 +222,26 @@ func TestMCPPolicyOwnLeqClampCeiling(t *testing.T) {
 	}
 	if own.AllowedDomains[1] != "wide.test" {
 		t.Errorf("the definition's own spec was written: %v", own.AllowedDomains)
+	}
+}
+
+// TestMCPPolicyOwnSizeWithinCeiling: "own" authored at 64000 millicpu, 256 GiB and 100000 pids, under a
+// member ceiling of 2000 millicpu and 4096 MiB with no per-sandbox caps, is cut to the ceiling on every field
+// and is within it.
+func TestMCPPolicyOwnSizeWithinCeiling(t *testing.T) {
+	own := &types.RunPolicySpec{AllowedDomains: []string{"own.test"}, Resources: &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 262144, PidsLimit: 100000}}
+	c := mcpOwnCeiling()
+	c.Limits = types.GovernanceLimits{}
+	run := mcpPolicyRun()
+	run.MinConfinementClass = types.CC1
+	p := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: run, ceiling: c,
+		comps: mcpPolicyComps(&types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: own})})
+	r := p.spec.Resources
+	if r == nil || r.CPUMillis > 2000 || r.MemoryMiB > 4096 || r.PidsLimit <= 0 || r.PidsLimit >= 100000 {
+		t.Fatalf("own resources = %+v, want at most 2000m and 4096 MiB and a capped pids limit", r)
+	}
+	if !composer.Leq(p.spec, c.Spec, c.Limits, c.Limits) {
+		t.Fatalf("own %+v is not within its ceiling %+v", r, c.Spec.Resources)
 	}
 }
 
