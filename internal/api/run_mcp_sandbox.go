@@ -327,29 +327,31 @@ func (s *Server) mcpSandboxDispatchAt(ctx context.Context, run types.AgentRun, s
 	if !ok {
 		return nil, false
 	}
-	takeMCPServerSecrets(d, policy, injections)
+	takeMCPServerSecrets(d, policy, injections, rows)
 	return d, s.resolveMCPServerSecrets(ctx, run, d, rows)
 }
 
 // takeMCPServerSecrets moves each server's own secrets off the agent: its env and file secret grants off
 // policy, its header injections off injections, so the agent's sandbox and proxy hold none of them (I5 c).
 // It runs after the ceiling's re-assertion, so what it takes is only what the run is still given. It
-// removes and never adds.
-func takeMCPServerSecrets(d *mcpSandboxDispatch, policy *types.RunPolicySpec, injections *[]runner.InjectionGrant) {
+// removes and never adds. The server is given only what its own grant spec (want, with its owner-only rule)
+// delivers: the first env or file secret grant still given that matches want, owner-only rule included, and
+// an injection whose grant row (rows) matches want so. Any other grant of the agent's for the same secret is
+// removed and given to no one, so the server never gets a value its own grant would not resolve.
+func takeMCPServerSecrets(d *mcpSandboxDispatch, policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, rows []types.CredentialGrant) {
 	if d == nil {
 		return
 	}
+	ownGrant := func(g, want types.GrantSpec) bool { return sameSecretGrant(g, want) && g.OwnerOnly == want.OwnerOnly }
 	for i, srv := range d.servers {
 		for _, sec := range srv.def.Secrets {
 			want := componentGrant(sec)
-			for _, g := range policy.EligibleGrants {
-				if sameSecretGrant(g, want) {
-					switch g.Kind {
-					case types.GrantEnvSecret:
-						d.grants[i].env = append(d.grants[i].env, g)
-					case types.GrantFileSecret:
-						d.grants[i].files = append(d.grants[i].files, g)
-					}
+			if k := slices.IndexFunc(policy.EligibleGrants, func(g types.GrantSpec) bool { return ownGrant(g, want) }); k >= 0 {
+				switch g := policy.EligibleGrants[k]; g.Kind {
+				case types.GrantEnvSecret:
+					d.grants[i].env = append(d.grants[i].env, g)
+				case types.GrantFileSecret:
+					d.grants[i].files = append(d.grants[i].files, g)
 				}
 			}
 			policy.EligibleGrants = slices.DeleteFunc(policy.EligibleGrants, func(g types.GrantSpec) bool { return sameSecretGrant(g, want) })
@@ -357,11 +359,13 @@ func takeMCPServerSecrets(d *mcpSandboxDispatch, policy *types.RunPolicySpec, in
 				continue
 			}
 			*injections = slices.DeleteFunc(*injections, func(in runner.InjectionGrant) bool {
-				if hostEqual(in.Rule.Host, sec.Delivery.Host) && in.Rule.SecretName == sec.SecretName {
-					d.grants[i].inject = append(d.grants[i].inject, in)
-					return true
+				if !hostEqual(in.Rule.Host, sec.Delivery.Host) || in.Rule.SecretName != sec.SecretName {
+					return false
 				}
-				return false
+				if j := slices.IndexFunc(rows, func(r types.CredentialGrant) bool { return r.ID == in.GrantID }); j >= 0 && ownGrant(rows[j].Spec, want) {
+					d.grants[i].inject = append(d.grants[i].inject, in)
+				}
+				return true
 			})
 		}
 	}

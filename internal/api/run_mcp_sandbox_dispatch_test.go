@@ -165,7 +165,10 @@ func newMCPDispatchFixture(t *testing.T, extra ...types.RunComponent) *mcpDispat
 	now := time.Now().UTC()
 	run := types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Image: "wardyn/claude-code:latest",
 		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunPending, RunnerTarget: "docker", Task: "do the thing"}
-	base := &dispatchTestStore{run: run, state: types.RunPending}
+	keyID := uuid.New()
+	// The header key's grant row, as the run's create writes it: the take matches an injection by its row.
+	base := &dispatchTestStore{run: run, state: types.RunPending,
+		grants: []types.CredentialGrant{{ID: keyID, RunID: run.ID, Spec: componentGrant(mcpFilesDef().Secrets[1])}}}
 	rows := &mcpRowsMem{clock: now.Truncate(time.Second)}
 	rows.runOf = func(id uuid.UUID) (types.AgentRun, error) { return base.GetRun(context.Background(), id) }
 	rc := types.RunComponent{Ordinal: 0, Name: "Files", Definition: mcpFilesDef(), MCPHarnesses: []string{"claude-code"}}
@@ -194,7 +197,7 @@ func newMCPDispatchFixture(t *testing.T, extra ...types.RunComponent) *mcpDispat
 	for _, e := range extra {
 		comps.attached = append(comps.attached, attachedComponent{snapshot: e})
 	}
-	f := &mcpDispatchFixture{srv: New(cfg), st: st, fr: fr, sbx: sbx, audit: audit, run: run, keyID: uuid.New()}
+	f := &mcpDispatchFixture{srv: New(cfg), st: st, fr: fr, sbx: sbx, audit: audit, run: run, keyID: keyID}
 	f.p.RunToken, f.p.Image = "run-token", "wardyn/claude-code:latest"
 	f.p.Policy.MinConfinementClass = types.CC1
 	f.p.Policy.EligibleGrants = []types.GrantSpec{
@@ -421,6 +424,36 @@ func TestKillDuringMCPCreateLeavesNoSandbox(t *testing.T) {
 				t.Errorf("row %s (%q), want stopped by the end that raced the create", row.State, row.LastCause)
 			}
 		})
+	}
+}
+
+// TestMCPTakeHonoursOwnerOnly: an agent grant for a server's secret that does not carry the server's own
+// owner-only rule, for its env secret and for its header key, is taken off the agent and given to no one:
+// the server gets no value its own grant would not resolve, and the agent keeps neither.
+func TestMCPTakeHonoursOwnerOnly(t *testing.T) {
+	f := newMCPDispatchFixture(t)
+	def := mcpFilesDef()
+	env, key := componentGrant(def.Secrets[0]), componentGrant(def.Secrets[1])
+	env.OwnerOnly, key.OwnerOnly = false, false
+	f.p.Policy.EligibleGrants = []types.GrantSpec{env, f.p.Policy.EligibleGrants[2]}
+	f.st.dispatchTestStore.grants = []types.CredentialGrant{{ID: f.keyID, RunID: f.run.ID, Spec: key}}
+	f.dispatch()
+	if len(f.sbx.specs) != 1 {
+		t.Fatalf("MCP sandboxes created = %d, want 1 (run %s)", len(f.sbx.specs), f.state())
+	}
+	sp := f.sbx.specs[0]
+	var pc proxy.Config
+	if err := json.Unmarshal(sp.ProxyConfig, &pc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sp.SecretEnv["FILES_TOKEN"]; ok || len(pc.Injection) != 0 || len(f.st.mcpRowsMem.get(0).GrantIDs) != 0 {
+		t.Errorf("server secret env %v injection %+v grants %v: want neither grant given to it", sp.SecretEnv, pc.Injection, f.st.mcpRowsMem.get(0).GrantIDs)
+	}
+	agent := f.agentSpec()
+	_, inEnv := agent.Env["FILES_TOKEN"]
+	if _, ok := agent.SecretEnv["FILES_TOKEN"]; ok || inEnv ||
+		slices.ContainsFunc(agent.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return in.Rule.SecretName == "files-key" }) {
+		t.Errorf("the agent kept a grant of the server's secret: env %v injections %+v", agent.SecretEnv, agent.ProxyConfig.Injection)
 	}
 }
 
