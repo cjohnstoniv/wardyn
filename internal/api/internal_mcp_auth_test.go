@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -308,6 +309,14 @@ func TestMCPAudienceClaimForgedRefused(t *testing.T) {
 	forged := parts[0] + "." + base64.RawURLEncoding.EncodeToString(forgedPayload) + "." + parts[2]
 	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, forged, mcpAllowDecision); w.Code != http.StatusUnauthorized {
 		t.Fatalf("forged aud: %d %s, want 401", w.Code, w.Body.String())
+	}
+}
+
+// TestMCPSandboxAudienceMatchesProxy ties the server's MCP audience to the one the proxy package declares, so
+// the two constants cannot drift apart.
+func TestMCPSandboxAudienceMatchesProxy(t *testing.T) {
+	if mcpSandboxAudience != proxy.MCPSandboxAudience {
+		t.Fatalf("server audience %q, proxy audience %q: want them equal", mcpSandboxAudience, proxy.MCPSandboxAudience)
 	}
 }
 
