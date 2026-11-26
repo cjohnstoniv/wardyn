@@ -273,11 +273,18 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 // DataContains adds a per-row `data @>` test with no GIN index behind it; the
 // planner walks the pkey or the (time) index and filters, and the LIMIT plus a
 // Since window bound it (about 0.1 s over 2M rows in the #1449 review).
+// A run's read is bounded by runAuditFromSQL.
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
 	q, args := filteredAuditQuery(auditCols, runID, f, p.Newest, 0)
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
+
+// runAuditFromSQL bounds a run's audit read by recorded_at, the column audit_events is partitioned by, so the read
+// skips the partitions from before the run: its creation less a day, a margin for the two clocks (created_at is the
+// server's, recorded_at the database's). A run whose row is gone gets no bound, and the read is the one it was. %s is
+// the run_id placeholder.
+const runAuditFromSQL = `recorded_at >= COALESCE((SELECT created_at FROM agent_runs WHERE id = %s) - interval '1 day', '-infinity'::timestamptz)`
 
 // filteredAuditQuery is the filtered audit read without its LIMIT: cols from audit_events narrowed by the
 // run and f, in the order QueryAuditEventsFilteredPage documents (newest flips a run's trail to newest-first).
@@ -291,7 +298,8 @@ func filteredAuditQuery(cols string, runID *uuid.UUID, f AuditFilter, newest boo
 	var clauses []string
 	if runID != nil {
 		args = append(args, *runID)
-		clauses = append(clauses, fmt.Sprintf("run_id = $%d", len(args)))
+		at := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, "run_id = "+at, fmt.Sprintf(runAuditFromSQL, at))
 	}
 	extra, args := f.where(args)
 	clauses = append(clauses, extra...)

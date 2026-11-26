@@ -18,6 +18,8 @@ import { toast } from "sonner";
 import type { AgentRun, SetupStatus } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
 import { LIST_LIMIT } from "../../lib/api/core";
+import type { RunsListFilteredResult } from "../../lib/api/runs";
+import { boardCut, mergeBoardDelta } from "./runs/board-delta";
 import { setup as setupApi } from "../../lib/api/setup";
 import { usePoll } from "../../lib/use-poll";
 import { deriveReadiness } from "../../lib/readiness";
@@ -154,18 +156,31 @@ export function RunsScreen() {
   const servicesPicked = filters.segment === "services";
   const countsAtRef = React.useRef(0);
   const plainHiddenRef = React.useRef(0);
+  // The last answers and the filter they were read for: a poll between full reads asks only for the live runs and the
+  // runs that ended past its cut, and joins the answer onto them (runs/board-delta.ts).
+  const lastRef = React.useRef<{ key: string; res: RunsListFilteredResult; svc: RunsListFilteredResult | null } | null>(null);
+  const boardKey = JSON.stringify([serverFilter, servicesPicked]);
   const fetchRuns = React.useCallback(
     (withCounts: boolean) => {
       const id = ++requestIdRef.current;
       const skipCounts = !withCounts && Date.now() - countsAtRef.current < COUNTS_EVERY_MS;
+      // A read that takes the counts (load, a filter change, once a minute) reads whole.
+      const last = skipCounts && lastRef.current?.key === boardKey ? lastRef.current : null;
+      const since = (r: RunsListFilteredResult | null | undefined) => {
+        const cut = r ? boardCut(r) : undefined;
+        return cut ? { endedAfter: cut } : {};
+      };
       // The segment counts and the "your runs" total read the plain page; the Services segment's rows, hidden
       // counts and truncation read the service-only one.
       return Promise.all([
-        api.listRunsFiltered({ ...serverFilter, skipCounts }),
-        servicesPicked ? api.listRunsFiltered({ ...serverFilter, service: true, skipCounts }) : Promise.resolve(null),
+        api.listRunsFiltered({ ...serverFilter, skipCounts, ...since(last?.res) }),
+        servicesPicked ? api.listRunsFiltered({ ...serverFilter, service: true, skipCounts, ...since(last?.svc) }) : Promise.resolve(null),
       ]).then(
-        ([res, svc]) => {
+        ([read, svcRead]) => {
           if (requestIdRef.current !== id) return; // superseded — ignore
+          const res = last ? mergeBoardDelta(last.res, read, LIST_LIMIT) : read;
+          const svc = svcRead && last?.svc ? mergeBoardDelta(last.svc, svcRead, LIST_LIMIT) : svcRead;
+          lastRef.current = { key: boardKey, res, svc };
           const shown = svc ?? res;
           if (res.countsRead) {
             countsAtRef.current = Date.now();
@@ -192,7 +207,7 @@ export function RunsScreen() {
         },
       );
     },
-    [serverFilter, servicesPicked, adminView, filters.q, filters.status, filters.workspace],
+    [serverFilter, servicesPicked, boardKey, adminView, filters.q, filters.status, filters.workspace],
   );
 
   const [loadMessage, setLoadMessage] = React.useState<string | undefined>();

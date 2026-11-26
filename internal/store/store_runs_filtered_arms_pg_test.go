@@ -289,3 +289,35 @@ func TestPG_ListRunsFiltered_EndedArmUsesTheEndTimeIndex(t *testing.T) {
 		t.Errorf("the ended arm scans the whole table:\n%s", plan)
 	}
 }
+
+// The ended arm with ended_after is a range on agent_runs_end_time_idx: the scan stops at the cut instead of reading
+// the arm's whole page. The plan is logged for the record.
+func TestPG_ListRunsFiltered_EndedAfterIsAnIndexRange(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_runs (id, created_at, ended_at, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		SELECT gen_random_uuid(), now() - g * interval '17 seconds' - interval '1 minute', now() - g * interval '17 seconds',
+		       'history-' || (g % 3000), 'claude-code', 'o/r', 'CC2', 'COMPLETED', 'spiffe://x/' || g, 'docker'
+		FROM generate_series(1, 150000) g`); err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE agent_runs`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	plan := planOfCall(t, ctx, pool, func(pg store.PG) {
+		if _, err := pg.ListRunsFiltered(ctx, store.RunFilter{EndedAfter: time.Now().Add(-time.Hour)}, store.Page{Limit: 1000}); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+	})
+	t.Logf("plan for the ended arm with ended_after over 150,000 ended runs:\n%s", plan)
+	if !strings.Contains(plan, "agent_runs_end_time_idx") {
+		t.Errorf("the ended arm does not use agent_runs_end_time_idx:\n%s", plan)
+	}
+	if !strings.Contains(plan, "Index Cond:") {
+		t.Errorf("the plan has no Index Cond line:\n%s", plan)
+	}
+	if strings.Contains(plan, "Seq Scan on agent_runs") {
+		t.Errorf("the ended arm scans the whole table:\n%s", plan)
+	}
+}

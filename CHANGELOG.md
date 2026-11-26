@@ -51,6 +51,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   drives table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up
   new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the
   migration has run. Until then a drive reclaim is refused, and so is a run that names a Docker volume or claim drive.
+- `GET /runs` takes `ended_after` (RFC 3339): the ended runs listed are only those whose end time is after it, every live run is still listed, and the answer carries `X-Wardyn-Ended-After`.
 
 ### Changed
 
@@ -58,6 +59,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On the server's Kubernetes cluster a run's agent pod is now created together with its proxy pod, not after the proxy is ready, so the two image pulls overlap. Each run reaches its proxy through its own ClusterIP Service with no selector, which Wardyn deletes with the run. The first command still waits for the proxy to be ready. Kubernetes runners (`wardyn-runnerd`) start as before.
 - The Launched screen shows a starting run's new state as soon as it changes, instead of at the next 4-second refresh. It follows the run's event stream while the run starts or waits, and keeps the refresh as a fallback.
 - A super admin's drive reclaim now keeps that person's drive storage from being attached until the storage confirms it is gone: a reclaim that times out or fails after asking the storage leaves the drive refused to runs (`409` `reclaiming`) until a later reclaim answers `deleted` or `already_absent`, and a reclaim is refused while any run that has not ended was started with that storage, whoever started it (#4137).
+- An open run page reads only its newest audit rows on each refresh, and reads its recording lists again only when a new recording row appears. Each audit read for one run skips the months of the audit log from before the run was created.
+- Between its once-a-minute full read, the Runs board reads only the live runs and the runs that ended in the last few minutes, and keeps the older ended runs it already shows. A change to a run that ended earlier, such as a new title, shows within a minute.
 
 ### Fixed
 
