@@ -550,6 +550,12 @@ func (s *Server) buildMCPSandbox(ctx context.Context, run types.AgentRun, image 
 	}}, nil
 }
 
+// mcpSandboxRef is the sandbox_ref a row records for the run's sandbox at ordinal: the runner names its
+// objects by the run and the ordinal (MCPSandboxID), so the ref is those two.
+func mcpSandboxRef(run types.AgentRun, ordinal int) string {
+	return run.ID.String() + "/mcp/" + strconv.Itoa(ordinal)
+}
+
 // mcpSandboxIDAt is the runner's name for the run's sandbox at ordinal.
 func mcpSandboxIDAt(run types.AgentRun, ordinal int) runner.MCPSandboxID {
 	return runner.MCPSandboxID{RunID: run.ID, Ordinal: ordinal, Class: run.ConfinementClass}
@@ -567,7 +573,7 @@ func mcpReserved(rl *types.ResourceLimits) types.RunnerAmounts {
 // site config read error reads as off), the site's upstream proxy, step 3b, the runner's MCP sandbox kinds
 // on the run's own capability read, and step 4, the limit. "" passes.
 func (s *Server) mcpDispatchRefusal(ctx context.Context, run types.AgentRun, n int, server string, site types.SiteConfig, siteErr error) (reason, sentence string) {
-	facts := mcpGateFacts{stdio: n, off: mcpOwnSandboxOff(site, siteErr), kind: run.MachineKind.Normalize(), local: run.Placement == types.PlacementLocal}
+	facts := mcpGateFacts{stdio: n, off: mcpOwnSandboxOff(site, siteErr), kind: mcpGateKind(run.MachineKind), local: run.Placement == types.PlacementLocal}
 	if st := mcpGate(mcpAtSwitch, facts); st != nil {
 		return st.reason, mcpSandboxSentence(st.sentence, server, "")
 	}
@@ -586,6 +592,15 @@ func (s *Server) mcpDispatchRefusal(ctx context.Context, run types.AgentRun, n i
 		return st.reason, mcpSandboxSentence(st.sentence, server, mcpRunnerUnnamed)
 	}
 	return "", ""
+}
+
+// mcpGateKind is a run's machine kind as the gate compares it with a runner's MCP sandbox kinds: the stored
+// "" is a container, as P1's gate reads it.
+func mcpGateKind(k types.MachineKind) types.MachineKind {
+	if k == "" {
+		return types.MachineContainer
+	}
+	return k
 }
 
 // mcpPolicyBaseAt is what dispatch derives each server's MCP policy from: the policy the agent's proxy runs
@@ -772,12 +787,13 @@ func (s *Server) startRunMCPSandboxes(ctx context.Context, run types.AgentRun, d
 			s.auditMCPSandboxCreate(ctx, made.row, "failure", cause)
 			continue
 		}
-		s.auditMCPSandboxCreate(ctx, made.row, "success", "")
-		if ok, err := st.MarkMCPSandboxStartedIfStarting(ctx, run.ID, made.srv.ordinal, made.row.RelayAddr); err != nil || !ok {
+		made.row.SandboxRef = mcpSandboxRef(run, made.srv.ordinal)
+		if ok, err := st.MarkMCPSandboxStartedIfStarting(ctx, run.ID, made.srv.ordinal, made.row.SandboxRef); err != nil || !ok {
 			_ = m.KillMCPSandbox(ctx, id) // the run moved on (a refused admission, a kill): what started goes
 			stopCreateLease()
 			return false
 		}
+		s.auditMCPSandboxCreate(ctx, made.row, "success", "")
 		waiting = append(waiting, made)
 	}
 	deadline := s.cfg.Now().Add(mcpReadyWait)

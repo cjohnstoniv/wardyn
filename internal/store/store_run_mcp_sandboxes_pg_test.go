@@ -221,4 +221,9 @@ func TestRestartAndRecordMCPSandbox(t *testing.T) {
 	if ok, err := pg.RecordMCPSandboxCreated(ctx, moved, 0, store.MCPSandboxCreated{RelayAddr: "172.30.0.2:3130"}); err != nil || ok {
 		t.Errorf("record on a stopped row: applied %v, %v; want false", ok, err)
 	}
+	// A restart whose create fails fails its restarting row.
+	restarting := mcpSandboxRun(t, ctx, pool, types.RunRunning, store.MCPSandboxRestarting)
+	if ok, err := pg.FailMCPSandboxIfUp(ctx, restarting, 0, "start"); err != nil || !ok || mcpSandboxRow(t, ctx, pool, restarting).State != store.MCPSandboxFailed {
+		t.Errorf("fail a restarting row: applied %v, %v; want failed", ok, err)
+	}
 }

@@ -28,6 +28,8 @@ type mcpRowsMem struct {
 	clock   time.Time
 	listErr error
 	stopErr error
+	// reopenErr and keepErr fail a revive's reopen and keep writes, as a store that cannot write answers.
+	reopenErr, keepErr error
 	// runOf reads the run a joined write is checked against; nil reads every run RUNNING and not lost.
 	runOf func(uuid.UUID) (types.AgentRun, error)
 }
@@ -124,7 +126,7 @@ func (m *mcpRowsMem) MarkMCPSandboxStartedIfStarting(_ context.Context, runID uu
 
 func (m *mcpRowsMem) FailMCPSandboxIfUp(_ context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
 	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
-		return r.State == store.MCPSandboxStarting || r.State == store.MCPSandboxReady
+		return r.State == store.MCPSandboxStarting || r.State == store.MCPSandboxReady || r.State == store.MCPSandboxRestarting
 	}, func(r *store.RunMCPSandbox) { r.State, r.LastCause = store.MCPSandboxFailed, cause })
 }
 
@@ -135,6 +137,9 @@ func (m *mcpRowsMem) MarkMCPSandboxReadyIfLive(_ context.Context, runID uuid.UUI
 }
 
 func (m *mcpRowsMem) ReopenMCPSandboxIfLive(_ context.Context, runID uuid.UUID, ordinal int, readAt time.Time, jti string, prevUntil time.Time) (bool, error) {
+	if m.reopenErr != nil {
+		return false, m.reopenErr
+	}
 	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.UpdatedAt.Equal(readAt) && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) {
@@ -145,6 +150,9 @@ func (m *mcpRowsMem) ReopenMCPSandboxIfLive(_ context.Context, runID uuid.UUID, 
 }
 
 func (m *mcpRowsMem) KeepMCPSandboxStartingIfLive(_ context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error) {
+	if m.keepErr != nil {
+		return false, m.keepErr
+	}
 	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State == store.MCPSandboxStarting && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) { r.SandboxRef = ref })
@@ -208,6 +216,7 @@ type mcpSandboxerFake struct {
 	calls    []string
 	killAll  int
 	createFn func(ctx context.Context, spec runner.MCPSandboxSpec) error
+	killFn   func(id runner.MCPSandboxID) // runs before each kill, outside the lock
 	startErr error
 	killErr  error
 	// statusDead reads every sandbox dead whatever its state, as a crashed server reads.
@@ -259,6 +268,12 @@ func (f *mcpSandboxerFake) KillRunMCPSandboxes(context.Context, uuid.UUID) error
 }
 
 func (f *mcpSandboxerFake) KillMCPSandbox(_ context.Context, id runner.MCPSandboxID) error {
+	f.mu.Lock()
+	fn := f.killFn
+	f.mu.Unlock()
+	if fn != nil {
+		fn(id)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("kill", id.Ordinal)

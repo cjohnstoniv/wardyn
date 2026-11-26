@@ -4,11 +4,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -28,14 +31,75 @@ const (
 	mcpAgentSecretValue = "agent-env-secret-value-93ab6e"
 )
 
-// mcpDispatchStore is dispatch's store with the run's component snapshot, its MCP rows and its owner's walls,
-// whose read fails while wallsErr is set.
+// mcpDispatchStore is dispatch's store with the run's component snapshot, its MCP rows, its owner's walls
+// (whose read fails while wallsErr is set), its kept proxy config and, for a restart, a run read that fails
+// while getRunErr is set and a containment held while pending is.
 type mcpDispatchStore struct {
 	*dispatchTestStore
 	*mcpRowsMem
 	store.ComponentStore
-	comps    []types.RunComponent
-	wallsErr error
+	comps     []types.RunComponent
+	wallsErr  error
+	getRunErr error
+	pending   bool
+	cfgMu     sync.Mutex
+	proxyCfg  []byte
+	site      types.SiteConfig
+}
+
+func (s *mcpDispatchStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, nil
+}
+
+// The restart and revive paths find these by assertion, so a signature drift would read as "not kept".
+var (
+	_ store.RunProxyConfigs    = (*mcpDispatchStore)(nil)
+	_ store.RunMCPSandboxStore = (*mcpDispatchStore)(nil)
+	_ runContainmentStore      = (*mcpDispatchStore)(nil)
+)
+
+func (s *mcpDispatchStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.getRunErr != nil {
+		return types.AgentRun{}, s.getRunErr
+	}
+	return s.dispatchTestStore.GetRun(ctx, id)
+}
+
+func (s *mcpDispatchStore) PutRunProxyConfig(_ context.Context, _ uuid.UUID, sealed []byte) error {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.proxyCfg = slices.Clone(sealed)
+	return nil
+}
+
+func (s *mcpDispatchStore) GetRunProxyConfig(context.Context, uuid.UUID) ([]byte, error) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if s.proxyCfg == nil {
+		return nil, store.ErrNotFound
+	}
+	return slices.Clone(s.proxyCfg), nil
+}
+
+func (s *mcpDispatchStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error { return nil }
+
+func (s *mcpDispatchStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (s *mcpDispatchStore) GetRunContainmentPending(context.Context, uuid.UUID) (store.RunContainmentPendingRow, error) {
+	if s.pending {
+		return store.RunContainmentPendingRow{}, nil
+	}
+	return store.RunContainmentPendingRow{}, store.ErrNotFound
+}
+
+func (s *mcpDispatchStore) ListRunNodeRecords(context.Context, uuid.UUID) ([]types.RunNodeRecord, error) {
+	return nil, nil
+}
+
+func (s *mcpDispatchStore) QueueRunNodeRecord(context.Context, store.RunNodeRecordWrite) (types.RunnerPendingAction, error) {
+	return types.RunnerPendingAction{}, errors.New("not kept")
 }
 
 func (s *mcpDispatchStore) ListRunComponents(context.Context, uuid.UUID) ([]types.RunComponent, error) {
@@ -91,19 +155,20 @@ type mcpDispatchFixture struct {
 }
 
 // newMCPDispatchFixture is a run with one server that starts from a command, and the agent's own env secret,
-// with its dispatch params built as the gate builds them (runComponents.dispatch).
-func newMCPDispatchFixture(t *testing.T) *mcpDispatchFixture {
+// with its dispatch params built as the gate builds them (runComponents.dispatch). extra are more snapshot
+// rows, after it in ordinal order.
+func newMCPDispatchFixture(t *testing.T, extra ...types.RunComponent) *mcpDispatchFixture {
 	t.Helper()
 	t.Setenv(envMCPOwnSandbox, "on")
 	h := newHarness(t)
 	now := time.Now().UTC()
-	run := types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+	run := types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Image: "wardyn/claude-code:latest",
 		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunPending, RunnerTarget: "docker", Task: "do the thing"}
 	base := &dispatchTestStore{run: run, state: types.RunPending}
 	rows := &mcpRowsMem{clock: now.Truncate(time.Second)}
 	rows.runOf = func(id uuid.UUID) (types.AgentRun, error) { return base.GetRun(context.Background(), id) }
 	rc := types.RunComponent{Ordinal: 0, Name: "Files", Definition: mcpFilesDef(), MCPHarnesses: []string{"claude-code"}}
-	st := &mcpDispatchStore{dispatchTestStore: base, mcpRowsMem: rows, comps: []types.RunComponent{rc}}
+	st := &mcpDispatchStore{dispatchTestStore: base, mcpRowsMem: rows, comps: append([]types.RunComponent{rc}, extra...)}
 	secrets := &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	for name, v := range map[string]string{"files-token": mcpFilesSecretValue, "files-key": mcpFilesKeyValue, "agent-token": mcpAgentSecretValue} {
 		if err := secrets.For(run.CreatedBy).Put(context.Background(), name, []byte(v)); err != nil {
@@ -114,9 +179,20 @@ func newMCPDispatchFixture(t *testing.T) *mcpDispatchFixture {
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = mcpDispatchRunner{fr, sbx}
 	cfg.Broker, cfg.Audit, cfg.Secrets = h.broker, audit, secrets
+	cfg.RunConfigKey = bytes.Repeat([]byte{7}, kek.DEKSize) // the run's and each MCP sandbox's config are kept
+	// The watchers a dispatch starts end with the test, so none reads the fixture after it.
+	every := mcpWatchEvery
+	mcpWatchEvery = time.Hour // a test runs each pass itself
+	t.Cleanup(func() { mcpWatchEvery = every })
+	life, cancel := context.WithCancel(context.Background())
+	cfg.BaseCtx = life
+	t.Cleanup(cancel)
 
 	def := rc.Definition
 	comps := runComponents{attached: []attachedComponent{{snapshot: rc}}}
+	for _, e := range extra {
+		comps.attached = append(comps.attached, attachedComponent{snapshot: e})
+	}
 	f := &mcpDispatchFixture{srv: New(cfg), st: st, fr: fr, sbx: sbx, audit: audit, run: run, keyID: uuid.New()}
 	f.p.RunToken, f.p.Image = "run-token", "wardyn/claude-code:latest"
 	f.p.Policy.MinConfinementClass = types.CC1

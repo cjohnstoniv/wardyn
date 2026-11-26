@@ -64,6 +64,9 @@ type runLeaseState struct {
 	// cut acted for, so the MCP restart watcher and the Restart route create nothing for a run cut under a
 	// lost mark that could not be written. Cleared by a revive that succeeded and by the run's end.
 	lostCuts sync.Map
+	// mcpWatching holds the id of every run whose MCP watcher runs in this process (run_mcp_sandbox_restart.go),
+	// so a re-arm starts no second one. Cleared when the watcher ends.
+	mcpWatching sync.Map
 	// lapseHoldOpen is whether this replica has an open outage episode: the lapse sweep has written its
 	// run.lapse_sweep.hold row and no later pass has closed the episode (run_lapse_class.go).
 	lapseHoldOpen atomic.Bool

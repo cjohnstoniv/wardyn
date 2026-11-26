@@ -72,7 +72,7 @@ type RunMCPSandboxStore interface {
 	// MarkMCPSandboxStartedIfStarting is dispatch's move of a started row to ready, only while the run is
 	// STARTING.
 	MarkMCPSandboxStartedIfStarting(ctx context.Context, runID uuid.UUID, ordinal int, ref string) (bool, error)
-	// FailMCPSandboxIfUp moves a starting or ready row to failed with cause.
+	// FailMCPSandboxIfUp moves a starting, ready or restarting row to failed with cause.
 	FailMCPSandboxIfUp(ctx context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error)
 	// MarkMCPSandboxReadyIfLive moves a row to ready after a restart or the settle, only while the run is
 	// RUNNING and not lost and the row is not stopped.
@@ -194,11 +194,11 @@ func (s PG) MarkMCPSandboxStartedIfStarting(ctx context.Context, runID uuid.UUID
 		runID, ordinal, ref, string(types.RunStarting))
 }
 
-// FailMCPSandboxIfUp moves one row of runID that is starting or ready to failed with cause; a stopped row
-// keeps its cause.
+// FailMCPSandboxIfUp moves one row of runID that is starting, ready or restarting (a restart's failed create
+// or start) to failed with cause; a stopped row keeps its cause.
 func (s PG) FailMCPSandboxIfUp(ctx context.Context, runID uuid.UUID, ordinal int, cause string) (bool, error) {
 	return s.mcpSandboxWrite(ctx, "fail an MCP sandbox", `UPDATE run_mcp_sandboxes SET state = 'failed', last_cause = $3, updated_at = now()
-		WHERE run_id = $1 AND ordinal = $2 AND state IN ('starting', 'ready')`,
+		WHERE run_id = $1 AND ordinal = $2 AND state IN ('starting', 'ready', 'restarting')`,
 		runID, ordinal, cause)
 }
 

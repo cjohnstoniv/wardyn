@@ -156,6 +156,12 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/support/{grant}/accept":  "the owner's answer to a help request; opens nothing itself",
 	"POST /runs/{id}/support/{grant}/decline": "the owner's refusal of a help request; opens nothing",
 	"POST /runs/{id}/support/{grant}/end":     "ends a help request or session; opens nothing",
+
+	// A run's MCP servers that start from a command (run_mcp_sandbox_routes.go): each acts on a sandbox of the
+	// server's own and opens no shell, terminal or relay into the agent's.
+	"GET /runs/{id}/mcp-servers":                "lists the run's MCP servers; opens nothing",
+	"POST /runs/{id}/mcp-servers/{key}/restart": "restarts one MCP server in its own sandbox",
+	"POST /runs/{id}/mcp-servers/{key}/stop":    "stops one MCP server's own sandbox",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

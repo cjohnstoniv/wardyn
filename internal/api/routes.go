@@ -705,6 +705,7 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	s.mountRunReviveRoutes(r) // revive and the live egress edit, owner or super admin (run_egress_edit.go)
+	s.mountRunMCPRoutes(r)    // the run page's MCP servers: list, restart and stop (run_mcp_sandbox_routes.go)
 	// Desktop sign-ins (#2972): the run's creator only, off unless
 	// WARDYN_DESKTOP_SIGNINS=on (run_desktop_signin.go).
 	r.Post("/runs/{id}/desktop-signin", s.handleBeginDesktopSignin)

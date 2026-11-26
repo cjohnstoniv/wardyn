@@ -114,6 +114,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"run_schedule_door.go:scheduleDoorRefusal":                 {1, "R: the scheduled-runs decision at create and Review; the run it admits meets the boundary at resolve and dispatch"},
 	"run_limit_sources.go:limitSources":                        {1, "authz-only: a display of where limits came from"},
 	"run_macos_base.go:macOSBaseAllowedFor":                    {1, "D: placement and the pool list; the run it admits meets the boundary at resolve and dispatch"},
+	"run_mcp_sandbox.go:mcpPolicyBaseAt":                       {1, "D: an ungoverned creator's own-mode MCP policy is not clamped to a ceiling at dispatch; mcpPolicyFinish meets it with the seal's layers, the boundary's first"},
 	"run_overrides_apply.go:applySecretOverrides":              {2, "R: a removal only narrows; the spec meets the boundary at resolve"},
 	"run_output.go:auditRunOutputRead":                         {1, "authz-only: an operator reading another person's terminal text is audited, as a replay is"},
 	"run_output.go:handleRunOutput":                            {1, "authz-only: data_out keeps a run's output from its owner and leaves it to a security admin"},

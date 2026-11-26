@@ -979,6 +979,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
 	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/kill":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// A run's MCP servers that start from a command (run_mcp_sandbox_routes.go): the list and the Stop as the
+	// kill (a security admin too), the Restart as revive (the owner or a super admin).
+	"GET /api/v1/runs/{id}/mcp-servers":                {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/mcp-servers/{key}/restart": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/mcp-servers/{key}/stop":    {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// One command in a running run (run_exec.go): the entry rule, as SSH exec has it.
 	"POST /api/v1/runs/{id}/exec": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 
@@ -1170,6 +1175,14 @@ func absentRowSignInAnswer(method, pattern string, w *httptest.ResponseRecorder)
 }
 
 // assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
+// unknownMCPServerAnswer reports whether w is the MCP server Stop's own answer for a key the run has no server
+// for: the probe fills {key} with the run's id, so the handler, reached past its authorization, answers its
+// own 404, whose reason the not-owner 404 never carries.
+func unknownMCPServerAnswer(method, pattern string, w *httptest.ResponseRecorder) bool {
+	return method == http.MethodPost && pattern == "/api/v1/runs/{id}/mcp-servers/{key}/stop" &&
+		w.Code == http.StatusNotFound && errorReason(w) == reasonMCPSandboxUnknown
+}
+
 func assertNotBlockedOn(t *testing.T, method, pattern, who string, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if absentRowSignInAnswer(method, pattern, w) {
@@ -1883,7 +1896,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					// work — a route silently narrowed to super would strand
 					// incident response, which is the other direction of the
 					// same drift.
-					if w.Code == http.StatusNotFound || w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
+					if (w.Code == http.StatusNotFound && !unknownMCPServerAnswer(method, pattern, w)) || w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
 						t.Errorf("security_admin on a FOREIGN entity, tierSecurity route: status = %d, want the "+
 							"handler's own answer — inspect-or-stop is this tier's warrant; body=%s", w.Code, w.Body.String())
 					}
@@ -1936,9 +1949,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
-		// /runs/{id}/egress (tierSuper, as revive).
-		if probed != 55 {
-			t.Errorf("probed %d classOwner routes, want 55 — a route that left classOwner takes its tier "+
+		// /runs/{id}/egress (tierSuper, as revive); 58 since 0.11 added GET
+		// /runs/{id}/mcp-servers and POST .../{key}/restart (tierSuper) and .../{key}/stop.
+		if probed != 58 {
+			t.Errorf("probed %d classOwner routes, want 58 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
