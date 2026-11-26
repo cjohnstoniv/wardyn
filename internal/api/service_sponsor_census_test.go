@@ -37,8 +37,22 @@ var sponsorReachHelpers = map[string]struct {
 	"runEventsOpeningRun": {"handleRunEvents", 2},
 }
 
+// sponsorReachAssistantChecks are the assistant's checks strip and replay (POST /assistant/checks and
+// /assistant/replay), which a sponsor also reaches: the function that asks ownsRunOrSponsorOrAdmin, how many
+// times, and the route lines in assistant_routes.go that reach it. assistantPersonTarget reads a run target
+// through getRunAuthorizedBy, as GET /runs/{id} reads it, for both routes; handleAssistantReplay keeps the runs it
+// counts to the ones the same predicate admits. Both answer checks and counts only, never more of a run than GET
+// /runs/{id} shows.
+var sponsorReachAssistantChecks = map[string]struct {
+	asks   int
+	routes []string
+}{
+	"assistantPersonTarget": {1, []string{`r.Post("/assistant/checks", s.handleAssistantChecks)`, `r.Post("/assistant/replay", s.handleAssistantReplay)`}},
+	"handleAssistantReplay": {1, []string{`r.Post("/assistant/replay", s.handleAssistantReplay)`}},
+}
+
 // TestSponsorReach_RouteCensus: ownsRunOrSponsorOrAdmin is asked by exactly the five per-run handlers above, once
-// each (directly or through their helper in sponsorReachHelpers), and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
+// each (directly or through their helper in sponsorReachHelpers), by the assistant checks in sponsorReachAssistantChecks, and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
 // reaches, and has to be classified here before it merges.
 func TestSponsorReach_RouteCensus(t *testing.T) {
 	entries, err := os.ReadDir(".")
@@ -102,6 +116,18 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 		delete(found, fn)
 		if src, err := os.ReadFile("routes.go"); err != nil || !strings.Contains(string(src), route) {
 			t.Errorf("routes.go does not mount %s (%v)", route, err)
+		}
+	}
+	for fn, c := range sponsorReachAssistantChecks {
+		if found[fn] != c.asks {
+			t.Errorf("%s asks ownsRunOrSponsorOrAdmin %d times, want %d", fn, found[fn], c.asks)
+		}
+		delete(found, fn)
+		src, err := os.ReadFile("assistant_routes.go")
+		for _, route := range c.routes {
+			if err != nil || !strings.Contains(string(src), route) {
+				t.Errorf("assistant_routes.go does not mount %s (%v)", route, err)
+			}
 		}
 	}
 	// sponsorsRun itself is asked only by the predicate above and by the interactive entry rule (admitRunEntry,

@@ -433,8 +433,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/assistant/sessions":               {class: classMember},
 	"POST /api/v1/assistant/sessions/{id}/messages": {class: classMember},
 	"POST /api/v1/assistant/sessions/{id}/edits":    {class: classMember},
-	"GET /api/v1/assistant/sessions/{id}/events":    {class: classMember},
-	"DELETE /api/v1/assistant/sessions/{id}":        {class: classMember},
+	// The person's last confirmation of a repository draft's files: the session's owner's own, another's {id} is 404.
+	"POST /api/v1/assistant/sessions/{id}/build-files/confirm": {class: classMember},
+	"GET /api/v1/assistant/sessions/{id}/events":               {class: classMember},
+	"DELETE /api/v1/assistant/sessions/{id}":                   {class: classMember},
+	// The checks strip and the replay: the signed-in person's own checks, with no session and no model.
+	"POST /api/v1/assistant/checks": {class: classMember},
+	"POST /api/v1/assistant/replay": {class: classMember},
 	// Model providers (0.8): gateway addresses, the AWS access portal and
 	// account pins. SUPER for the agent roster's reason; the member tier is
 	// served SetupStatus.model_providers instead, which carries none of them.
@@ -994,6 +999,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// The ticket to watch a background macOS run's desktop, view only (run_background_watch.go).
 	"POST /api/v1/runs/{id}/desktop/watch-ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/desktop/window":       {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop/local-window": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1112,6 +1118,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},
 	"GET /api/v1/internal/assistant/turns":                 {class: classInternal},
 	"POST /api/v1/internal/assistant/events":               {class: classInternal},
+	"GET /api/v1/internal/assistant/tools":                 {class: classInternal},
+	"POST /api/v1/internal/assistant/tools/{name}":         {class: classInternal},
 	"GET /api/v1/internal/injection/{grantID}":             {class: classInternal},
 	"GET /api/v1/internal/via-org/{grantID}/*":             {class: classInternal},
 	"HEAD /api/v1/internal/via-org/{grantID}/*":            {class: classInternal},
@@ -1289,6 +1297,7 @@ func authzMatrixSiteConfig() types.SiteConfig {
 		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
 		FeatureSwitches: &types.SiteFeatureSwitches{
 			PreviewURLs: &types.PreviewURLsFeature{Enabled: &on, MaxVisibility: "org"},
+			LocalWindow: &types.LocalWindowFeature{Enabled: &on},
 		},
 	}
 }
@@ -1305,6 +1314,7 @@ func authzMatrixFeatureHooks(t *testing.T) {
 	}
 	for _, k := range []siteFeatureKey{
 		featurePreviewURLs,
+		featureLocalWindow,
 	} {
 		h := hooks[k]
 		h.available = func() bool { return true }
@@ -2020,9 +2030,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/egress (tierSuper, as revive); 57 since the Walls view added
 		// GET /runs/{id}/walls and its stream; 60 since 0.11 added GET
 		// /runs/{id}/previews and DELETE .../previews/{port} (tierSecurity) and
-		// PUT .../previews/{port} (tierEntry).
-		if probed != 60 {
-			t.Errorf("probed %d classOwner routes, want 60 — a route that left classOwner takes its tier "+
+		// PUT .../previews/{port} (tierEntry); 61 since 0.11 added POST
+		// /runs/{id}/desktop/local-window (tierEntry).
+		if probed != 61 {
+			t.Errorf("probed %d classOwner routes, want 61 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

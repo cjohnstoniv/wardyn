@@ -998,19 +998,19 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs at least one of `enabled`, `require_managed_device`, `mdm_device_ca_pem`, `mdm_device_crl_url` and `machine_kind_denials`; the first two are true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled`, `runners.require_managed_device`, `runners.machine_kind_denials` or the MDM device CA and CRL URL with `PUT /runners/settings`. |
-| `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. |
+| `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. `POST /assistant/checks` and `POST /assistant/replay` (`409`): every purpose the route serves is off. |
 | `assistant_no_provider` | `GET /me/assistant`: no model provider is marked to serve this purpose. |
-| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models`, or a provider you are not granted, rules out every marked provider and model. |
+| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models`, or a provider you are not granted, rules out every marked provider and model. `POST /assistant/checks` and `POST /assistant/replay` answer it with `409`. |
 | `assistant_not_connected` | `GET /me/assistant`: you have no credential for a marked provider yet. |
 | `assistant_settings_invalid` | `PUT /assistant/settings`: `400` for an unknown provider, a bad model list or an unknown record kind, `428` without `If-Match`, `412` when it no longer matches. `GET /me/assistant`: `purpose` is not `compose` or `review`. An approval refuses a block the providers no longer allow. |
 | `assistant_provider_cannot_serve` | `PUT /assistant/settings`: a marked provider does not pair with Claude Code, or is a Bedrock kind. |
 | `assistant_provider_defers_inspection` | `PUT /assistant/settings`: a marked provider leaves prompt inspection to its gateway. |
 | `assistant_settings_via_own_route` | Change `assistant` with `PUT /assistant/settings`, not `PUT /site-config`. |
 | `assistant_at_run_limit` | `POST /assistant/preview` and `POST /assistant/sessions` (`409`): you are at your `max_concurrent_runs`, and the assistant's run would count against it. End a run first. |
-| `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, and a message or edit on a live session (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
+| `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, a message or edit on a live session, and the assistant's `read` tool (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
 | `assistant_session_not_found` | `404`: no session with that id is yours; another person's session answers the same. `409` on a message, an edit or a run's event when the session has ended or another session replaced it. |
 | `assistant_purpose_target_mismatch` | `400`: the purpose does not take that kind of target (a review names a held change). |
-| `assistant_preview_stale` | `POST /assistant/sessions` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
+| `assistant_preview_stale` | `POST /assistant/sessions` and `POST /assistant/sessions/{id}/build-files/confirm` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
 | `assistant_rate_limited` | `429` with `Retry-After`: too many assistant requests from you, or more than four open event streams and long-polls at once. |
 | `assistant_role_denied` | `403`: your role no longer allows the assistant (the session ends), or the caller is no person, such as the admin token. |
 | `assistant_session_provider_changed` | A message or edit (`409`): the session's provider or model no longer serves the purpose. The session ends; start a new one. |
@@ -1018,6 +1018,15 @@ start.
 | `assistant_sessions_unavailable` | `501`: this server's store keeps no assistant sessions. |
 | `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. Start a new session. |
 | `assistant_stream_unavailable` | `GET /assistant/sessions/{id}/events` with `Accept: text/event-stream` (`501`): this server cannot stream. Read the events by long-poll instead. |
+| `assistant_tool_unknown` | `POST /internal/assistant/tools/{name}` (`404`): the run called a tool the server does not have. |
+| `assistant_tool_refused` | `POST /internal/assistant/tools/{name}` (`403`): a review session called `draft` or `build_files`, or the organisation keeps run history from the assistant. |
+| `assistant_repo_host_unsupported` | `POST /assistant/sessions` with a repository (`400`): a draft cannot read files from that repository's host yet. GitHub and Azure DevOps are read. |
+| `assistant_build_files_not_pending` | `POST /assistant/sessions/{id}/build-files/confirm` (`409`): the session is not waiting for its files to be confirmed, or its ten minutes passed and it ended. Start again. |
+| `assistant_repo_no_credential` | `POST /assistant/sessions` with a repository (`409`): no git access is set up for that repository, so its files cannot be read. |
+| `assistant_repo_sign_in_needed` | `POST /assistant/sessions` with a repository (`409`): your Azure DevOps sign-in has lapsed. Sign in again, then start over. |
+| `assistant_repo_read_refused` | `POST /assistant/sessions` with a repository (`502`): the repository host refused the read. |
+| `assistant_repo_unreachable` | `POST /assistant/sessions` with a repository (`502`): the repository host could not be reached. |
+| `assistant_build_files_pending` | A message or an edit on a session (`409`) that still waits for its files to be confirmed. Confirm them, or start again. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
@@ -1135,6 +1144,18 @@ start.
 | `mac_window_site_off` / `mac_window_not_macos_vm` / `mac_window_not_your_mac` / `mac_window_unrecorded` | `403`, `409`, `403`, `403`: `POST /runs/{id}/desktop/window`, or `desktop_window: "at_start"` at create, which opens a window onto a macOS VM run on the Mac of the caller's own runner. `macos_vm.allow_attended_window` is not `true`; the run is not a macOS VM run; the Mac's runner is not the caller's; the recording level is Screen and actions, where a window on the Mac isn't recorded (its sentence: "This run's recording level is Screen and actions, and a window on your Mac isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead."). A profile's denial answers as `governance_unit`. A 30 second re-check asks again and ends the window on any refusal, or any check it cannot make. |
 | `mac_window_offline` / `mac_window_runner_too_old` / `mac_window_not_here` / `mac_window_desktop_control` / `mac_window_paused` / `mac_window_preparing` / `mac_window_open` / `mac_window_not_at_mac` / `mac_window_lock_unknown` / `mac_window_failed` | `409` (`502` for `mac_window_failed`): the runner is offline, cannot open a window, or is connected through another server (use a single replica or sticky runner routing); a browser desktop with control did not close in time; the run is paused, still being prepared, or already has a window; the person is not signed in at the unlocked Mac; the Mac can't tell whether its screen is locked, so the window stays closed; the runner could not open it. `GET /runs/{id}` has `macos_preparing: true` while setup runs. |
 | `mac_window_revoked` | `403`: the caller's session was cut off; at a re-check it closes the window as `revoked`. |
+| `local_window_site_off` | `403`: `POST /runs/{id}/desktop/local-window`, which opens a Linux VM run in a window on the caller's own computer, while `features.local_window` is off. A non-owner gets the run's `404` instead. |
+| `local_window_kind` | `409`: the run is not a Linux VM run. |
+| `local_window_not_your_computer` | `403`: the run is not on a runner the caller registered as their own, or the caller is not its creator, or came through a delegated token. |
+| `local_window_recording` | `403`: the run's recording level is Screen and actions, and a local window isn't recorded. |
+| `local_window_offline` | `409`: the run's runner is not connected to this server. |
+| `local_window_runner_too_old` | `409`: the run's runner cannot open a local window: it is older than this server, or it was started with `--local-attach=off`. |
+| `local_window_paused` | `409`: the run is paused. At a re-check it closes an open window. |
+| `local_window_preparing` | `409`: the run is still being prepared. |
+| `local_window_open` | `409`: the run already has a window open. |
+| `local_window_desktop_control` | `409`: a browser desktop with control of the run did not close in time. |
+| `local_window_nonce` | `409`: the runner did not accept `local_nonce`: it expired, or was asked for another run. Ask the runner's socket again. |
+| `local_window_failed` | `502`: the runner could not open the window. |
 | `desktop_window_invalid` | `400`: `desktop_window` is not `at_start`, or the run is not a macOS VM run. |
 | `run_background_only` | `409`: an interactive door of a background task (terminal, interactive exec, SSH, web gateway, desktop). `POST /runs/{id}/exec` is not interactive and takes a background run. Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. The one exception is the built-in desktop of a background macOS VM run, which its owner can watch view only through `POST /runs/{id}/desktop/watch-ticket` (the `run_background_watch_*` rows above). `POST /runs/{id}/attach/ticket`, with `?purpose=ui` too, answers `run_background_only` for a background run: use the watch-ticket call. A declared noVNC app, the desktop's files and a desktop sign-in still answer this. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |

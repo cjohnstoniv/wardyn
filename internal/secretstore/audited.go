@@ -39,7 +39,9 @@ const (
 	// PurposeServiceGrant names the mint's read of a provider service grant's client secret record.
 	PurposeServiceGrant Purpose = "service-grant"
 	PurposeBranchList   Purpose = "branch-list"
-	PurposeStatus       Purpose = "status"
+	// PurposeBuildFiles names the read of the person's own Azure DevOps credential for a repository draft's root files.
+	PurposeBuildFiles Purpose = "build-files"
+	PurposeStatus     Purpose = "status"
 
 	// PurposeRunnerResident names a dispatch read of a runner_resident value,
 	// handed to the run's runner. Its site records the secret.read itself

@@ -17,6 +17,11 @@ const (
 	assistantSuggestionAction   = "assistant.suggestion.create"
 )
 
+// assistantBuildFilesFetchAction is the row of a repository read for a draft: the workspace, the repository, the
+// branch, and the names of the files it found to send, left out for size and held back by the secret scan.
+// Never a file's text.
+const assistantBuildFilesFetchAction = "assistant.build_files.fetch"
+
 // assistantTargetKey is the audit target of the assistant block and the target key of its held change: the
 // block is a singleton.
 const assistantTargetKey = "assistant"
