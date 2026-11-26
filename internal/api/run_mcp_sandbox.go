@@ -143,10 +143,10 @@ func mcpRowUp(row store.RunMCPSandbox) bool { return row.State != store.MCPSandb
 
 // endMCPSandbox is endRunMCPSandboxes' end of one row, by its name, so a starting row with no ref is ended
 // too: the kill (the proxy drained first), then the row stopped with cause, then run.mcp_sandbox.end. A row
-// another writer stopped first keeps its cause and writes no second row. A kill that failed leaves the row
-// up, with a failure row, so the run's containment lists it and the kill confirm and the watcher kill it
-// again; nothing restarts it, since a run that is over, lost or kept is never one mcpCreateAllowed admits.
-// gone reports whether the kill succeeded.
+// another writer stopped first keeps its cause and writes no second row. A kill that failed moves an up row to
+// failed with cause, with a failure row: it is not stopped, so the run's containment lists it and the kill
+// confirm ends it again, and the watcher's kill of a failed row whose sandbox is live retries it on a run that
+// is lost or kept. The watcher never restarts a failed row. gone reports whether the kill succeeded.
 func (s *Server) endMCPSandbox(ctx context.Context, run types.AgentRun, row store.RunMCPSandbox, cause string) (gone bool) {
 	st, m, ok := s.mcpSandboxSeams()
 	if !ok {
@@ -155,6 +155,10 @@ func (s *Server) endMCPSandbox(ctx context.Context, run types.AgentRun, row stor
 	if kerr := m.KillMCPSandbox(ctx, mcpSandboxIDOf(run, row)); kerr != nil {
 		slog.WarnContext(ctx, "wardynd: killing an MCP server's sandbox failed", slog.String("run_id", run.ID.String()),
 			slog.String("server", row.ServerKey), slog.Any("err", kerr))
+		if _, werr := st.FailMCPSandboxIfUp(ctx, run.ID, row.Ordinal, cause); werr != nil {
+			slog.WarnContext(ctx, "wardynd: recording an MCP server's failed kill failed", slog.String("run_id", run.ID.String()),
+				slog.String("server", row.ServerKey), slog.Any("err", werr))
+		}
 		s.auditMCPSandboxEnd(ctx, run.ID, types.ActorSystem, "wardynd", &row, "failure", cause)
 		return false
 	}

@@ -100,7 +100,8 @@ func assertMCPRowsEnded(t *testing.T, audit *syncAudit, runID uuid.UUID, rows *m
 // TestLostRunEndsMCPSandboxes is I8 on the lost and lease-ended paths: an outage loss and a reboot loss
 // (loseRunStopped), the lease's end that keeps the run (endRun), and the two arms that cut a run whose lost
 // mark could not be written (containUnwrittenLoss, loseUnconfirmedRun), each of those once with the agent's
-// stop failing, end every MCP row with its cause. The eighth row reads no rows and kills by listing.
+// stop failing, end every MCP row with its cause. An outage whose kills fail leaves the rows failed, and the
+// watcher's next pass kills the sandboxes. The last row reads no rows and kills by listing.
 func TestLostRunEndsMCPSandboxes(t *testing.T) {
 	lost := func(t *testing.T, act func(f *lostFixture)) (*lostFixture, *mcpRowsMem, *mcpSandboxerFake) {
 		f := newLostFixture(t)
@@ -116,6 +117,32 @@ func TestLostRunEndsMCPSandboxes(t *testing.T) {
 			t.Fatalf("lost = %v %q, want outage", lostAt, reason)
 		}
 		assertMCPRowsEnded(t, f.audit, f.run.ID, rows, fake, mcpEndLost)
+	})
+	t.Run("outage, a kill fails once", func(t *testing.T) {
+		f := newLostFixture(t)
+		rows, fake := mcpTwoServers(f.run.ID)
+		fake.killErr = errors.New("the daemon did not answer")
+		f.srv.cfg.Store = mcpLostStore{lostStore: f.ls, mcpRowsMem: rows}
+		f.srv.cfg.Runner = mcpLostRunner{lostRunner: f.lr, mcpSandboxerFake: fake}
+		f.ls.lapsed = true
+		f.sweepTokens(t)
+		for _, r := range rows.all() {
+			if r.State != store.MCPSandboxFailed || r.LastCause != mcpEndLost {
+				t.Fatalf("row %s = %s (%q), want failed (lost) while its kill fails", r.ServerKey, r.State, r.LastCause)
+			}
+		}
+		if fake.left() != 2 {
+			t.Fatalf("%d sandboxes left, want both while their kills fail", fake.left())
+		}
+		fake.mu.Lock()
+		fake.killErr = nil
+		fake.mu.Unlock()
+		if f.srv.mcpWatchPass(context.Background(), f.run.ID) {
+			t.Fatal("the watcher ended on a lost run")
+		}
+		if fake.left() != 0 || fake.count("create") != 0 {
+			t.Errorf("left %d creates %d after the watcher's pass, want every sandbox killed and none made", fake.left(), fake.count("create"))
+		}
 	})
 	t.Run("reboot", func(t *testing.T) {
 		f, rows, fake := lost(t, func(f *lostFixture) { f.sweepWatchers(t) })

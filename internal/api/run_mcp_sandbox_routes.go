@@ -172,7 +172,7 @@ func (s *Server) handleStopRunMCPServer(w http.ResponseWriter, r *http.Request) 
 	actorType, actor := actorFromRequest(r)
 	outcome := "success"
 	if kerr := m.KillMCPSandbox(r.Context(), mcpSandboxIDOf(run, row)); kerr != nil {
-		outcome = "failure" // the row is stopped: the kill confirm and the run's end kill it again
+		outcome = "failure" // the row is stopped: the watcher's kill of a stopped row's live sandbox, the kill confirm and the run's end retry it
 	}
 	if stopped || outcome == "failure" {
 		s.auditMCPSandboxEnd(r.Context(), run.ID, actorType, actor, &row, outcome, mcpEndPerson)
