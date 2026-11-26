@@ -221,13 +221,18 @@ func (s *Server) prepareMCPRecreate(ctx context.Context, run types.AgentRun, b m
 }
 
 // createAndStartMCP creates and starts a prepared sandbox and records it. A failure kills what it may have
-// left and answers the row's cause.
+// left and answers the row's cause. A record the store refuses, because a kill or a person's Stop ended the
+// row meanwhile, kills what was created and answers errMCPRestartRunEnded: nothing is started.
 func (s *Server) createAndStartMCP(ctx context.Context, run types.AgentRun, rc mcpRecreate) (string, error) {
 	st, m, _ := s.mcpSandboxSeams()
 	sb, err := m.CreateMCPSandbox(ctx, rc.built.spec)
 	if err == nil {
-		_, err = st.RecordMCPSandboxCreated(ctx, run.ID, rc.srv.ordinal, store.MCPSandboxCreated{RelayAddr: sb.RelayAddr,
+		var recorded bool
+		recorded, err = st.RecordMCPSandboxCreated(ctx, run.ID, rc.srv.ordinal, store.MCPSandboxCreated{RelayAddr: sb.RelayAddr,
 			PolicyDigest: rc.pol.spec.Digest(), ProxyConfigSealed: rc.built.sealed})
+		if err == nil && !recorded {
+			err = errMCPRestartRunEnded
+		}
 		if err != nil {
 			_ = m.KillMCPSandbox(ctx, rc.built.spec.ID)
 			return mcpFailStateWrite, err
@@ -309,6 +314,9 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 			slog.String("server", key), slog.Any("err", err))
 		_, _ = st.FailMCPSandboxIfUp(ctx, run.ID, row.Ordinal, cause)
 		s.auditMCPSandboxRestart(ctx, actorType, actor, row, "failure", cause)
+		if errors.Is(err, errMCPRestartRunEnded) {
+			return errMCPRestartRunEnded
+		}
 		return nil
 	}
 	if ok, err := st.MarkMCPSandboxReadyIfLive(ctx, run.ID, row.Ordinal, mcpSandboxRef(run, row.Ordinal)); err != nil || !ok {

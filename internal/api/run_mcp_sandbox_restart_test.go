@@ -449,3 +449,26 @@ func TestNoRouteTakesASandboxRef(t *testing.T) {
 		t.Errorf("an MCP server row = %s (%v), want no ref", b, err)
 	}
 }
+
+// TestMCPRestartStopDuringCreateStartsNothing: a person's Stop that lands while a Restart creates the server
+// makes the record refused, so what was created is killed and never started, and the Restart answers 409.
+func TestMCPRestartStopDuringCreateStartsNothing(t *testing.T) {
+	f := newMCPRestartFixture(t)
+	f.crash()
+	f.sbx.createFn = func(context.Context, runner.MCPSandboxSpec) error {
+		if _, err := f.st.mcpRowsMem.StopMCPSandboxRow(context.Background(), f.run.ID, 0, mcpEndPerson); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+		return nil
+	}
+	w := f.mcpRouteCall(t, f.srv.handleRestartRunMCPServer, http.MethodPost, "files", "restart")
+	if w.Code != http.StatusConflict || errorReason(w) != reasonMCPSandboxRunEnded {
+		t.Fatalf("restart = %d %s, want 409 %s", w.Code, w.Body.String(), reasonMCPSandboxRunEnded)
+	}
+	if f.sbx.count("create") != 2 || f.sbx.count("start") != 1 || f.sbx.left() != 0 {
+		t.Fatalf("creates %d starts %d left %d: want the second create killed, never started", f.sbx.count("create"), f.sbx.count("start"), f.sbx.left())
+	}
+	if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxStopped || row.LastCause != mcpEndPerson {
+		t.Errorf("row %s (%q), want stopped by the person", row.State, row.LastCause)
+	}
+}
