@@ -752,8 +752,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// A person creates and deletes their own drive (member_drives.go). The
 	// handler refuses every caller that is not a person, and the delete's
 	// owner predicate answers another person's id with the uniform 404.
-	"POST /api/v1/me/drives":        {class: classMember},
-	"DELETE /api/v1/me/drives/{id}": {class: classMember},
+	"POST /api/v1/me/drives":           {class: classMember},
+	"DELETE /api/v1/me/drives/{id}":    {class: classMember},
+	"POST /api/v1/me/drives/{id}/seed": {class: classMember},
 	// A person lists and deletes their own kept machines (kept_machines.go). The handler refuses every
 	// caller that is not a person, and the owner predicate answers another person's id with the uniform 404.
 	"GET /api/v1/me/machines":         {class: classMember},

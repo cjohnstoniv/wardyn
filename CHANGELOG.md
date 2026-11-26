@@ -46,6 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
 - People can make a team drive of their own, shared with their governance unit and the units below it, read-only for others until a super admin allows writing (`storage.user_drive.member_create.team_drives`, off by default; Docker only) (#3459).
+- A person can fill their own drive from a GitHub repository of one of their workspaces with `POST /api/v1/me/drives/{id}/seed`. The fill is their own exec run, clones with their own GitHub token (the workspace's required integrations apply as for any run of it), and is audited (`drive.seed`) (#1110).
 
 ### Changed
 

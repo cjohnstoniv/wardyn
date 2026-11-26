@@ -5080,6 +5080,18 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A person deletes their own with `DELETE /api/v1/me/drives/{id}`.
 - Every attempt is audited as `drive.member.delete`, with `by` set to `owner` or `admin`.
 
+**Filling a drive from a repository.**
+
+- `POST /api/v1/me/drives/{id}/seed` with `{workspace_id, repo, ref?, into?}` fills the caller's own Docker volume or cluster volume drive from a GitHub repository of that workspace (#1110). The answer is `202` with `{run_id, target}`.
+- It is the person's own exec run. The run clones with their own GitHub token, and the workspace's required integrations apply as for any run of that workspace.
+- The organisation's policy must pair a GitHub token secret for github.com, and an own-token row must decide it.
+- When secret names are restricted, an admin allows the person, group or type the `secret` capability on the pairing's shared secret name. That also lets them pair the shared token in their own runs for any repository no own-token row decides. A person who stores a secret of that name themselves needs no grant. The capability bites only where the organisation restricts secret names.
+- A pairing that requires approval makes the fill wait for that approval.
+- The drive gets a shallow (depth 1) checkout of the run's branch `wardyn/<run-id>/work`. The run's log line names the commit.
+- A folder that holds files is refused, unless `into` names an empty or absent sub-folder. `lost+found` at the drive's top is ignored.
+- Refused before any run: no own token or pairing, a run that holds the drive, a run of the person starting, a drive kind or repository this does not cover, and `drive_seed_no_capacity`. A fill never waits in a pool queue, so a capped pool, or one whose runners are all busy, refuses it.
+- Every request from the drive decision on is audited as `drive.seed`. `accepted` means the run was created and is starting. The run's own end says whether the drive was filled.
+
 **A delete refused as in use.**
 
 - A run holds the drive: 409 `member_drive_in_use`. Wait for the run or end it.

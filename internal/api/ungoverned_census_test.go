@@ -96,6 +96,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"http.go:requireSecurityOperator":                          {1, "authz-only: the route tier"},
 	"inline_policy_bounds.go:boundEnvSecretPosture":            {1, "R: the admin-only env-secret drop; the grants left meet the boundary's eligible_grants at resolve"},
 	"me.go:handleMe":                                           {5, "authz-only: what GET /me shows"},
+	"member_drive_fill.go:driveFillKeeps":                      {1, "R: the drive fill skips the secret and egress capability pre-checks as the create does; the create it passes through resolves the run against the boundary"},
 	"member_drives.go:memberDriveDoorRefusal":                  {1, "authz-only: a drive door the boundary holds no knob for"},
 	"membermode.go:refuseAdminViewLaunch":                      {1, "authz-only: the User view launch door"},
 	"person_suspend.go:handleSuspendPortalPerson":              {1, "authz-only: a suspend that sets a purge deadline is the super admin's, as the purge route is; a security admin is refused before anything is written, and it admits no run policy"},

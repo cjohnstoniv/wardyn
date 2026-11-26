@@ -111,3 +111,41 @@ func TestOrchestrator_CanManageDrives_AgreesWithReclaimDrive(t *testing.T) {
 		}
 	}
 }
+
+// holderSubstrate can reclaim and answer a holder read, and records that it was asked.
+type holderSubstrate struct {
+	*fakeSubstrate
+	holder string
+	asked  *string
+}
+
+func (h holderSubstrate) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	return runner.DriveReclaimDeleted, nil
+}
+func (h holderSubstrate) DriveHolder(context.Context, types.DriveMount) (string, error) {
+	*h.asked = h.name
+	return h.holder, nil
+}
+
+// DriveHolder asks the substrate ReclaimDrive would use. A reclaimer that cannot answer, and no reclaimer at all, are
+// unknown, never "no holder".
+func TestOrchestrator_DriveHolder_NoCapabilityIsUnknown(t *testing.T) {
+	cc1 := []types.ConfinementClass{types.CC1}
+	var asked string
+	reclaimerOnly := reclaimerSubstrate{&fakeSubstrate{name: "reclaimer-only", classes: cc1}}
+	holder := holderSubstrate{&fakeSubstrate{name: "holder", classes: cc1}, "sandbox-7", &asked}
+	ctx := context.Background()
+
+	if got, err := New(&fakeSubstrate{name: "plain", classes: cc1}, holder).DriveHolder(ctx, types.DriveMount{}); err != nil || got != "sandbox-7" || asked != "holder" {
+		t.Fatalf("DriveHolder = %q, %v (asked %q); want the first reclaimer's answer", got, err, asked)
+	}
+	for name, o := range map[string]*Orchestrator{
+		"reclaimer without holder":       New(reclaimerOnly),
+		"reclaimer first, holder second": New(reclaimerOnly, holder),
+		"no drive substrate":             New(&fakeSubstrate{name: "plain", classes: cc1}),
+	} {
+		if got, err := o.DriveHolder(ctx, types.DriveMount{}); got != "" || !errors.Is(err, runner.ErrDriveHolderUnknown) {
+			t.Errorf("%s: DriveHolder = %q, %v; want ErrDriveHolderUnknown", name, got, err)
+		}
+	}
+}
