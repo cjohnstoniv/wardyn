@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `GET /runs` takes `ended_after` (RFC 3339): the ended runs listed are only those whose end time is after it, every live run is still listed, and the answer carries `X-Wardyn-Ended-After`.
+
+### Changed
+
+- An open run page reads only its newest audit rows on each refresh, and reads its recording lists again only when a new recording row appears. Each audit read for one run skips the months of the audit log from before the run was created.
+- Between its once-a-minute full read, the Runs board reads only the live runs and the runs that ended in the last few minutes, and keeps the older ended runs it already shows. A change to a run that ended earlier, such as a new title, shows within a minute.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
