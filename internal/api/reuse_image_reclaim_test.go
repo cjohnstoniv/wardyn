@@ -87,7 +87,7 @@ func (plainWorkspaceStore) ListWorkspaces(context.Context) ([]types.Workspace, e
 }
 
 var (
-	reclaimNow    = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	reclaimNow    = time.Now().UTC().Truncate(time.Second)
 	reclaimOld    = reclaimNow.Add(-8 * 24 * time.Hour)
 	reclaimRecent = reclaimNow.Add(-6 * 24 * time.Hour)
 )
