@@ -47,9 +47,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// defaultMaxTTL caps minted credential lifetime (GrantSpec.TTLSeconds may
+// DefaultMaxTTL caps minted credential lifetime (GrantSpec.TTLSeconds may
 // narrow but never widen). Mirrors types.GrantSpec documentation: max 1h.
-const defaultMaxTTL = time.Hour
+const DefaultMaxTTL = time.Hour
+
+const defaultMaxTTL = DefaultMaxTTL // the name this package's own code uses
 
 // branchNamespaceFormat is the push-branch confinement convention recorded in
 // minted github_token metadata.

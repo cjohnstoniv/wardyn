@@ -73,6 +73,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Each run on the server's cluster now takes one address from the cluster's Service range and counts against a `services` or `count/services` quota in the runs namespace. Wardyn's capacity check does not count Services, so a full quota fails the run's start with a 403.
 - Rolling back to an earlier release with keep off leaves the Service and EndpointSlice of each run started on this one when that run ends. Delete them per ended run by its `wardyn.run-id` label, as docs/operations/kubernetes-agent-sandbox.md says; never delete a live run's Service.
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_fork_sources`,
+  `SELECT, INSERT, DELETE` on `machine_snapshot_holds`, `SELECT, INSERT, UPDATE` on `run_dispatch_secret_facts`, and
+  `SELECT, INSERT, UPDATE, DELETE` on `machine_snapshots`, to every role that was granted `DELETE` on `run_attach_leases`,
+  other than that table's owner. If the app role is not one of those roles or a member of one, grant it the same on each
+  table as soon as the migration has run. The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover the three
+  tables granted fewer verbs: the migrations take every other privilege on them away from every role but their owner.
 
 ## [0.11.0-rc.3] — 2026-11-25
 
