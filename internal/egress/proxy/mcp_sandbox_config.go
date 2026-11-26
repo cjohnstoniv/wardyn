@@ -33,7 +33,7 @@ const MCPSandboxAudience = "wardyn-mcp-sandbox"
 // the MCP proxy's relay listener on the run's relay link, and the relay token
 // that listener knows by its SHA-256 alone.
 type MCPRelayTarget struct {
-	// Addr is the relay listener's literal private IP and port, never a host name.
+	// Addr is the relay listener's literal IP and port, never a host name.
 	Addr string `json:"addr"`
 	// Token is the relay token, base64url; it is sent only in the relay path.
 	Token string `json:"token"`
