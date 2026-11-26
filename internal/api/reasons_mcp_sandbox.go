@@ -16,6 +16,8 @@ const (
 	reasonMCPSandboxHostReachable  = "mcp_sandbox_host_reachable"  // the Docker Engine is older than 28.0.0, so an MCP server's sandbox would have an address on the Docker host (runner.ErrMCPSandboxHostReachable); no setting admits one
 	reasonMCPSandboxApprovalCap    = "mcp_sandbox_approval_cap"    // an MCP server's proxy already holds maxMCPHoldsPerServer egress holds on its run (429)
 	reasonMCPSandboxRunEnded       = "mcp_sandbox_run_ended"       // a Restart or Stop of an MCP server on a run that is not live: ended, lost, kept, containment pending or cut on this replica (409)
+	reasonMCPSandboxStarting       = "mcp_sandbox_starting"        // a Restart of an MCP server that is still starting (409): nothing was killed
+	reasonMCPSandboxUnavailable    = "mcp_sandbox_unavailable"     // a Restart whose read or write of the run's MCP servers failed (503)
 )
 
 // The sentences, each the approved template byte for byte. <server> and <runner> are filled by
@@ -35,6 +37,11 @@ const (
 	// mcpSandboxRunEndedSentence (S-ended) and mcpSandboxUnknownSentence (S-unknown) are the run page's answers.
 	mcpSandboxRunEndedSentence = "This server stopped because the run's sandbox stopped."
 	mcpSandboxUnknownSentence  = "This run has no MCP server called <server>."
+	// mcpSandboxStartingSentence and mcpSandboxUnavailableSentence are the run page's Restart answers for a
+	// server still starting and for a store that did not answer.
+	// PROPOSED: these sentences are not in the approved strings yet; they wait on the owner's review.
+	mcpSandboxStartingSentence    = "<server> is still starting. Restart it once it is ready."
+	mcpSandboxUnavailableSentence = "The run's MCP servers could not be read just now. Try again."
 	// mcpHostReachableSentence is the dispatch refusal on a runner whose MCP sandboxes would be reachable from
 	// its host (runner.ErrMCPSandboxHostReachable). It is not yet an approved template.
 	mcpHostReachableSentence = "This runner can't keep <server> off its host: its Docker Engine is older than 28.0.0. Update Docker on the runner, or remove <server>."

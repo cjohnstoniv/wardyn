@@ -5,6 +5,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -87,8 +88,9 @@ func writeMCPServerUnknown(w http.ResponseWriter, key string) {
 
 // handleRestartRunMCPServer is POST /api/v1/runs/{id}/mcp-servers/{key}/restart: the owner or a super admin.
 // It takes the run's lock (503 lock_unavailable when another operation holds it), and answers 409
-// mcp_sandbox_run_ended when the run is not live (mcpCreateAllowed) and 404 mcp_sandbox_unknown for a key the
-// run has no server for. A restart whose create fails answers the row, failed.
+// mcp_sandbox_run_ended when the run is not live (mcpCreateAllowed), 409 mcp_sandbox_starting for a server
+// still starting, 404 mcp_sandbox_unknown for a key the run has no server for, and 503 mcp_sandbox_unavailable
+// when the run's MCP servers could not be read or written. A restart whose create fails answers the row, failed.
 func (s *Server) handleRestartRunMCPServer(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -112,6 +114,14 @@ func (s *Server) handleRestartRunMCPServer(w http.ResponseWriter, r *http.Reques
 		return
 	case errors.Is(err, errMCPRestartRunEnded):
 		writeErrorReason(w, http.StatusConflict, reasonMCPSandboxRunEnded, mcpSandboxRunEndedSentence)
+		return
+	case errors.Is(err, errMCPSandboxStarting):
+		writeErrorReason(w, http.StatusConflict, reasonMCPSandboxStarting, mcpSandboxSentence(mcpSandboxStartingSentence, key, ""))
+		return
+	case errors.Is(err, errMCPSandboxStore):
+		slog.WarnContext(r.Context(), "wardynd: a restart could not read or write the run's MCP servers", slog.String("run_id", run.ID.String()),
+			slog.String("server", key), slog.Any("err", err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonMCPSandboxUnavailable, mcpSandboxUnavailableSentence)
 		return
 	case err != nil:
 		writeServerError(w, r, "restart the MCP server", err)

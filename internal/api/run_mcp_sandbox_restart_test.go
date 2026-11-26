@@ -472,3 +472,40 @@ func TestMCPRestartStopDuringCreateStartsNothing(t *testing.T) {
 		t.Errorf("row %s (%q), want stopped by the person", row.State, row.LastCause)
 	}
 }
+
+// TestMCPRestartOfStartingRowOrStoreError: a person's Restart of a server still starting answers 409
+// mcp_sandbox_starting and kills nothing; a Restart whose read or write of the rows fails answers 503
+// mcp_sandbox_unavailable, never the run-ended answer.
+func TestMCPRestartOfStartingRowOrStoreError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set    func(f *mcpDispatchFixture)
+		code   int
+		reason string
+	}{
+		"starting": {func(f *mcpDispatchFixture) {
+			f.st.mcpRowsMem.mu.Lock()
+			f.st.mcpRowsMem.rows[0].State = store.MCPSandboxStarting
+			f.st.mcpRowsMem.mu.Unlock()
+		}, http.StatusConflict, reasonMCPSandboxStarting},
+		"rows unreadable": {func(f *mcpDispatchFixture) { f.st.mcpRowsMem.listErr = errors.New("store down") },
+			http.StatusServiceUnavailable, reasonMCPSandboxUnavailable},
+		"restart write fails": {func(f *mcpDispatchFixture) { f.st.mcpRowsMem.restartErr = errors.New("store down") },
+			http.StatusServiceUnavailable, reasonMCPSandboxUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMCPRestartFixture(t)
+			tc.set(f)
+			kills := f.sbx.count("kill")
+			w := f.mcpRouteCall(t, f.srv.handleRestartRunMCPServer, http.MethodPost, "files", "restart")
+			if w.Code != tc.code || errorReason(w) != tc.reason {
+				t.Fatalf("restart = %d %s, want %d %s", w.Code, w.Body.String(), tc.code, tc.reason)
+			}
+			if f.sbx.count("create") != 1 {
+				t.Errorf("creates %d, want none past the dispatch's", f.sbx.count("create"))
+			}
+			if name == "starting" && (f.sbx.count("kill") != kills || f.sbx.left() != 1) {
+				t.Errorf("kills %d -> %d left %d: a starting server's Restart killed it", kills, f.sbx.count("kill"), f.sbx.left())
+			}
+		})
+	}
+}

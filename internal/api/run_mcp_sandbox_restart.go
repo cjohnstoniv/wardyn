@@ -40,6 +40,10 @@ var (
 	errMCPRestartRunEnded = errors.New("the run's sandbox stopped")
 	// errMCPSandboxUnknownKey is a restart of a key the run has no server for.
 	errMCPSandboxUnknownKey = errors.New("the run has no such MCP server")
+	// errMCPSandboxStarting is a restart of a row that is still starting: nothing was killed.
+	errMCPSandboxStarting = errors.New("the MCP server is still starting")
+	// errMCPSandboxStore is a restart whose read or write of the run's MCP servers failed.
+	errMCPSandboxStore = errors.New("the run's MCP servers could not be read or written")
 )
 
 // mcpCreateAllowed reports whether an MCP sandbox of run may be created now (F1, MCP1R-F1), with the run's
@@ -261,7 +265,7 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	}
 	rows, err := st.ListRunMCPSandboxes(ctx, run.ID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errMCPSandboxStore, err)
 	}
 	i := slices.IndexFunc(rows, func(r store.RunMCPSandbox) bool { return r.ServerKey == key })
 	if i < 0 {
@@ -273,6 +277,9 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	if !allowed {
 		_ = m.KillMCPSandbox(ctx, id)
 		return errMCPRestartRunEnded
+	}
+	if row.State == store.MCPSandboxStarting {
+		return errMCPSandboxStarting // the settle moves it to ready or fails it; a kill now would only end it
 	}
 	now := s.cfg.Now()
 	restarts, window := row.Restarts, row.RestartWindowStart
@@ -287,7 +294,7 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	}
 	b, servers, w, err := s.mcpLiveBase(ctx, run)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errMCPSandboxStore, err)
 	}
 	j := slices.IndexFunc(servers, func(m mcpServer) bool { return m.ordinal == row.Ordinal })
 	if j < 0 {
@@ -296,7 +303,7 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
-		return fmt.Errorf("read the run's grants: %w", err)
+		return fmt.Errorf("%w: read the run's grants: %w", errMCPSandboxStore, err)
 	}
 	rc, err := s.prepareMCPRecreate(ctx, run, b, servers[j], row, grants, w)
 	if err != nil {
@@ -305,8 +312,10 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	}
 	_ = m.KillMCPSandbox(ctx, id) // the old proxy drains first (P3 item 7)
 	if ok, err := st.RestartMCPSandboxIfLive(ctx, run.ID, row.Ordinal, store.MCPSandboxRestart{ReadAt: row.UpdatedAt, JTI: rc.built.jti,
-		PrevUntil: now.Add(terminalUploadGrace), Restarts: restarts, WindowStart: window}); err != nil || !ok {
-		return errors.Join(errMCPRestartRunEnded, err)
+		PrevUntil: now.Add(terminalUploadGrace), Restarts: restarts, WindowStart: window}); err != nil {
+		return fmt.Errorf("%w: %w", errMCPSandboxStore, err)
+	} else if !ok {
+		return errMCPRestartRunEnded
 	}
 	row.Restarts, row.RestartWindowStart = restarts, window
 	if cause, err := s.createAndStartMCP(ctx, run, rc); err != nil {

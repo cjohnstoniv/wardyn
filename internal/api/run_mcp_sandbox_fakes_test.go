@@ -28,8 +28,9 @@ type mcpRowsMem struct {
 	clock   time.Time
 	listErr error
 	stopErr error
-	// reopenErr and keepErr fail a revive's reopen and keep writes, as a store that cannot write answers.
-	reopenErr, keepErr error
+	// reopenErr and keepErr fail a revive's reopen and keep writes, and restartErr a restart's write, as a
+	// store that cannot write answers.
+	reopenErr, keepErr, restartErr error
 	// runOf reads the run a joined write is checked against; nil reads every run RUNNING and not lost.
 	runOf func(uuid.UUID) (types.AgentRun, error)
 }
@@ -195,6 +196,12 @@ func (m *mcpRowsMem) RecordMCPSandboxCreated(_ context.Context, runID uuid.UUID,
 }
 
 func (m *mcpRowsMem) RestartMCPSandboxIfLive(_ context.Context, runID uuid.UUID, ordinal int, rs store.MCPSandboxRestart) (bool, error) {
+	m.mu.Lock()
+	err := m.restartErr
+	m.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
 	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
 		return r.State != store.MCPSandboxStarting && r.UpdatedAt.Equal(rs.ReadAt) && m.runLive(runID, types.RunRunning)
 	}, func(r *store.RunMCPSandbox) {
