@@ -10,8 +10,8 @@
 # The cut: the wardyn database is set to refuse new connections (ALLOW_CONNECTIONS false), so
 # Postgres answers each one with an error at once, and wardynd's open sessions are ended. Postgres
 # keeps running and keeps its data; allowing connections again ends the cut. A Service pointed at no
-# pod is not used: on kind it left wardynd's reads hanging, the stalled-database case that
-# docs/operations/high-availability.md says restarts the pod.
+# pod is not used: on kind it left wardynd's reads hanging, the stalled-database case whose
+# bounded /healthz reads docs/operations/high-availability.md describes.
 #
 # 1. The release as installed (readiness on /healthz, the chart default): through a CUT_SECS cut the
 #    pod stays Ready and is not restarted, /healthz answers 200 and /readyz answers 503, which is

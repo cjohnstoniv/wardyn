@@ -56,6 +56,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A web or local terminal displaced while it was still opening, for example when the run's owner joins while a helper's terminal connects, now closes with code 1008 and the reason instead of a plain close (#4206).
 - While a unit's deciders cannot be read, a security admin or the admin token now decides a hold once at most, and a security admin never decides one on their own run. The decision's audit row says the deciders could not be read. Before, no rule applied until they could be read again, so a hold a rule allowed only once could be decided for the whole run.
+- A database that stops answering no longer gets the server's pod restarted by its liveness probe. `/healthz` gives up each of its database reads after half a second and still answers: it leaves out the sign-in help text and says the eBPF sensor's health could not be read. When the database answers again, the server carries on without a restart.
 
 ### Before you upgrade
 
