@@ -981,3 +981,36 @@ func TestRecordReplayLeavesOutAnMCPProxysRefusedDecisionPost(t *testing.T) {
 		})
 	}
 }
+
+// setAsideVerdict is the result a confined replay gets at its capture once this spool has set aside deny,
+// which the store refused.
+func setAsideVerdict(t *testing.T, deny func(uuid.UUID) types.AuditEvent) RecordTaskResult {
+	t.Helper()
+	fake, runID := confinedRecording(t)
+	spool, err := NewAuditSpool(filepath.Join(t.TempDir(), "audit-spool.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range []types.AuditEvent{deny(runID), newTestEvent("good.one")} {
+		if err := spool.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drainUntilQuarantined(t, spool, refusingDrain{s: fake, refuse: []string{"egress.deny"}})
+	newTestSrv(t, fake).reconcileRecordRun(context.Background(), runID)
+	return fake.savedResult(t, "verify:build")
+}
+
+// A deny of an MCP proxy that the spool sets aside (runEventSetAside) is the server's, not the agent's: its note
+// carries the server key, and the agent's confined replay stays clean. The same deny with no server key is the
+// agent's, and its note still fails the replay.
+func TestRecordReplayLeavesOutAnMCPProxysEventSetAside(t *testing.T) {
+	deny := func(runID uuid.UUID) types.AuditEvent { return denyEvent(runID, "example.com") }
+	mcp := func(id uuid.UUID) types.AuditEvent { return mcpSandboxRow(deny(id)) }
+	if res := setAsideVerdict(t, mcp); res.Status == recordStatusFailed || res.Clean == nil || !*res.Clean {
+		t.Fatalf("MCP proxy deny: status %q, clean %v, hint %q; want a clean replay", res.Status, res.Clean, res.FailureHint)
+	}
+	if res := setAsideVerdict(t, deny); res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordEvidenceSetAsideHint {
+		t.Fatalf("agent deny: status %q, clean %v, hint %q; want record_failed, no verdict, the set-aside hint", res.Status, res.Clean, res.FailureHint)
+	}
+}
