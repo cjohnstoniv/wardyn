@@ -82,10 +82,10 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 // TLS and the URL's redirect refusal authenticate the server; the key proves
 // possession only to the organisation this identity was registered with.
 func AuthenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, key ed25519.PrivateKey, resume *Resume) (AuthOK, error) {
-	return authenticateOrg(ctx, conn, runnerID, orgURL, key, resume, nil)
+	return authenticateOrg(ctx, conn, runnerID, orgURL, key, resume, nil, 0)
 }
 
-func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, key ed25519.PrivateKey, resume *Resume, clock func(Hello, time.Time) error) (AuthOK, error) {
+func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, key ed25519.PrivateKey, resume *Resume, clock func(Hello, time.Time) error, offer uint32) (AuthOK, error) {
 	if _, err := StreamURL(orgURL, runnerID); err != nil {
 		return AuthOK{}, err
 	}
@@ -112,7 +112,7 @@ func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, ke
 			return AuthOK{}, err
 		}
 	}
-	auth := Auth{RunnerID: runnerID, Version: ProtocolVersion, Resume: resume,
+	auth := Auth{RunnerID: runnerID, Version: ProtocolVersion, Resume: resume, StreamWindow: offer,
 		Sig: SignAuth(key, hello.Nonce, runnerID, hello.OrgURLSHA256)}
 	if err := WriteControl(ctx, conn, TypeAuth, auth); err != nil {
 		return AuthOK{}, err
@@ -127,7 +127,7 @@ func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, ke
 	case TypeGoaway:
 		return AuthOK{}, goaway(f.Payload)
 	case TypeAuthOK:
-		return checkAuthOK(f.Payload, resume)
+		return checkAuthOK(f.Payload, resume, offer)
 	default:
 		return AuthOK{}, fmt.Errorf("%w: expected AUTH_OK", ErrBadFrame)
 	}
@@ -156,15 +156,25 @@ var goawaySentences = map[string]string{
 	"runner_owner_inactive":  "this runner's owner is deactivated, so the organisation will not admit it",
 }
 
-func checkAuthOK(payload []byte, resume *Resume) (AuthOK, error) {
+func checkAuthOK(payload []byte, resume *Resume, offer uint32) (AuthOK, error) {
 	var ok AuthOK
 	if err := Unmarshal(payload, &ok); err != nil {
 		return ok, err
 	}
 	id, err := uuid.Parse(ok.SessionID)
 	if err != nil || id.String() != ok.SessionID || ok.PingInterval != PingInterval ||
-		(ok.Resumed && (resume == nil || ok.SessionID != resume.SessionID)) || (!ok.Resumed && ok.LastSeq != 0) {
+		(ok.Resumed && (resume == nil || ok.SessionID != resume.SessionID)) || (!ok.Resumed && ok.LastSeq != 0) ||
+		(ok.StreamWindow != 0 && (ok.StreamWindow < StreamWindow || ok.StreamWindow > offer)) {
 		return AuthOK{}, fmt.Errorf("%w: invalid AUTH_OK", ErrBadFrame)
 	}
 	return ok, nil
+}
+
+// GrantStreamWindow is the per-stream window an organisation grants for a runner's AUTH offer: the offer up to
+// StreamWindowLarge, or 0 (StreamWindow) for an older runner or an offer below StreamWindow.
+func GrantStreamWindow(offer uint32) uint32 {
+	if offer < StreamWindow {
+		return 0
+	}
+	return min(offer, StreamWindowLarge)
 }

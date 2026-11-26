@@ -18,6 +18,11 @@ const (
 	ConnWindow   = 4 << 20   // initial credit per connection
 	ReplayBytes  = 1 << 20   // replay buffer per side, until ACKed
 
+	// StreamWindowLarge is the per-stream window a current runner offers and a current organisation grants when
+	// both sides support a negotiated window (#4070): a stream moves at most one window per round trip, and
+	// StreamWindow caps a 100 ms link near 2.5 MiB/s. An older peer on either side keeps StreamWindow.
+	StreamWindowLarge = 4 << 20
+
 	ResumeWindow = 120 * time.Second
 	PingInterval = 15 * time.Second
 	MissedPings  = 3
@@ -27,6 +32,10 @@ const (
 	nonceLen = 32
 	authTag  = "wardyn-runner-v1"
 )
+
+// connWindowFor is the connection window that goes with a per-stream window: four full streams, and never less
+// than ConnWindow. It bounds the unread bytes one link can make its receiver hold.
+func connWindowFor(stream int64) int64 { return max(int64(ConnWindow), 4*stream) }
 
 // AuthMessage is the byte string a runner signs for one connection: the tag,
 // the server's fresh nonce, the runner id and the org URL hash, so a signature
