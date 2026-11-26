@@ -382,7 +382,7 @@ func (s *Server) handleListComponents(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []types.Component{}
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, redactComponentsForRead(rows, s.specReadTierFor(r.Context())))
 }
 
 // handlePutComponent is PUT /components/{id}: replaces the org component with

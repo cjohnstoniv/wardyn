@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -51,6 +52,27 @@ func mcpView(m *types.ComponentMCP) *client.MCPView {
 		v.URL = (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 	}
 	return v
+}
+
+// redactComponentsForRead is rows with each MCP sandbox policy's overlay and spec as a reader at tier may see
+// them, the withholding a stored policy's get (redactOverlayForRead, redactSpecForRead), on a copy.
+func redactComponentsForRead(rows []types.Component, tier specReadTier) []types.Component {
+	out := slices.Clone(rows)
+	for i, c := range out {
+		m := c.Definition.MCP
+		if m == nil || m.Sandbox == nil || m.Sandbox.Policy.Overlay == nil && m.Sandbox.Policy.Spec == nil {
+			continue
+		}
+		mcp, box := *m, *m.Sandbox
+		box.Policy.Overlay = redactOverlayForRead(box.Policy.Overlay, tier)
+		if box.Policy.Spec != nil {
+			spec := redactSpecForRead(*box.Policy.Spec, tier)
+			box.Policy.Spec = &spec
+		}
+		mcp.Sandbox = &box
+		out[i].Definition.MCP = &mcp
+	}
+	return out
 }
 
 // cliView is the non-secret face of a CLI block: no portal URL, no subscription ids.
@@ -160,7 +182,7 @@ func (s *Server) handleMyComponents(w http.ResponseWriter, r *http.Request) {
 		MayDefine:               define == nil,
 		ResidentDeliveryAllowed: !settings.DenyResidentDelivery,
 		AutonomyCap:             settings.AutonomyCap,
-		Mine:                    mine,
+		Mine:                    redactComponentsForRead(mine, s.specReadTierFor(ctx)),
 		Org:                     org,
 		CLIs:                    catalogueCLIs(org),
 	})
