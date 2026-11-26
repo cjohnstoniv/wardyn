@@ -178,6 +178,24 @@ func (m *mcpRowsMem) RotateMCPSandboxToken(_ context.Context, runID uuid.UUID, o
 	return true, nil
 }
 
+func (m *mcpRowsMem) RecordMCPSandboxCreated(_ context.Context, runID uuid.UUID, ordinal int, c store.MCPSandboxCreated) (bool, error) {
+	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+		return r.State == store.MCPSandboxStarting || r.State == store.MCPSandboxRestarting
+	}, func(r *store.RunMCPSandbox) {
+		r.RelayAddr, r.PolicyDigest, r.ProxyConfigSealed = c.RelayAddr, c.PolicyDigest, c.ProxyConfigSealed
+	})
+}
+
+func (m *mcpRowsMem) RestartMCPSandboxIfLive(_ context.Context, runID uuid.UUID, ordinal int, rs store.MCPSandboxRestart) (bool, error) {
+	return m.write(runID, ordinal, func(r *store.RunMCPSandbox) bool {
+		return r.State != store.MCPSandboxStarting && r.UpdatedAt.Equal(rs.ReadAt) && m.runLive(runID, types.RunRunning)
+	}, func(r *store.RunMCPSandbox) {
+		until := rs.PrevUntil
+		r.State, r.SandboxRef, r.PrevCPTokenJTI, r.PrevCPTokenUntil, r.CPTokenJTI = store.MCPSandboxRestarting, "", r.CPTokenJTI, &until, rs.JTI
+		r.Restarts, r.RestartWindowStart, r.LastCause, r.StoppedAt = rs.Restarts, rs.WindowStart, "", nil
+	})
+}
+
 var _ store.RunMCPSandboxStore = (*mcpRowsMem)(nil)
 
 // mcpSandboxerFake is the runner's MCP sandboxes in memory: each created sandbox is held by ordinal until it

@@ -341,6 +341,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// p.ExtraEnv and the model provider arm's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
+	// A server that starts from a command gets its own secrets in its own sandbox only (I5 c): off the agent's
+	// grants and injections first, then resolved, before the masking manifest completes.
+	mcpd, ok := s.mcpSandboxDispatchAt(ctx, run, p.Components.MCP, &policy, &injections, grantRows)
+	if !ok {
+		return
+	}
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
 	secretEnvKeys, resident, placedEnv := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
 	addPlacedSecrets(&policy, placedEnv...) // before the sidecar policy and the audited snapshot copy it
@@ -603,6 +609,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// member-drive delete would read as a create still in flight until the heartbeat aged out.
 	// Deferred first, so it runs after the create lease's ticker has stopped.
 	created := false
+	started := false // the run went RUNNING: its MCP servers are its own from then on
 	// A macOS VM run that ends before its Mac is asked to create the sandbox claims the drive it kept in the
 	// statement that ends it (store.EndUnstartedRun); the cleanup below finishes that claim. The marker is on both
 	// contexts: the delivery's refusal fails the run on createCtx.
@@ -613,6 +620,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
+	defer s.endUnstartedMCPSandboxes(ctx, run, &started)
 	// The run's kept machine: inserted or claimed here, before any runner work, and given back if no
 	// sandbox is created (run_kept_machine.go).
 	kept, ok := s.keptMachineAtDispatch(ctx, run, p.Machine)
@@ -640,7 +648,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, grantRows, p.PATBroker, &spec, &resident) {
 		return
 	}
-	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
+	if !s.keepFinalWithMCPSandboxes(ctx, createCtx, run, &spec, mcpd, layers, ceiling, siteCfg, siteCfgErr, stopCreateLease) {
 		return
 	}
 	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
@@ -649,6 +657,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
 	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
+		return
+	}
+	if !s.startRunMCPSandboxes(ctx, run, mcpd, stopCreateLease) {
 		return
 	}
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
@@ -720,6 +731,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.auditLostStart(ctx, run.ID, sb.Ref, uerr)
 		return
 	}
+	started = true
 
 	// The run is live: record how long creation -> RUNNING took (image pull,
 	// devcontainer build, sandbox create). This is the one operational number the

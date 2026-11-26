@@ -280,9 +280,10 @@ func TestRawEgressHostsNoneForStdioServer(t *testing.T) {
 	}
 }
 
-// TestDispatchMCP_StdioServerSkipped: dispatch never writes a server that starts from a command into the
-// agent's configuration: no broker entry, no token, nothing in Claude Code's file or Codex CLI's env.
-func TestDispatchMCP_StdioServerSkipped(t *testing.T) {
+// TestDispatchMCP_StdioServerOnItsRelay: a server that starts from a command reaches the agent's
+// configuration only as a broker entry with no URL and no credential, and its harness bindings, which its
+// relay target (createRunMCPSandboxes) completes; none of its own variables reaches the agent's env.
+func TestDispatchMCP_StdioServerOnItsRelay(t *testing.T) {
 	launch := &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "@example/mcp-files@1.4.2"}}
 	servers := []componentMCP{
 		{Ordinal: 0, Key: "files", Harnesses: []string{"claude-code", "codex-cli"}, Launch: launch, EnvNames: []string{"FILES_ROOT"}},
@@ -291,15 +292,18 @@ func TestDispatchMCP_StdioServerSkipped(t *testing.T) {
 	var injections []runner.InjectionGrant
 	env := map[string]string{"HTTPS_PROXY": "http://wardyn-proxy:3128"}
 	out := dispatchMCP(servers, withholding{}, &injections, "http://wardyn-proxy:3128", false, env)
-	if len(out.servers) != 1 || out.servers[0].Key != "linear" || len(out.bindings) != 2 ||
-		!slices.Equal(out.bindings[0].Servers, []string{"linear"}) || len(out.files) != 1 ||
-		strings.Contains(string(out.files[0].Content), "files") || strings.Contains(env[codexMCPEnv], "files") || len(env) != 2 {
-		t.Fatalf("out %+v env %v: the stdio server reached the agent's configuration", out, env)
+	if len(out.servers) != 2 || out.servers[0].Key != "files" || out.servers[0].URL != "" || out.servers[0].GrantID != nil ||
+		out.servers[0].Relay != nil || len(out.bindings) != 2 || !slices.Equal(out.bindings[0].Servers, []string{"files", "linear"}) {
+		t.Fatalf("out %+v: the stdio server's entry or bindings", out)
 	}
-	env = map[string]string{}
-	if out := dispatchMCP(servers[:1], withholding{}, &injections, "http://wardyn-proxy:3128", true, env); len(out.bindings) != 0 ||
-		len(out.servers) != 0 || len(out.files) != 0 || len(env) != 0 {
-		t.Fatalf("stdio only: %+v env %v", out, env)
+	if len(out.files) != 1 || !strings.Contains(string(out.files[0].Content), "/files") || !strings.Contains(env[codexMCPEnv], "/files") ||
+		strings.Contains(string(out.files[0].Content), "FILES_ROOT") || len(env) != 2 {
+		t.Fatalf("files %+v env %v: the stdio server's broker URL, and none of its variables", out.files, env)
+	}
+	// A withheld host drops a remote server, never one that has no host of its own.
+	w := withholding{deny: []string{"mcp.linear.test"}}
+	if out := dispatchMCP(servers, w, &injections, "http://wardyn-proxy:3128", true, map[string]string{}); len(out.servers) != 1 || out.servers[0].Key != "files" {
+		t.Fatalf("withheld: %+v", out.servers)
 	}
 }
 

@@ -101,6 +101,12 @@ func (m *mcpRowsFake) FailMCPSandboxIfStarting(context.Context, uuid.UUID, int, 
 func (m *mcpRowsFake) StopMCPSandboxRow(context.Context, uuid.UUID, int, string) (bool, error) {
 	return false, errMCPRowsFake
 }
+func (m *mcpRowsFake) RecordMCPSandboxCreated(context.Context, uuid.UUID, int, store.MCPSandboxCreated) (bool, error) {
+	return false, errMCPRowsFake
+}
+func (m *mcpRowsFake) RestartMCPSandboxIfLive(context.Context, uuid.UUID, int, store.MCPSandboxRestart) (bool, error) {
+	return false, errMCPRowsFake
+}
 
 // mcpAuthStore is a live run with MCP server rows.
 type mcpAuthStore struct {

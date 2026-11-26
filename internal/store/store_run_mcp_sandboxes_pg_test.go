@@ -172,3 +172,53 @@ func TestReopenAndKeepMCPSandboxIfLive(t *testing.T) {
 		t.Errorf("stopped row moved to %s", m.State)
 	}
 }
+
+// TestRestartAndRecordMCPSandbox: a restart moves a ready, failed, restarting or stopped row of a RUNNING run
+// to restarting with the fresh token and its window, and answers false on a starting row, on a KILLED or lost
+// run, and once the row moved after the read; the created record lands on a starting or restarting row and
+// never on a stopped one.
+func TestRestartAndRecordMCPSandbox(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	window := time.Now().UTC().Truncate(time.Second)
+	restart := func(read store.RunMCPSandbox) store.MCPSandboxRestart {
+		return store.MCPSandboxRestart{ReadAt: read.UpdatedAt, JTI: "jti-r", PrevUntil: window.Add(time.Minute), Restarts: 2, WindowStart: window}
+	}
+	for _, st := range []string{store.MCPSandboxReady, store.MCPSandboxFailed, store.MCPSandboxRestarting, store.MCPSandboxStopped} {
+		id := mcpSandboxRun(t, ctx, pool, types.RunRunning, st)
+		if ok, err := pg.RestartMCPSandboxIfLive(ctx, id, 0, restart(mcpSandboxRow(t, ctx, pool, id))); err != nil || !ok {
+			t.Fatalf("%s: restart applied %v, %v; want true", st, ok, err)
+		}
+		m := mcpSandboxRow(t, ctx, pool, id)
+		if m.State != store.MCPSandboxRestarting || m.CPTokenJTI != "jti-r" || m.Restarts != 2 || !m.RestartWindowStart.Equal(window) || m.StoppedAt != nil {
+			t.Errorf("%s: restarted row = %+v", st, m)
+		}
+		if ok, err := pg.RecordMCPSandboxCreated(ctx, id, 0, store.MCPSandboxCreated{RelayAddr: "172.30.0.2:3130", PolicyDigest: "d", ProxyConfigSealed: []byte{1}}); err != nil || !ok {
+			t.Errorf("%s: record applied %v, %v; want true", st, ok, err)
+		}
+		if m := mcpSandboxRow(t, ctx, pool, id); m.RelayAddr != "172.30.0.2:3130" || m.PolicyDigest != "d" {
+			t.Errorf("%s: recorded row = %+v", st, m)
+		}
+	}
+	killed := mcpSandboxRun(t, ctx, pool, types.RunKilled, store.MCPSandboxReady)
+	lost := mcpSandboxRun(t, ctx, pool, types.RunRunning, store.MCPSandboxReady)
+	markRunLost(t, ctx, pool, lost)
+	starting := mcpSandboxRun(t, ctx, pool, types.RunRunning, store.MCPSandboxStarting)
+	for name, id := range map[string]uuid.UUID{"killed run": killed, "lost run": lost, "starting row": starting} {
+		if ok, err := pg.RestartMCPSandboxIfLive(ctx, id, 0, restart(mcpSandboxRow(t, ctx, pool, id))); err != nil || ok {
+			t.Errorf("%s: restart applied %v, %v; want false", name, ok, err)
+		}
+	}
+	moved := mcpSandboxRun(t, ctx, pool, types.RunRunning, store.MCPSandboxReady)
+	read := mcpSandboxRow(t, ctx, pool, moved)
+	if ok, err := pg.StopMCPSandboxRow(ctx, moved, 0, "person"); err != nil || !ok {
+		t.Fatalf("stop applied %v, %v; want true", ok, err)
+	}
+	if ok, err := pg.RestartMCPSandboxIfLive(ctx, moved, 0, restart(read)); err != nil || ok {
+		t.Errorf("restart after a Stop: applied %v, %v; want false", ok, err)
+	}
+	if ok, err := pg.RecordMCPSandboxCreated(ctx, moved, 0, store.MCPSandboxCreated{RelayAddr: "172.30.0.2:3130"}); err != nil || ok {
+		t.Errorf("record on a stopped row: applied %v, %v; want false", ok, err)
+	}
+}

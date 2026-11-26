@@ -262,14 +262,15 @@ type mcpDispatch struct {
 // credentialed or not, with its bindings, as a revive drops one. Each harness a server is on for gets one token and its
 // own configuration: Claude Code a managed file, Codex CLI the env its
 // agent-run writes into config.toml (env, set here into sandboxEnv). A server
-// that starts from a command is skipped: it runs only in a sandbox of its own,
-// and the gate refuses a run that has one until it can be given one.
+// that starts from a command runs only in a sandbox of its own: it gets its
+// entry with no URL and no credential, and its bindings, and
+// createRunMCPSandboxes sets its relay target once its sandbox exists.
 func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.InjectionGrant, proxyURL string, interactive bool, env map[string]string) mcpDispatch {
 	var out mcpDispatch
 	on := map[string][]string{}
 	var order []string
 	for _, m := range servers {
-		if m.Launch != nil || w.withheld(m.Host) {
+		if m.Launch == nil && w.withheld(m.Host) {
 			continue
 		}
 		cfg := proxy.MCPServerConfig{Key: m.Key, URL: m.URL, Ordinal: m.Ordinal}

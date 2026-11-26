@@ -90,6 +90,30 @@ type RunMCPSandboxStore interface {
 	// RotateMCPSandboxToken is a token renew's rotate: only while the row's token is oldJTI and the row is
 	// not stopped.
 	RotateMCPSandboxToken(ctx context.Context, runID uuid.UUID, ordinal int, oldJTI, newJTI string, oldUntil time.Time) (bool, error)
+	// RecordMCPSandboxCreated writes the pinned relay address, the policy digest and the sealed proxy config
+	// of a row's created sandbox, only while the row is starting or restarting.
+	RecordMCPSandboxCreated(ctx context.Context, runID uuid.UUID, ordinal int, c MCPSandboxCreated) (bool, error)
+	// RestartMCPSandboxIfLive moves a row that is not starting to restarting for the watcher's or a person's
+	// restart, with the fresh token and the restart window, only while it is as the restart read it and the
+	// run is RUNNING and not lost.
+	RestartMCPSandboxIfLive(ctx context.Context, runID uuid.UUID, ordinal int, r MCPSandboxRestart) (bool, error)
+}
+
+// MCPSandboxCreated is what a created MCP sandbox's row records.
+type MCPSandboxCreated struct {
+	RelayAddr         string
+	PolicyDigest      string
+	ProxyConfigSealed []byte
+}
+
+// MCPSandboxRestart is one restart's row write: the row as the restart read it (ReadAt), the fresh token
+// (JTI; the old one is served until PrevUntil), and the window after this restart.
+type MCPSandboxRestart struct {
+	ReadAt      time.Time
+	JTI         string
+	PrevUntil   time.Time
+	Restarts    int
+	WindowStart time.Time
 }
 
 // Compile-time assertion: PG satisfies RunMCPSandboxStore.
@@ -248,4 +272,30 @@ func (s PG) RotateMCPSandboxToken(ctx context.Context, runID uuid.UUID, ordinal 
 		SET prev_cp_token_jti = cp_token_jti, prev_cp_token_until = $5, cp_token_jti = $4
 		WHERE run_id = $1 AND ordinal = $2 AND cp_token_jti = $3 AND state <> 'stopped'`,
 		runID, ordinal, oldJTI, newJTI, oldUntil)
+}
+
+// RecordMCPSandboxCreated writes a created sandbox's pinned relay address, its policy digest and its sealed
+// proxy config on one row of runID that is starting or restarting. false means another writer moved the row
+// first (an end stopped it), and the caller kills what it created.
+func (s PG) RecordMCPSandboxCreated(ctx context.Context, runID uuid.UUID, ordinal int, c MCPSandboxCreated) (bool, error) {
+	return s.mcpSandboxWrite(ctx, "record a created MCP sandbox", `UPDATE run_mcp_sandboxes SET relay_addr = $3,
+		policy_digest = $4, proxy_config_sealed = $5, updated_at = now()
+		WHERE run_id = $1 AND ordinal = $2 AND state IN ('starting', 'restarting')`,
+		runID, ordinal, c.RelayAddr, c.PolicyDigest, c.ProxyConfigSealed)
+}
+
+// RestartMCPSandboxIfLive moves one row of runID to restarting for a restart, with the fresh token jti (the
+// old one served until r.PrevUntil) and the restart window r.Restarts and r.WindowStart, only while the row
+// is as the restart read it (r.ReadAt) and not starting (a person may restart a stopped row; the watcher
+// restarts only a ready one), and the run is RUNNING and not lost. false means the run or the row moved on
+// first, and the restart creates nothing.
+func (s PG) RestartMCPSandboxIfLive(ctx context.Context, runID uuid.UUID, ordinal int, r MCPSandboxRestart) (bool, error) {
+	return s.mcpSandboxWrite(ctx, "restart an MCP sandbox", `UPDATE run_mcp_sandboxes m SET state = 'restarting', sandbox_ref = '',
+		prev_cp_token_jti = m.cp_token_jti, prev_cp_token_until = $5, cp_token_jti = $4,
+		restarts = $6, restart_window_start = $7, last_cause = NULL, stopped_at = NULL, updated_at = now()
+		FROM agent_runs r
+		WHERE m.run_id = $1 AND m.ordinal = $2 AND m.updated_at = $3
+		  AND m.state IN ('ready', 'restarting', 'failed', 'stopped')
+		  AND r.id = m.run_id AND r.state = $8 AND r.lost_at IS NULL`,
+		runID, ordinal, r.ReadAt, r.JTI, r.PrevUntil, r.Restarts, r.WindowStart, string(types.RunRunning))
 }

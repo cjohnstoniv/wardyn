@@ -30,6 +30,9 @@ const (
 	// mcpUpstreamProxySentence is the admission refusal on a site with an upstream proxy. It is not yet an
 	// approved template.
 	mcpUpstreamProxySentence = "MCP servers that start from a command can't run here yet: this organisation sends traffic through its own proxy. Use a remote (HTTPS) MCP server, or remove <server>."
+	// mcpHostReachableSentence is the dispatch refusal on a runner whose MCP sandboxes would be reachable from
+	// its host (runner.ErrMCPSandboxHostReachable). It is not yet an approved template.
+	mcpHostReachableSentence = "This runner can't keep <server> off its host: its Docker Engine is older than 28.0.0. Update Docker on the runner, or remove <server>."
 	// mcpSaveOffSentence is the component save's refusal while the switch is off, in the validator's form.
 	mcpSaveOffSentence = "mcp.transport: MCP servers that start from a command are turned off here."
 	// mcpRunnerUnnamed is the unsupported-runner sentence's runner when the run's runner has no name to show.

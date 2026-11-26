@@ -88,8 +88,9 @@ type componentConfig struct {
 // entry: there is no TLS to terminate, and the proxy sets it on the plain lane.
 //
 // A remote MCP server's header gets no interception entry either: the broker
-// sets it on the request it re-originates. A local server's header is any
-// component's.
+// sets it on the request it re-originates. A server that starts from a command
+// adds neither: its headers and its config are its own sandbox's
+// (takeMCPServerSecrets), never the agent's.
 func (c runComponents) dispatch() componentDispatch {
 	d := componentDispatch{AWSCLI: c.awsCLI(), AzureCLI: c.azureCLI(), KubectlCLI: c.kubectlCLI()}
 	keys := mcpServerKeys(c.attached)
@@ -111,6 +112,7 @@ func (c runComponents) dispatch() componentDispatch {
 		case def.LocalMCP():
 			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], Harnesses: a.snapshot.MCPHarnesses,
 				Launch: def.MCP.Launch, EnvNames: componentEnvNames(def)})
+			continue // its header hosts and its config are its own sandbox's, never the agent's
 		}
 		for _, sec := range def.Secrets {
 			del := sec.Delivery
