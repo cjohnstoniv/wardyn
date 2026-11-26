@@ -74,18 +74,8 @@ func (s *Server) decisionTouch(ctx context.Context, runID uuid.UUID, kind types.
 // tokenAudienceHint is the aud a bearer JWT says it carries, unverified: which door verifies it, never a
 // decision. A token that is not a JWT has none.
 func tokenAudienceHint(tok string) []string {
-	parts := strings.Split(tok, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil
-	}
-	var c struct {
-		Aud json.RawMessage `json:"aud"`
-	}
-	if json.Unmarshal(raw, &c) != nil {
+	c, ok := tokenPayloadHint(tok)
+	if !ok {
 		return nil
 	}
 	var one string
@@ -95,6 +85,67 @@ func tokenAudienceHint(tok string) []string {
 	var many []string
 	_ = json.Unmarshal(c.Aud, &many)
 	return many
+}
+
+// tokenHint is the two claims the MCP door reads from a compact token's payload before, or without, a verify.
+type tokenHint struct {
+	Aud json.RawMessage `json:"aud"`
+	JTI string          `json:"jti"`
+}
+
+// tokenPayloadHint decodes tok's payload unverified. A caller trusts what it reads only as far as a verify of
+// the same token has gone.
+func tokenPayloadHint(tok string) (tokenHint, bool) {
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return tokenHint{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return tokenHint{}, false
+	}
+	var c tokenHint
+	return c, json.Unmarshal(raw, &c) == nil
+}
+
+// refuseMCPSandboxToken answers an MCP proxy's token that did not verify. The run's once-only
+// run.identity.expire row and the decision door's run.report.drop row are the agent's evidence, so it writes
+// neither: it writes one auth.fail row and answers 401, or 503 when the run behind a revoked token could not
+// be read. An expired token names its run, and its signature has been checked, so its jti is read from the
+// payload and the row is labelled with the key of the server row that holds that jti; this costs one read of
+// the run's rows, as a live token's post does.
+func (s *Server) refuseMCPSandboxToken(w http.ResponseWriter, r *http.Request, tok string, err error) {
+	var unreadable *runUnreadableError
+	if errors.As(err, &unreadable) {
+		slog.ErrorContext(r.Context(), "api: read the run behind an MCP proxy's revoked token",
+			slog.String("run_id", unreadable.RunID.String()), slog.Any("err", unreadable.Err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
+		return
+	}
+	var expired *identity.ExpiredTokenError
+	if hint, ok := tokenPayloadHint(tok); ok && hint.JTI != "" && errors.As(err, &expired) {
+		if key := s.mcpSandboxKeyOfJTI(r.Context(), expired.RunID, hint.JTI); key != "" {
+			r = r.WithContext(audit.WithMCPSandbox(r.Context(), key))
+		}
+	}
+	s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
+	writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
+}
+
+// mcpSandboxKeyOfJTI is the key of runID's server row whose current or previous jti is jti, or "" when no row
+// holds it or the rows could not be read.
+func (s *Server) mcpSandboxKeyOfJTI(ctx context.Context, runID uuid.UUID, jti string) string {
+	st, ok := s.cfg.Store.(store.RunMCPSandboxStore)
+	if !ok {
+		return ""
+	}
+	rows, _ := st.ListRunMCPSandboxes(ctx, runID) // a failed read leaves the refusal's row unlabelled
+	for _, row := range rows {
+		if row.CPTokenJTI == jti || row.PrevCPTokenJTI == jti {
+			return row.ServerKey
+		}
+	}
+	return ""
 }
 
 // mcpSandboxAuth serves an MCP proxy's token on its five routes. For that token on one of them it never calls
@@ -116,7 +167,7 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 		}
 		claims, err := s.verifyRunTokenFor(r, tok, mcpSandboxAudience)
 		if err != nil {
-			s.refuseRunToken(w, r, err)
+			s.refuseMCPSandboxToken(w, r, tok, err)
 			return
 		}
 		r = r.WithContext(contextWithClaims(r.Context(), claims))

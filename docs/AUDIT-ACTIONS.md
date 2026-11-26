@@ -98,7 +98,8 @@ writes at most one such row per run in 65 minutes, not one per refused post. On
 behind a proxy of its own. Every row that proxy's calls write carries `data.mcp_sandbox`, the
 server's key. Its token is served on the decision, injection, token renewal and approval routes
 of `/internal/` only. Anywhere else it is refused, and a token that no live server of the run
-holds is refused with `mcp_sandbox_unknown`.
+holds is refused with `mcp_sandbox_unknown`. An expired token of that proxy writes one `auth.fail` row
+with the server's key. It never writes `run.identity.expire` or `run.report.drop`, which are the agent's.
 
 **Trusted proxies.** When `WARDYN_TRUSTED_PROXIES` lists a request's TCP peer, the
 row's `source_ip` is the client that proxy reported in `X-Forwarded-For`, and every

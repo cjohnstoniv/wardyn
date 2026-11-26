@@ -133,6 +133,12 @@ func mcpProxyToken(t *testing.T, h *harness, runID uuid.UUID) identity.RunIdenti
 
 func newMCPAuthFixture(t *testing.T) *mcpAuthFixture {
 	t.Helper()
+	return newMCPAuthFixtureWith(t, nil)
+}
+
+// newMCPAuthFixtureWith is newMCPAuthFixture with edit applied to the server's config before New.
+func newMCPAuthFixtureWith(t *testing.T, edit func(*Config, *mcpAuthFixture)) *mcpAuthFixture {
+	t.Helper()
 	h := newHarness(t)
 	runID, grant := uuid.New(), uuid.New()
 	id := mcpProxyToken(t, h, runID)
@@ -141,7 +147,12 @@ func newMCPAuthFixture(t *testing.T) *mcpAuthFixture {
 	cfg := baseTestConfig(h, mcpAuthStore{mcpRowsFake: rows})
 	cfg.Approvals, cfg.Broker = h.approvals, h.broker
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
-	return &mcpAuthFixture{h: h, srv: New(cfg), rows: rows, runID: runID, grant: grant, tok: id.Token, tokID: id, agent: h.mintRunToken(t, runID)}
+	f := &mcpAuthFixture{h: h, rows: rows, runID: runID, grant: grant, tok: id.Token, tokID: id, agent: h.mintRunToken(t, runID)}
+	if edit != nil {
+		edit(&cfg, f)
+	}
+	f.srv = New(cfg)
+	return f
 }
 
 const (
@@ -352,6 +363,64 @@ func TestMCPRowWithEmptyKeyRefused(t *testing.T) {
 	f.rows.set(func(r *store.RunMCPSandbox) { r.ServerKey = "files" })
 	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision); w.Code/100 != 2 || allows() != 1 {
 		t.Fatalf("control: the same row keyed files got %d %s and %d allow rows, want it served", w.Code, w.Body.String(), allows())
+	}
+}
+
+// expiringIdentity answers every token in expired as an expired token of runID, and verifies the rest.
+type expiringIdentity struct {
+	identity.Provider
+	runID   uuid.UUID
+	expired map[string]bool
+}
+
+func (e *expiringIdentity) Verify(ctx context.Context, tok, aud string) (*identity.Claims, error) {
+	if e.expired[tok] {
+		return nil, &identity.ExpiredTokenError{RunID: e.runID, Expiry: time.Now().Add(-time.Minute), Err: errors.New("token is expired (exp)")}
+	}
+	return e.Provider.Verify(ctx, tok, aud)
+}
+
+// TestMCPExpiredTokenSpendsNoAgentRow: an MCP proxy's expired token is refused with one auth.fail row
+// labelled with its server, and writes neither run.identity.expire nor run.report.drop, so the agent's own
+// expired token afterwards still gets both.
+func TestMCPExpiredTokenSpendsNoAgentRow(t *testing.T) {
+	var idp *expiringIdentity
+	f := newMCPAuthFixtureWith(t, func(cfg *Config, f *mcpAuthFixture) {
+		idp = &expiringIdentity{Provider: cfg.Identity, runID: f.runID, expired: map[string]bool{f.tok: true}}
+		cfg.Identity = idp
+	})
+	actions := func(action string) (n, labelled int) {
+		for _, ev := range f.h.audit.snapshot() {
+			var data map[string]any
+			if ev.Action == action {
+				n++
+				if json.Unmarshal(ev.Data, &data) == nil && data["mcp_sandbox"] == "files" {
+					labelled++
+				}
+			}
+		}
+		return n, labelled
+	}
+	w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision)
+	if w.Code != http.StatusUnauthorized || reasonOf(t, w) != reasonInvalidRunToken {
+		t.Fatalf("expired MCP token: %d %s, want 401 %s", w.Code, w.Body.String(), reasonInvalidRunToken)
+	}
+	if n, labelled := actions("auth.fail"); n != 1 || labelled != 1 {
+		t.Errorf("auth.fail rows = %d (%d labelled files), want one, labelled", n, labelled)
+	}
+	for _, a := range []string{"run.identity.expire", runReportLostAction} {
+		if n, _ := actions(a); n != 0 {
+			t.Errorf("the MCP proxy's expired token wrote %d %s rows, want none", n, a)
+		}
+	}
+	idp.expired[f.agent] = true
+	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.agent, mcpAllowDecision); w.Code != http.StatusUnauthorized {
+		t.Fatalf("control: the agent's expired token got %d %s, want 401", w.Code, w.Body.String())
+	}
+	for _, a := range []string{"run.identity.expire", runReportLostAction} {
+		if n, labelled := actions(a); n != 1 || labelled != 0 {
+			t.Errorf("control: the agent's expired token wrote %d %s rows (%d labelled), want one, unlabelled", n, a, labelled)
+		}
 	}
 }
 
