@@ -364,7 +364,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 ## SSH over an attach ticket
 
 - `POST /runs/{id}/attach/ticket` takes `purpose` and, for a forward, `ports`. With no purpose, or `ui`, it mints a terminal or UI ticket as before.
-- `ssh-exec`, `ssh-forward` and `ssh-editor` mint a ticket for `GET /runs/{id}/ssh` while `WARDYN_SSH_TICKETS` is on. `ssh-forward` needs `ports`, a comma list of 1 to 16 distinct ports.
+- `ssh-shell`, `ssh-exec`, `ssh-forward`, `ssh-editor`, `ssh-sync` and `ssh-sync-git` mint a ticket for `GET /runs/{id}/ssh` while `WARDYN_SSH_TICKETS` is on. `ssh-forward` needs `ports`, a comma list of 1 to 16 distinct ports.
 - `attach-forward` with `ports` mints a ticket for `GET /runs/{id}/attach/forward` that forwards only those ports.
 - The answer echoes `purpose`. An older server ignores it and mints a terminal ticket, so a client dials a purpose only when the echo matches.
 - A ticket with a purpose does not count against the run's terminal sessions; a forward holds one of the run's SSH channels instead.
@@ -374,7 +374,17 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 `GET /api/v1/runs/{id}/ssh` takes an SSH ticket in the `Wardyn-Ticket` header, never in the URL, and upgrades to a WebSocket of binary frames carrying one SSH connection.
 The SSH username is the run id and the `none` method signs in, so no key is registered.
 The run checks are the key path's: the owner rule, a background task, `deny_interactive`, `data_out`, `WARDYN_SSH_CHANNELS` and the gateway's caps.
-A ticket opens only the channel kinds its purpose names: `ssh-exec` runs one command, and `ssh-forward` reaches only its ports.
+A ticket opens only the channel kinds its purpose names:
+
+| Purpose | Opens |
+|---|---|
+| `ssh-shell` | a terminal (`wardyn run ssh`) |
+| `ssh-exec` | one command |
+| `ssh-forward` | `-L` to its ports only |
+| `ssh-editor` | a terminal, commands, file transfer and `-L` to any sandbox port |
+| `ssh-sync` | the `wardyn sync` subsystem only, not `sftp` |
+| `ssh-sync-git` | the `wardyn sync` subsystem and commands, any number on its one connection (`--git`, `--pull-commits`) |
+
 While tickets are on, `/healthz` reports `tickets` and the gateway's public `host_key` in its `ssh` object.
 A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
 
@@ -1311,7 +1321,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `run_exec_invalid` / `run_exec_unavailable` / `run_exec_busy` / `run_exec_failed` | `POST /runs/{id}/exec` (`run_exec.go`): the command is empty or over 128 KiB, or `timeout_sec` is outside 1 to 300 (`400`); the run cannot take a command now, and the message says why (`409`); the run's SSH channels are all in use (`429`); the runner could not start the command, or lost it before it ended (`502`, with no exit code). A runner with no exec stream answers `501 run_inspect_exec_stream_unsupported`. |
 | `run_exec_off` | `POST /runs/{id}/exec` (`run_exec.go`), `409`: the operator left `exec` out of `WARDYN_SSH_CHANNELS`, so commands are off for the deployment and a later try is refused the same way. |
 | `run_forward_off` / `run_forward_ticket_required` / `run_forward_invalid` / `run_forward_port_refused` / `run_forward_unavailable` / `run_forward_busy` / `run_forward_failed` | `GET /runs/{id}/attach/forward` (`attach_forward.go`): the operator has not turned forwarding on (`WARDYN_ATTACH_FORWARD`) or left `forward` out of `WARDYN_SSH_CHANNELS` (`409`); the request carries no attach ticket (`400`); the port is not 1 to 65535 (`400`); a macOS VM's Screen Sharing ports (`403`); the run cannot take a forward now (`409`); the run's SSH channels are all in use (`429`); the runner could not start the relay (`502`). |
-| `attach_ticket_purpose_invalid` / `attach_ticket_ports_invalid` | `POST /runs/{id}/attach/ticket` (`attach_ticket_purpose.go`), `400`: `purpose` starts `ssh-` but is not `ssh-exec`, `ssh-forward` or `ssh-editor`; `ports` is not 1 to 16 distinct ports from 1 to 65535, is missing on `ssh-forward` or `attach-forward`, or rides a purpose that takes none. |
+| `attach_ticket_purpose_invalid` / `attach_ticket_ports_invalid` | `POST /runs/{id}/attach/ticket` (`attach_ticket_purpose.go`), `400`: `purpose` starts `ssh-` but is not `ssh-shell`, `ssh-exec`, `ssh-forward`, `ssh-editor`, `ssh-sync` or `ssh-sync-git`; `ports` is not 1 to 16 distinct ports from 1 to 65535, is missing on `ssh-forward` or `attach-forward`, or rides a purpose that takes none. |
 | `ssh_ticket_unsupported_caller` / `ssh_gateway_off` / `ssh_tickets_off` / `ssh_ticket_channel_off` | `POST /runs/{id}/attach/ticket` with an `ssh-*` purpose (`attach_ticket_purpose.go`): the caller is a portal, a device or a service, not a person signed in directly (`403`); the SSH gateway is off (`WARDYN_SSH_LISTEN`), `WARDYN_SSH_TICKETS` is off, or `WARDYN_SSH_CHANNELS` leaves out a kind the purpose needs (`409`). |
 | `ssh_gateway_unavailable` / `ssh_gateway_busy` / `ssh_ticket_unverifiable` | `GET /runs/{id}/ssh` (`sshgateway_ticket.go`), `503`: the gateway is not serving on this replica yet; the gateway's handshake bounds are full; the run or its governance profile could not be read. The door also answers `ssh_tickets_off` and `ssh_gateway_off` (`409`), a bad ticket as the terminal does (`403` `ui_gateway_ticket_invalid`), `run_owner_only`, `run_background_only` and `governance_unit`. |
 | `audit_unavailable` | Strict audit (`WARDYN_AUDIT_STRICT`, `audit_strict.go`), `503`: a covered change was refused because its audit intent row could not be written first. Nothing was changed; try again. |

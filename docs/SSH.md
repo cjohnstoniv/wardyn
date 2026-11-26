@@ -2,7 +2,7 @@
 
 `wardynd` can serve native SSH directly into a running sandbox's tmux session — the same one the browser terminal (run detail's "Live terminal" / `wardyn attach`) shows.
 
-- It authenticates registered **public keys only** (no passwords) and is **owner-only**: a human may SSH into a run they created.
+- It authenticates registered **public keys only** (no passwords) on its TCP port and is **owner-only**: a human may SSH into a run they created. With `WARDYN_SSH_TICKETS` on, the CLI also connects with no registered key, through a single-use ticket (see [SSH tickets](#ssh-tickets)).
 - A super admin's key reaches a run only when it has no personal owner (an operator-owned service or local run); it opens no shell in a person's run (`run_owner_only`, #1476). That admin carve-out is a bounded-stale stamp, not a live role check; see [Bounds](#bounds) for the ceiling that comes with it.
 - The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`, `WARDYN_SSH_ADVERTISE`). With it unset there is no listener and no new attack surface: the daemon does not even generate a host key.
 - Recording has limits: see [Recording](#recording). The [glossary](GLOSSARY.md) tells the SSH gateway apart from the other gateways, proxies and brokers in and around Wardyn.
@@ -146,6 +146,7 @@ ssh <run-id>@<advertise-host> -p <port>
   address off `/healthz` and execs your local `ssh(1)` against it, so there is
   no connect string to copy.
 - It refuses a plain-http, non-loopback `--url` in every mode, before it reads `/healthz`; use `https://`.
+- With SSH tickets on it connects with no key, through a ticket of its own that opens a terminal only ([SSH tickets](#ssh-tickets)). `--print`, `--config` and `--json` still print the key form below, and `--key` connects with your key.
 - `wardyn run ssh --print <run-id>` emits that command
   instead of running it (for a script or a demo) and `--config` emits the
   `ssh_config` block below — both byte-identical to what the card renders.
@@ -208,13 +209,39 @@ Host wardyn-<run-id>
 - `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.
   - `--dir` picks the sandbox folder (default `/home/agent/work`).
   - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is required.
-- `exec` and `editor` need the gateway on; `forward` needs it or `WARDYN_ATTACH_FORWARD`. All three need a key on your account when they use the gateway.
+- `exec` and `editor` need the gateway on; `forward` needs it or `WARDYN_ATTACH_FORWARD`. All three need a key on your account when they use the gateway, unless SSH tickets are on ([SSH tickets](#ssh-tickets)).
   - With the gateway off `exec` and `editor` stop with one line saying the operator has not turned SSH on, and `forward` does the same unless `WARDYN_ATTACH_FORWARD` is on.
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
   - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
 - An operator can limit the gateway to some kinds of channel with `WARDYN_SSH_CHANNELS`: any of `shell`, `exec`, `sftp` and `forward`, all four when unset. A command that needs a kind that is off stops with one line before it dials. `sftp` also covers `wardyn sync`, and `exec` also covers `POST /runs/{id}/exec` ([ENV.md](ENV.md#wardyn_ssh_channels)).
-- When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
+- On the key path, when `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
+- With the gateway off, `wardyn run forward` through the organisation takes a forward ticket for each connection, so it holds none of the run's terminal sessions.
+- **Known limit (Windows).** On Windows the CLI quotes the `ProxyCommand` line by the Windows argument rules, and a unit test pins that quoting on every platform. It has not been run with Windows OpenSSH (`ssh.exe`). If a ticket connection does not start on Windows, run the command again with `--key`.
+
+### SSH tickets
+
+With `WARDYN_SSH_TICKETS` on (`/healthz` reports `ssh.tickets`), `wardyn run ssh`, `run exec`, `run forward`, `run editor` and `wardyn sync` reach a run with no registered key.
+
+- **One ticket per connection.** Each connection takes a single-use ticket of its own purpose that lives 30 seconds, from `POST /runs/{id}/attach/ticket` ([sdk.md](sdk.md#ssh-over-an-attach-ticket)), and reaches the run through `GET /api/v1/runs/{id}/ssh` over the HTTPS API.
+  - `--key` on each command keeps your registered key. With tickets off, nothing changes.
+- **The ticket stays out of sight.** It is never on a command line, in a URL, in `ssh_config` or in any output.
+  - `run ssh`, `exec` and `forward` mint it and start ssh with `ProxyCommand <wardyn> run ssh-proxy <run-id> --for <command> --url <server>`. The proxy sends the ticket in a header and clears it from its environment before it dials.
+  - Connection sharing is off (`ControlMaster=no`), so every connection runs the proxy.
+  - `wardyn sync` dials the door from its own SSH client, and the ticket stays in its memory.
+  - The CLI passes the ticket to ssh(1) in its child environment. That is acceptable because the ticket is single-use, lives 30 seconds and is spent before any SSH byte, so a copy read later is worthless. For this case that replaces the rule that a credential in a child's environment is a leak.
+- **Editors.** `run editor` writes a `Host` block whose `ProxyCommand` is `wardyn run ssh-proxy <run-id> --for editor`. The proxy takes a new ticket with your sign-in (`wardyn login`) for each connection VS Code opens. The block holds no ticket and no key.
+- **Host key.** The gateway's public host key comes from `/healthz` (`ssh.host_key`, checked against `host_key_fingerprint`) over TLS. The CLI pins it in `~/.wardyn/known_hosts` under `wardyn-gateway-<server host and port>`. Every ticket-path command, and the editor's proxy on each connection, rewrites that line, so a rotated key reaches VS Code on its next connection.
+- **Each ticket opens only its own channels.**
+  - `run ssh` a terminal, `exec` one command, and `forward` only the sandbox ports it names, at most 16.
+  - `editor` a terminal, commands, file transfer and `-L`.
+  - Plain `wardyn sync` only the sync, and `sync --git` or `--pull-commits` the sync and commands ([section 3](#sync-a-directory-wardyn-sync)).
+- **No advertised ProxyCommand.** The ticket path never runs the ProxyCommand the deployment advertises, so it needs no `--advertised-proxy`. With `--key` that consent is asked as before.
+- **Who gets one.** Tickets are for the run's owner, signed in directly. A support helper connects with `--key`, and the CLI says so. A portal, a device or a service gets no ticket.
+  - With tickets on, a ticket asks the `ssh_key` capability, as adding a key does: a person denied it gets `403` `capability_feature`, and the CLI prints the server's sentence and starts no ssh.
+- **How long it lasts.** A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
+  - On a ticket connection an admin override is bounded by `WARDYN_ROLE_STAMP_TTL` and the sign-in's life, not by `WARDYN_SSH_ROLE_TTL`.
+- **For operators.** Turn on `WARDYN_SSH_TICKETS` only after every replica runs this release. With it on, SSH is reachable wherever the HTTPS API is, whatever guards `WARDYN_SSH_LISTEN`.
 
 ### Without SSH: `wardyn attach`
 
@@ -257,7 +284,7 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
 ### Sync a directory (`wardyn sync`)
 
 ```sh
-wardyn ssh-key ensure                      # once
+wardyn ssh-key ensure                      # once, unless SSH tickets are on
 wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull [--pull-deletes [--max-pull-deletes N]]] [--git] [--pull-commits] [--max-pull-bytes N] [--json]
 ```
 
@@ -277,6 +304,8 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - Paths equal under case or Unicode normalisation, and names with invisible characters, are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
 - A pass pulls at most `--max-pull-bytes` (1 GiB), and never a file over 256 MiB; a refused path is listed and the pass goes on.
 - It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.
+- With SSH tickets on it needs no key ([SSH tickets](#ssh-tickets)), and `--key` uses the key. Plain sync's ticket opens only the sync subsystem.
+  - `--git` and `--pull-commits` take the `ssh-sync-git` ticket, which opens exec as the editor ticket does (any command, for that one connection), because git runs in the sandbox over exec. With exec off, those two flags stop with one line.
 - The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
 - The sandbox's mtime has one-second resolution, so a same-size edit inside that second is not seen.
 - Under a run's [`data_out`](POLICIES.md#data_out) of `review` or `blocked`, the gateway refuses `sftp`, `scp`, commands and `-L` forwards. The shell stays open. A client may print only "request failed" before it reads the reason on the channel; the audit row `run.data_out.deny` carries it.
@@ -324,6 +353,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 
 - Add the `Host` block above to `~/.ssh/config`, then Remote-SSH → Connect to
   Host → pick it.
+- With SSH tickets on, `wardyn run editor` writes a `Host` block that needs no key: its `ProxyCommand` takes a ticket for each connection ([SSH tickets](#ssh-tickets)).
 - **One setting is required first**, in VS Code's
   `settings.json`:
 
@@ -450,7 +480,7 @@ ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
   - A connection over a person's share holds no established-connection slot and writes an `ssh.connection.reject` row. Its refusal work still counts against the handshake and per-source bounds: those slots are released when its handler returns, after that row is written. If the refusal pool admits it and it opens a channel within 5 seconds, it is told why.
   - The pool holds 8 such connections, one per person; any other is closed at once.
   - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.
-- **Auth.** Registered public keys only — no password, no keyboard-interactive.
+- **Auth.** On the TCP port, registered public keys only — no password, no keyboard-interactive. With `WARDYN_SSH_TICKETS` on, `GET /api/v1/runs/{id}/ssh` accepts the `none` method only after a redeemed single-use ticket, and serves only the channel kinds the ticket's purpose names.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
   `outcome=failure`).

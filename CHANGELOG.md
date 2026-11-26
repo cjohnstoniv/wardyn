@@ -61,11 +61,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   same on the table as soon as the migration has run.
 - Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
+- `wardyn run ssh`, `run exec`, `run forward`, `run editor` and `wardyn sync` connect with no registered SSH key when the operator turns on `WARDYN_SSH_TICKETS`: each connection takes a 30-second single-use ticket, never written to the command line, a URL or a file. `--key` keeps the registered key (#3280).
 
 ### Changed
 
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
 - On the server's Kubernetes cluster a run's agent pod is now created together with its proxy pod, not after the proxy is ready, so the two image pulls overlap. Each run reaches its proxy through its own ClusterIP Service with no selector, which Wardyn deletes with the run. The first command still waits for the proxy to be ready. Kubernetes runners (`wardyn-runnerd`) start as before.
+- With the SSH gateway off, `wardyn run forward` asks for a forward ticket for each connection, so it no longer counts against the run's terminal sessions.
 
 ### Fixed
 

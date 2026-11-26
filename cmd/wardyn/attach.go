@@ -702,10 +702,41 @@ func buildWSURL(baseURL, runID, ticket string) string {
 // non-2xx becomes *sdk.APIError (errors.As-able, same as every other SDK
 // call) for the caller to surface verbatim rather than mask with a fallback.
 func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string, error) {
+	t, _, err := mintTicket(ctx, c, runID, nil)
+	if errors.As(err, new(*ticketInconclusive)) {
+		return "", nil // inconclusive: the caller falls back
+	}
+	return t, err
+}
+
+// ticketInconclusive is a mint whose answer cannot be the control plane's own: no HTTP response at all, a non-2xx
+// that is not its JSON envelope, or a 2xx with no readable ticket. mintAttachTicket falls back on it; an SSH
+// purpose never does.
+type ticketInconclusive struct {
+	status int   // the HTTP status, 0 when there was no response
+	err    error // the transport error, if any
+}
+
+func (e *ticketInconclusive) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return fmt.Sprintf("the server's answer (HTTP %d) is not a ticket", e.status)
+}
+
+func (e *ticketInconclusive) Unwrap() error { return e.err }
+
+// mintTicket POSTs /api/v1/runs/{id}/attach/ticket with q (purpose, ports) and returns the ticket and the purpose the
+// server echoes ("" from a server that knows no purposes). A non-2xx whose body is the server's JSON envelope, or
+// any 3xx, is *sdk.APIError; every inconclusive answer is *ticketInconclusive.
+func mintTicket(ctx context.Context, c *sdk.Client, runID string, q url.Values) (ticket, purpose string, err error) {
 	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach/ticket"
+	if len(q) > 0 {
+		target += "?" + q.Encode()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
-		return "", nil
+		return "", "", &ticketInconclusive{err: err}
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
@@ -714,7 +745,7 @@ func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string,
 
 	resp, err := rawHTTPClient(c).Do(req)
 	if err != nil {
-		return "", nil // transport-level: inconclusive, caller falls back
+		return "", "", &ticketInconclusive{err: err} // transport-level: inconclusive
 	}
 	defer resp.Body.Close()
 
@@ -727,22 +758,23 @@ func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string,
 		// mistyped --url) answering, and a bare-dial fallback would send the
 		// bearer to that same hop.
 		if !json.Valid(body) && (resp.StatusCode < 300 || resp.StatusCode > 399) {
-			return "", nil // not the server's own envelope: inconclusive, fall back
+			return "", "", &ticketInconclusive{status: resp.StatusCode} // not the server's own envelope
 		}
-		return "", sdk.NewAPIError(resp.StatusCode, body)
+		return "", "", sdk.NewAPIError(resp.StatusCode, body)
 	}
 
 	var out struct {
-		Ticket string `json:"ticket"`
+		Ticket  string `json:"ticket"`
+		Purpose string `json:"purpose"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil || out.Ticket == "" {
 		// A 2xx that doesn't look like the mint response this CLI knows how
 		// to read (e.g. a proxy or an incompatible server) is exactly as
-		// inconclusive as never getting a response: fall back rather than
-		// dial a URL with a garbage ?ticket=.
-		return "", nil
+		// inconclusive as never getting a response: never dial a URL with a
+		// garbage ?ticket=.
+		return "", "", &ticketInconclusive{status: resp.StatusCode}
 	}
-	return out.Ticket, nil
+	return out.Ticket, out.Purpose, nil
 }
 
 // isNormalClose reports whether err represents a clean WebSocket or context

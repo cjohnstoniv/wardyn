@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -16,7 +17,7 @@ import (
 // its own. It needs the gateway on and a key on your account; it never
 // creates the key.
 func runExecCmd(client clientFn) *cobra.Command {
-	var advertisedProxy bool
+	var advertisedProxy, forceKey bool
 	cmd := &cobra.Command{
 		Use:   "exec <run-id> -- <command> [args...]",
 		Short: "Run one command in a running sandbox over the SSH gateway",
@@ -30,20 +31,32 @@ a redirect, run a shell: wardyn run exec <run-id> -- sh -c 'make test | tail'.
 No terminal is allocated; standard input, output and error pass through.
 Without the gateway or a registered key it stops with one line saying so. The
 key is made by 'wardyn ssh-key ensure', never by this command.
+
+When the deployment turns SSH tickets on (WARDYN_SSH_TICKETS), no registered
+key is needed: the command takes a 30-second single-use ticket that runs this
+one command, and ssh reaches the run through 'wardyn run ssh-proxy' over the
+HTTPS API. The ticket is never on the command line, in a URL or in a file, and
+an advertised ProxyCommand is not run. --key uses your registered key instead.
 `,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.ArgsLenAtDash() != 1 || len(args) < 2 {
 				return errors.New("exec: usage: wardyn run exec <run-id> -- <command> [args...]")
 			}
-			acc, err := resolveSSHAccess(cmd.Context(), client(), "exec", args[0], advertisedProxy)
+			c := client()
+			acc, err := resolveSSHAccessKey(cmd.Context(), c, "exec", args[0], advertisedProxy, forceKey)
 			if err != nil {
 				return err
+			}
+			if acc.ticket {
+				front, tail := ticketExecArgs(args[1:])
+				return runTicketSSH(cmd.Context(), c, acc.gw, "exec", args[0], url.Values{"purpose": {sshTicketPurposes["exec"]}}, front, tail)
 			}
 			return runSSHBinary(cmd.Context(), execSSHArgs(acc, args[0], args[1:]))
 		},
 	}
 	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
+	cmd.Flags().BoolVar(&forceKey, "key", false, "connect with your registered SSH key even when the deployment offers SSH tickets")
 	return cmd
 }
 
