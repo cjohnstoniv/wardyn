@@ -15,7 +15,7 @@ import (
 )
 
 // An MCP server of a run that starts from a command runs in a sandbox of its own, one row of
-// run_mcp_sandboxes each (migration 0426). Every write that moves a row's state is one UPDATE that checks
+// run_mcp_sandboxes each (migration 0428). Every write that moves a row's state is one UPDATE that checks
 // the row, and where a run's state decides, the run too, in the same statement, so a kill, a loss or an end
 // that lands first makes it answer false and its caller kills what it started.
 
