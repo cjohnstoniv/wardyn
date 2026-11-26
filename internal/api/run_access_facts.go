@@ -164,7 +164,8 @@ type accessInputs struct {
 	level types.AutonomyLevel
 	// class is the confinement class the fold enforces, which decides whether
 	// Codex's own sandbox starts (innerWallsSandbox).
-	class types.ConfinementClass
+	class    types.ConfinementClass
+	mcpHolds map[string]int // per server key, the hold rules its MCP policy makes deny (mcpHoldsRewritten)
 }
 
 // reSigned is awsReSigned, false when unset.
@@ -183,6 +184,7 @@ func (s *Server) accessFor(r *http.Request, in accessInputs) (*accessBlock, erro
 	in.providerStored, in.ssoProxyInject = s.accessProviderStored(r, in.mpChoice), s.cfg.AWSSSOProxyInject
 	in.awsReSigned = func(hosts []string) bool { _, ok := s.awsSigV4Hosts(hosts); return ok }
 	in.imageKey = accessImageKey(*in.req, s.cfg.AgentImages)
+	in.mcpHolds = s.mcpHoldsRewritten(r.Context(), in)
 	out := accessFacts(in)
 	return &out, nil
 }
@@ -405,9 +407,9 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	switch {
 	case harness == codexHarness:
 		fact.RuleTools = "mcp_only"
-		// Its remote MCP tools' rules are enforced by the broker the servers sit
-		// behind.
-		if mcpRemoteServerFor(b.in.comps, harness) {
+		// Its MCP tools' rules are enforced by the broker the servers sit behind,
+		// remote ones and those that start from a command alike.
+		if mcpBrokeredServerFor(b.in.comps, harness) {
 			fact.Enforcer = toolEnforcerMCPBroker
 		}
 		forDefault = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}
@@ -632,6 +634,7 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	mcp, mcpHost := attachedMCP(b.in.comps, fact.ID)
 	if mcp != nil {
 		row.Kind, row.MCP = accessKindMCP, mcp
+		mcp.HoldsRefused = b.in.mcpHolds[mcp.ServerKey] > 0
 	}
 	b.addRow(row)
 	if githubCLI {

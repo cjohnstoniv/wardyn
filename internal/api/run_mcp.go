@@ -381,7 +381,8 @@ const (
 )
 
 // attachedMCP is the MCP binding of the attached component a fact describes,
-// and its server's host; nil when it carries no server.
+// and its server's host; nil when it carries no server. A server that starts
+// from a command names its sandbox's policy mode; its hosts are the row's.
 func attachedMCP(comps runComponents, factID string) (*client.AccessMCP, string) {
 	keys := mcpServerKeys(comps.attached)
 	for i, a := range comps.attached {
@@ -390,10 +391,23 @@ func attachedMCP(comps runComponents, factID string) (*client.AccessMCP, string)
 			continue
 		}
 		server, _ := types.MCPURLDestination(def.MCP.URL) // a local server has no URL, so no broker host
-		return &client.AccessMCP{ServerKey: keys[i], Transport: def.MCP.Transport,
-			Harnesses: slices.Concat([]string{}, a.snapshot.MCPHarnesses)}, server.Host
+		out := &client.AccessMCP{ServerKey: keys[i], Transport: def.MCP.Transport,
+			Harnesses: slices.Concat([]string{}, a.snapshot.MCPHarnesses)}
+		if def.LocalMCP() {
+			out.PolicyMode = mcpPolicyModeOf(def)
+		}
+		return out, server.Host
 	}
 	return nil, ""
+}
+
+// mcpBrokeredServerFor reports whether an MCP server the broker sits in front
+// of is turned on for harness: a remote one, or one that starts from a
+// command, which the broker reaches through its sandbox's proxy.
+func mcpBrokeredServerFor(comps runComponents, harness string) bool {
+	return slices.ContainsFunc(comps.attached, func(a attachedComponent) bool {
+		return a.snapshot.Definition.MCP != nil && slices.Contains(a.snapshot.MCPHarnesses, harness)
+	})
 }
 
 // mcpRemoteServerFor reports whether a remote MCP server, which the broker
