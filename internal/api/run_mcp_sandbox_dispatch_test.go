@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -388,22 +389,38 @@ func TestDispatchReturnLeavesNoMCPSandbox(t *testing.T) {
 	f.assertRowsEnded(t)
 }
 
-// TestKillDuringMCPCreateLeavesNoSandbox (I8): a kill while the server is being created: its row never
-// moves to ready, what was started is killed, and no sandbox, the agent's or the server's, is left.
+// TestKillDuringMCPCreateLeavesNoSandbox (I8): a kill's own row end, or a person's Stop, that runs between
+// the row's insert and its create finds no sandbox to kill and stops the row; the create then makes one. The
+// dispatch's refused record kills it, so no sandbox, the agent's or the server's, is left, and the row never
+// moves to ready.
 func TestKillDuringMCPCreateLeavesNoSandbox(t *testing.T) {
-	f := newMCPDispatchFixture(t)
-	f.sbx.createFn = func(context.Context, runner.MCPSandboxSpec) error {
-		f.st.dispatchTestStore.mu.Lock()
-		f.st.dispatchTestStore.state = types.RunKilled
-		f.st.dispatchTestStore.mu.Unlock()
-		return nil
-	}
-	f.dispatch()
-	if f.sbx.left() != 0 || f.agentSpec().Image != "" {
-		t.Fatalf("left %d calls %v agent %v", f.sbx.left(), f.sbx.calls, f.agentSpec().Image != "")
-	}
-	if row := f.st.mcpRowsMem.get(0); row.State == store.MCPSandboxReady {
-		t.Errorf("row went ready on a killed run: %+v", row)
+	for name, end := range map[string]func(*mcpDispatchFixture){
+		"kill": func(f *mcpDispatchFixture) {
+			f.st.dispatchTestStore.mu.Lock()
+			f.st.dispatchTestStore.state = types.RunKilled
+			f.st.dispatchTestStore.mu.Unlock()
+			f.srv.endRunMCPSandboxes(context.Background(), f.run.ID, mcpEndKilled)
+		},
+		"stop": func(f *mcpDispatchFixture) {
+			if w := f.mcpRouteCall(t, f.srv.handleStopRunMCPServer, http.MethodPost, "files", "stop"); w.Code != http.StatusOK {
+				t.Errorf("stop during the create = %d %s", w.Code, w.Body.String())
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMCPDispatchFixture(t)
+			f.sbx.createFn = func(context.Context, runner.MCPSandboxSpec) error {
+				end(f)
+				return nil
+			}
+			f.dispatch()
+			if f.sbx.count("create") != 1 || f.sbx.left() != 0 || f.agentSpec().Image != "" {
+				t.Fatalf("left %d calls %v agent %v", f.sbx.left(), f.sbx.calls, f.agentSpec().Image != "")
+			}
+			if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxStopped {
+				t.Errorf("row %s (%q), want stopped by the end that raced the create", row.State, row.LastCause)
+			}
+		})
 	}
 }
 

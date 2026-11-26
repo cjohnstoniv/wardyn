@@ -103,6 +103,8 @@ func mcpSandboxIDOf(run types.AgentRun, row store.RunMCPSandbox) runner.MCPSandb
 
 // endRunMCPSandboxes ends every MCP sandbox of the run that is not stopped: each one's proxy is stopped
 // gracefully, so it flushes its last decisions, its container is killed, and its row is stopped with cause.
+// A stopped row's sandbox is killed by name too, with no row or audit written: a create that raced the
+// row's stop may have made it after that stop's kill, and a kill of a sandbox that is gone does nothing.
 // It runs on its own bound and returns nothing, so no caller's own stop or answer changes, and it is not
 // fenced: a newer revive's servers are ended too, which costs availability only. When the rows cannot be
 // read it kills every MCP object of the run by listing, so no container or secret outlives the cut; the rows
@@ -116,7 +118,7 @@ func (s *Server) endRunMCPSandboxes(ctx context.Context, runID uuid.UUID, cause 
 	defer cancel()
 	rows, err := st.ListRunMCPSandboxes(ctx, runID)
 	var run types.AgentRun
-	if err == nil && slices.ContainsFunc(rows, mcpRowUp) {
+	if err == nil && len(rows) > 0 {
 		run, err = s.cfg.Store.GetRun(ctx, runID) // the class names the substrate
 	}
 	if err != nil {
@@ -129,6 +131,9 @@ func (s *Server) endRunMCPSandboxes(ctx context.Context, runID uuid.UUID, cause 
 	for _, row := range rows {
 		if mcpRowUp(row) {
 			s.endMCPSandbox(ctx, run, row, cause)
+		} else if kerr := m.KillMCPSandbox(ctx, mcpSandboxIDOf(run, row)); kerr != nil {
+			slog.WarnContext(ctx, "wardynd: killing a stopped MCP server's sandbox failed", slog.String("run_id", runID.String()),
+				slog.String("server", row.ServerKey), slog.Any("err", kerr))
 		}
 	}
 }
@@ -703,6 +708,9 @@ func (s *Server) createRunMCPSandboxes(ctx, createCtx context.Context, run types
 		row.RelayAddr = sb.RelayAddr
 		if ok, err := st.RecordMCPSandboxCreated(ctx, run.ID, srv.ordinal, store.MCPSandboxCreated{RelayAddr: sb.RelayAddr,
 			PolicyDigest: row.PolicyDigest, ProxyConfigSealed: built.sealed}); err != nil || !ok {
+			// A kill or a person's Stop may have ended the row between the insert and the create; its kill
+			// found nothing then, and the deferred end skips a stopped row, so this kill is the one that removes it.
+			_ = m.KillMCPSandbox(ctx, built.spec.ID)
 			return fail(mcpFailStateWrite, "the MCP server "+srv.key+" could not be recorded")
 		}
 		if !setMCPRelay(spec, srv.key, sb.RelayAddr, relayTok) {
