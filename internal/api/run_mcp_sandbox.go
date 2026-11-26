@@ -82,7 +82,7 @@ const (
 	mcpEndEnded     = "ended"         // the lease's end kept the run
 	mcpEndPerson    = "person"        // a person's Stop
 	mcpEndLimit     = "restart_limit" // past mcpRestartMax restarts in mcpRestartWindow
-	mcpEndReplaced  = "superseded"    // a revive's keep found the row moved on
+	mcpEndReplaced  = "superseded"    // a revive's keep or the settle found the row moved on, or its component is gone
 )
 
 // mcpSandboxEndTimeout bounds one run's MCP end, its own bound and never the caller's: each row's graceful

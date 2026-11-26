@@ -352,6 +352,9 @@ func TestMCPRestartRefusedAfterKill(t *testing.T) {
 	if f.sbx.count("create") != 2 {
 		t.Errorf("creates %d after the kill, want none more", f.sbx.count("create"))
 	}
+	if !f.audit.has(f.run.ID, "run.mcp_sandbox.restart", "denied") {
+		t.Error("the refused Restart wrote no run.mcp_sandbox.restart denied row")
+	}
 }
 
 // TestMCPStopRoute (OP53-1): a person's Stop stops the row (person) before it kills the sandbox, writes its
@@ -431,6 +434,28 @@ func TestMCPWatcherTearsDownFailedRow(t *testing.T) {
 	f.pass()
 	if f.sbx.left() != 0 || f.sbx.count("create") != 1 {
 		t.Fatalf("left %d creates %d: want the stopped row's sandbox killed and nothing created", f.sbx.left(), f.sbx.count("create"))
+	}
+	if !f.audit.has(f.run.ID, "run.mcp_sandbox.end", "success") {
+		t.Error("the watcher's kill wrote no run.mcp_sandbox.end success row")
+	}
+}
+
+// TestMCPSettleOnLostRunKillsAndRecords: a starting server whose sandbox came up on a run lost meanwhile is
+// not moved to ready; the settle kills it and writes its end row (superseded).
+func TestMCPSettleOnLostRunKillsAndRecords(t *testing.T) {
+	f := newMCPRestartFixture(t)
+	row := f.st.mcpRowsMem.get(0)
+	if ok, err := f.st.ReopenMCPSandboxIfLive(context.Background(), f.run.ID, 0, row.UpdatedAt, "jti-x", time.Now()); err != nil || !ok {
+		t.Fatalf("reopen = %v, %v", ok, err)
+	}
+	now := time.Now()
+	f.setRun(func(r *types.AgentRun, _ *types.RunState) { r.LostAt, r.LostReason = &now, types.LostOutage })
+	f.pass()
+	if got := f.st.mcpRowsMem.get(0).State; got == store.MCPSandboxReady || f.sbx.left() != 0 {
+		t.Fatalf("row %s left %d: want it never ready and its sandbox killed", got, f.sbx.left())
+	}
+	if !f.audit.has(f.run.ID, "run.mcp_sandbox.end", "success") {
+		t.Error("the settle's kill wrote no run.mcp_sandbox.end row")
 	}
 }
 

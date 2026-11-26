@@ -46,6 +46,9 @@ var (
 	errMCPSandboxStore = errors.New("the run's MCP servers could not be read or written")
 )
 
+// mcpRestartRefused is the cause of a person's Restart refused on a run that is not live (outcome denied).
+const mcpRestartRefused = "run_ended"
+
 // mcpCreateAllowed reports whether an MCP sandbox of run may be created now (F1, MCP1R-F1), with the run's
 // current policy generation it read: the run, read again, is RUNNING with no lost mark (so not kept), its
 // containment is not pending, no revive of it is in flight on this replica, and this replica's cut set does
@@ -276,6 +279,9 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	gen, allowed := s.mcpCreateAllowed(ctx, run)
 	if !allowed {
 		_ = m.KillMCPSandbox(ctx, id)
+		if !auto { // the watcher retries each pass; a person's refusal is recorded once, with the person
+			s.auditMCPSandboxRestart(ctx, actorType, actor, row, "denied", mcpRestartRefused)
+		}
 		return errMCPRestartRunEnded
 	}
 	if row.State == store.MCPSandboxStarting {
@@ -365,7 +371,11 @@ func (s *Server) settleMCPSandbox(ctx context.Context, run types.AgentRun, row s
 	sb, err := m.MCPSandboxStatus(ctx, id)
 	if err == nil && sb.Live {
 		if ok, werr := st.MarkMCPSandboxReadyIfLive(ctx, run.ID, row.Ordinal, mcpSandboxRef(run, row.Ordinal)); werr != nil || !ok {
-			_ = m.KillMCPSandbox(ctx, id)
+			outcome := "success"
+			if m.KillMCPSandbox(ctx, id) != nil {
+				outcome = "failure"
+			}
+			s.auditMCPSandboxEnd(ctx, run.ID, types.ActorSystem, "wardynd", &row, outcome, mcpEndReplaced)
 		}
 		return
 	}
@@ -467,7 +477,10 @@ func (s *Server) mcpWatchPass(base context.Context, runID uuid.UUID) bool {
 		case store.MCPSandboxStarting:
 			s.settleMCPSandbox(lctx, run, rows[i])
 		case store.MCPSandboxFailed, store.MCPSandboxStopped:
-			_ = m.KillMCPSandbox(lctx, mcpSandboxIDOf(run, rows[i]))
+			// Only the kill that removes it is recorded: a kill that keeps failing would write a row each pass.
+			if err := m.KillMCPSandbox(lctx, mcpSandboxIDOf(run, rows[i])); err == nil {
+				s.auditMCPSandboxEnd(lctx, run.ID, types.ActorSystem, "wardynd", &rows[i], "success", rows[i].LastCause)
+			}
 		case store.MCPSandboxReady:
 			if err := s.restartMCPSandbox(lctx, run, a.ServerKey, types.ActorSystem, "wardynd", true); err != nil && !errors.Is(err, errMCPRestartRunEnded) {
 				slog.WarnContext(lctx, "wardynd: the MCP watcher could not restart a server", slog.String("run_id", runID.String()),
