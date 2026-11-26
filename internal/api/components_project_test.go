@@ -52,7 +52,8 @@ func TestRedactComponentForRead(t *testing.T) {
 	}}
 	for _, tier := range []specReadTier{specReadSecurity, specReadMember} {
 		raw := string(mustJSON(redactComponentForRead(c, tier)))
-		if strings.Contains(raw, "/srv/host-secret-path") || !strings.Contains(raw, mountSourceWithheld) {
+		// json.Marshal escapes "<" and ">", so look for the marker as it is written on the wire.
+		if strings.Contains(raw, "/srv/host-secret-path") || !strings.Contains(raw, strings.Trim(string(mustJSON(mountSourceWithheld)), `"`)) {
 			t.Errorf("tier %d: %s, want the mount source withheld", tier, raw)
 		}
 	}
