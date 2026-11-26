@@ -38,6 +38,7 @@
 | The launch names | Pool it runs in |
 |---|---|
 | A pool (`runner_pool_id`, `wardyn run --pool`) | That pool, when you may use it. |
+| No pool, sites on, and the run's homed drives at one site | That [site](sites.md)'s default pool, when you may use it; otherwise the next row applies. |
 | No pool, and you have a default | Your default pool (`wardyn runner pool default set <pool>`). |
 | No pool, and only the organization has a default | The organization's (`wardyn runner pool org-default set --pool <pool>`, admin). |
 | No pool, and no default applies | Refused `runner_pool_required`. |

@@ -52,6 +52,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run that
   names a disk drive is refused at create and at Review, because the server cannot read the table.
+- Sites: an admin names a place, such as an office or a cloud region, puts organization runner pools and admin drives at it, and picks one of its pools as its default. A run that names no pool and whose homed drives are all at one site goes to that site's default pool, ahead of the person's and the organization's defaults; the run and its `run.create` audit row name the site. Routes `/org-sites`, `/runner-pools/{id}/site` and `/drives/{id}/site`; see [Sites](docs/operations/sites.md).
 
 ### Changed
 
@@ -79,6 +80,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   other than that table's owner. If the app role is not one of those roles or a member of one, grant it the same on each
   table as soon as the migration has run. The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover the three
   tables granted fewer verbs: the migrations take every other privilege on them away from every role but their owner.
+- Sites are off until an admin sets `features.org_sites.enabled` in the site config. While they are off, where a run goes and what its record and audit row say do not change. Migrations `04xx_org_sites` and `04xx_run_site` add the tables `org_sites`, `org_site_pools` and `org_site_drives` and the column `agent_runs.site_id`, and grant the app role the new tables on split-role installs. Stop every wardynd older than 0.11 first: an older server cannot read a run that a site's default pool placed.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `org_sites`, `org_site_pools` and `org_site_drives` to every role that was granted `UPDATE` on `runner_pools`, other than that table's owner. An install that granted by hand grants the new tables to the role that updates runner pools.
 
 ## [0.11.0-rc.3] — 2026-11-25
 

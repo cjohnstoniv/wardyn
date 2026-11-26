@@ -14,9 +14,36 @@ import (
 // Choice is what a request itself says: an explicit pool. The placement a
 // request asks for narrows the resolved pool's runners afterwards (the api's
 // kindTargets), so it plays no part here.
+//
+// SiteDefault is the default pool of the one site every homed drive of the run
+// is at, nil for none. Pinned says something already holds the run to one
+// runner (a drive or workspace folder bound to it, a kept machine, a request
+// that names its runner): the site step is then skipped, so a site pool that
+// does not hold that runner never refuses a run that would otherwise place.
 type Choice struct {
-	PoolID *uuid.UUID
+	PoolID      *uuid.UUID
+	SiteDefault *uuid.UUID
+	Pinned      bool
 }
+
+// SitePreference is what the site step made of the run's drives' site, for
+// run.create's audit row. Empty: the step did not run, because the request
+// named its pool or no drive of the run is homed at a site.
+type SitePreference string
+
+const (
+	// SiteMet: the site's default pool was chosen.
+	SiteMet SitePreference = "met"
+	// SiteUnusable: the run's drives share a site whose default pool the
+	// caller cannot use now (none set, gone, switched off, or not in the
+	// caller's catalogue), so the next default was tried.
+	SiteUnusable SitePreference = "unusable"
+	// SiteAmbiguous: the run's drives are homed at different sites, so no site
+	// is preferred. The caller decides it from the drives; Resolve never does.
+	SiteAmbiguous SitePreference = "ambiguous"
+	// SitePinned: the run is held to one runner, so the site step was skipped.
+	SitePinned SitePreference = "pinned"
+)
 
 // Refusal is a pool selection that cannot proceed, and the sentence to show.
 type Refusal struct {
@@ -90,25 +117,46 @@ func (r *Refusal) Message() string {
 // already dropped every pool the person may not use, so a pool absent from it
 // is indistinguishable from one that does not exist.
 //
-// An explicit pool wins, then the person's own default pool, then the
-// organisation's. A default that is gone or switched off is refused, never
-// replaced by another default or another pool: the person must choose.
+// An explicit pool wins, then the default pool of the site the run's drives
+// are at, then the person's own default pool, then the organisation's. A
+// person's or organisation's default that is gone or switched off is refused,
+// never replaced by another default or another pool: the person must choose.
+// A site default the caller cannot use is passed over instead, and never
+// refuses: a site only prefers, it grants nothing.
 func Resolve(permitted []types.RunnerPool, c Choice, personal, org types.RunnerPoolDefaults) (types.ResolvedRunnerPool, *Refusal) {
+	pool, _, ref := ResolveSite(permitted, c, personal, org)
+	return pool, ref
+}
+
+// ResolveSite is Resolve, also answering what the site step made of c
+// (SiteMet, SiteUnusable or SitePinned; empty when it did not run).
+func ResolveSite(permitted []types.RunnerPool, c Choice, personal, org types.RunnerPoolDefaults) (types.ResolvedRunnerPool, SitePreference, *Refusal) {
 	if c.PoolID != nil {
-		return resolveExplicit(permitted, c)
+		pool, ref := resolveExplicit(permitted, c)
+		return pool, "", ref
+	}
+	var pref SitePreference
+	switch {
+	case c.Pinned:
+		pref = SitePinned
+	case c.SiteDefault != nil:
+		if pool, ok := find(permitted, *c.SiteDefault); ok && pool.State == types.RunnerPoolActive {
+			return resolved(pool, types.RunnerPoolSelectedSite), SiteMet, nil
+		}
+		pref = SiteUnusable
 	}
 	source, id := types.RunnerPoolSelectedPersonal, personal.PoolID
 	if id == nil {
 		source, id = types.RunnerPoolSelectedOrg, org.PoolID
 	}
 	if id == nil {
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonRequired}
+		return types.ResolvedRunnerPool{}, pref, &Refusal{Reason: ReasonRequired}
 	}
 	pool, ok := find(permitted, *id)
 	if !ok || pool.State != types.RunnerPoolActive {
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonDefaultUnavailable, Source: source}
+		return types.ResolvedRunnerPool{}, pref, &Refusal{Reason: ReasonDefaultUnavailable, Source: source}
 	}
-	return resolved(pool, source), nil
+	return resolved(pool, source), pref, nil
 }
 
 func resolveExplicit(permitted []types.RunnerPool, c Choice) (types.ResolvedRunnerPool, *Refusal) {
