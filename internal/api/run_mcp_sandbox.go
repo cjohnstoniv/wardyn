@@ -312,7 +312,7 @@ func (s *Server) mcpSandboxDispatchFor(ctx context.Context, run types.AgentRun, 
 	comps, local, err := s.mcpRunServers(ctx, run.ID)
 	if err != nil || len(local) == 0 {
 		slog.ErrorContext(ctx, "wardynd: reading the run's MCP servers at dispatch failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's MCP servers could not be read")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's MCP servers could not be read") // PROPOSED
 		return nil, false
 	}
 	return &mcpSandboxDispatch{comps: comps, servers: local, grants: make([]mcpServerGrants, len(local))}, true
@@ -411,7 +411,7 @@ func (s *Server) resolveMCPServerOwn(ctx context.Context, run types.AgentRun, sr
 	rctx := audit.WithMCPSandbox(ctx, srv.key)
 	names, envResident, placed := s.resolveEnvSecretValues(rctx, run, types.RunPolicySpec{EligibleGrants: g.env}, rows, all)
 	if len(envResident) > 0 {
-		return mcpOwn{}, "the MCP server " + srv.key + " has a secret kept on the runner, which its sandbox cannot be given"
+		return mcpOwn{}, "the MCP server " + srv.key + " has a secret kept on the runner, which its sandbox cannot be given" // PROPOSED
 	}
 	for _, n := range names {
 		own.secretEnv[n] = all[n]
@@ -421,10 +421,10 @@ func (s *Server) resolveMCPServerOwn(ctx context.Context, run types.AgentRun, sr
 	}
 	files, _, fileResident, ok := s.resolveFileSecretValues(rctx, run, types.RunPolicySpec{EligibleGrants: g.files}, rows)
 	if !ok {
-		return mcpOwn{}, "the run's runner cannot deliver a file to the MCP server " + srv.key
+		return mcpOwn{}, "the run's runner cannot deliver a file to the MCP server " + srv.key // PROPOSED
 	}
 	if len(fileResident) > 0 {
-		return mcpOwn{}, "the MCP server " + srv.key + " has a secret kept on the runner, which its sandbox cannot be given"
+		return mcpOwn{}, "the MCP server " + srv.key + " has a secret kept on the runner, which its sandbox cannot be given" // PROPOSED
 	}
 	own.files = files
 	for _, f := range files {
@@ -656,7 +656,7 @@ func (s *Server) createRunMCPSandboxesAt(ctx, createCtx context.Context, run typ
 	b, err := s.mcpPolicyBaseAt(ctx, d, spec.ProxyConfig.Policy, layers, ceiling)
 	if err != nil {
 		stopCreateLease()
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the ceiling an MCP server's policy is held to could not be read")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the ceiling an MCP server's policy is held to could not be read") // PROPOSED
 		return false
 	}
 	return s.createRunMCPSandboxes(ctx, createCtx, run, spec, d, b, site, siteErr, stopCreateLease)
@@ -684,26 +684,26 @@ func (s *Server) createRunMCPSandboxes(ctx, createCtx context.Context, run types
 		return fail(reason, sentence)
 	}
 	if leak := mcpAgentSpecLeak(*spec, d.servers, d.own); leak != "" {
-		return fail(reasonMCPOwnSandboxUnsupported, "an MCP server's secret reached the agent's sandbox ("+leak+"); the run was stopped")
+		return fail(reasonMCPOwnSandboxUnsupported, "an MCP server's secret reached the agent's sandbox ("+leak+"); the run was stopped") // PROPOSED
 	}
 	st, m, _ := s.mcpSandboxSeams()
 	for i, srv := range d.servers {
 		pol, err := s.mcpSandboxPolicy(ctx, b, srv.index)
 		if err != nil {
-			return fail(reasonMCPOwnSandboxUnsupported, "the policy of the MCP server "+srv.key+" could not be derived")
+			return fail(reasonMCPOwnSandboxUnsupported, "the policy of the MCP server "+srv.key+" could not be derived") // PROPOSED
 		}
 		relayTok, relaySHA := mcpRelayToken()
 		built, err := s.buildMCPSandbox(ctx, run, spec.Image, srv, pol, d.own[i], relaySHA)
 		if err != nil {
 			slog.ErrorContext(ctx, "wardynd: building an MCP server's sandbox failed", slog.String("run_id", run.ID.String()), slog.String("server", srv.key), slog.Any("err", err))
-			return fail(reasonMCPOwnSandboxUnsupported, "the sandbox of the MCP server "+srv.key+" could not be prepared")
+			return fail(reasonMCPOwnSandboxUnsupported, "the sandbox of the MCP server "+srv.key+" could not be prepared") // PROPOSED
 		}
 		built.spec.OnWaiting = spec.OnWaiting
 		row := store.RunMCPSandbox{RunID: run.ID, Ordinal: srv.ordinal, ServerKey: srv.key, State: store.MCPSandboxStarting,
 			PolicyDigest: pol.spec.Digest(), Reserved: mcpReserved(pol.spec.Resources), ProxyConfigSealed: built.sealed,
 			RelayTokenSHA256: relaySHA, CPTokenJTI: built.jti, GrantIDs: mcpGrantIDs(d.own[i])}
 		if err := st.InsertRunMCPSandbox(ctx, row); err != nil {
-			return fail(mcpFailStateWrite, "the MCP server "+srv.key+" could not be recorded")
+			return fail(mcpFailStateWrite, "the MCP server "+srv.key+" could not be recorded") // PROPOSED
 		}
 		sb, err := m.CreateMCPSandbox(createCtx, built.spec)
 		if err != nil {
@@ -714,7 +714,7 @@ func (s *Server) createRunMCPSandboxes(ctx, createCtx context.Context, run types
 			if cause == reasonMCPSandboxHostReachable {
 				return fail(cause, mcpSandboxSentence(mcpHostReachableSentence, srv.key, ""))
 			}
-			return fail(reasonMCPOwnSandboxUnsupported, "the sandbox of the MCP server "+srv.key+" could not be created")
+			return fail(reasonMCPOwnSandboxUnsupported, "the sandbox of the MCP server "+srv.key+" could not be created") // PROPOSED
 		}
 		row.RelayAddr = sb.RelayAddr
 		if ok, err := st.RecordMCPSandboxCreated(ctx, run.ID, srv.ordinal, store.MCPSandboxCreated{RelayAddr: sb.RelayAddr,
@@ -722,10 +722,10 @@ func (s *Server) createRunMCPSandboxes(ctx, createCtx context.Context, run types
 			// A kill or a person's Stop may have ended the row between the insert and the create; its kill
 			// found nothing then, and the deferred end skips a stopped row, so this kill is the one that removes it.
 			_ = m.KillMCPSandbox(ctx, built.spec.ID)
-			return fail(mcpFailStateWrite, "the MCP server "+srv.key+" could not be recorded")
+			return fail(mcpFailStateWrite, "the MCP server "+srv.key+" could not be recorded") // PROPOSED
 		}
 		if !setMCPRelay(spec, srv.key, sb.RelayAddr, relayTok) {
-			return fail(reasonMCPOwnSandboxUnsupported, "the MCP server "+srv.key+" has no entry in the agent's configuration")
+			return fail(reasonMCPOwnSandboxUnsupported, "the MCP server "+srv.key+" has no entry in the agent's configuration") // PROPOSED
 		}
 		d.made = append(d.made, mcpMade{srv: srv, row: row, pol: pol})
 	}

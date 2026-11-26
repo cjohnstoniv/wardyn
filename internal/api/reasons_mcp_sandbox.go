@@ -43,7 +43,8 @@ const (
 	mcpSandboxStartingSentence    = "<server> is still starting. Restart it once it is ready."
 	mcpSandboxUnavailableSentence = "The run's MCP servers could not be read just now. Try again."
 	// mcpHostReachableSentence is the dispatch refusal on a runner whose MCP sandboxes would be reachable from
-	// its host (runner.ErrMCPSandboxHostReachable). It is not yet an approved template.
+	// its host (runner.ErrMCPSandboxHostReachable).
+	// PROPOSED: this sentence is not in the approved strings yet; it waits on the owner's review.
 	mcpHostReachableSentence = "This runner can't keep <server> off its host: its Docker Engine is older than 28.0.0. Update Docker on the runner, or remove <server>."
 	// mcpSaveOffSentence is the component save's refusal while the switch is off, in the validator's form.
 	mcpSaveOffSentence = "mcp.transport: MCP servers that start from a command are turned off here."

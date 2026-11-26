@@ -541,6 +541,7 @@ func TestMCPSandboxSentencesMatchCanon(t *testing.T) {
 	for _, got := range []string{
 		mcpOwnSandboxOffSentence, mcpOwnSandboxUnsupportedSentence, mcpOwnSandboxMacSentence, mcpOwnSandboxLinuxVMSentence,
 		mcpSandboxLimitSentence, mcpReviveOffSentence, mcpReviveLegacySentence, mcpSaveOffSentence, mcpRunnerUnnamed,
+		mcpSandboxRunEndedSentence, mcpSandboxUnknownSentence,
 		"mcp.sandbox.policy.overlay.allowed_domains: " + mcpNarrowerWidensSentence,
 	} {
 		if !canon[got] {
