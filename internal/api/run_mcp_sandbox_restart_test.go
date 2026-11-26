@@ -581,6 +581,23 @@ func TestMCPRestartPastItsBoundLeavesNoRestartingRow(t *testing.T) {
 	}
 }
 
+// TestMCPWatcherFailsAnUnpreparableServer: a watcher restart that cannot prepare the server's sandbox (here
+// the run records no image) fails the row, so the next pass leaves it: two passes write one restart failure
+// row, create nothing and leave the row failed.
+func TestMCPWatcherFailsAnUnpreparableServer(t *testing.T) {
+	f := newMCPRestartFixture(t)
+	f.crash()
+	f.setRun(func(r *types.AgentRun, _ *types.RunState) { r.Image = "" })
+	f.pass()
+	f.pass()
+	if n := len(f.audit.eventsFor(f.run.ID, "run.mcp_sandbox.restart")); n != 1 || !f.audit.has(f.run.ID, "run.mcp_sandbox.restart", "failure") {
+		t.Errorf("restart rows %d, want one failure row", n)
+	}
+	if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxFailed || row.LastCause != mcpFailCreate || f.sbx.count("create") != 1 {
+		t.Errorf("row %s (%q), creates %d: want failed (create) and no new create", row.State, row.LastCause, f.sbx.count("create"))
+	}
+}
+
 // TestMCPWatcherTwoReplicas: each replica's cut set is its own. Replica A is the fixture's server, replica B
 // a second server over the same store; B's revive is the store's state after it (lost_at null, the run's
 // generation advanced, or put back where an untouched failure abandoned it).

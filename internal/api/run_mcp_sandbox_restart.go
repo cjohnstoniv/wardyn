@@ -260,7 +260,7 @@ func (s *Server) createAndStartMCP(ctx context.Context, run types.AgentRun, rc m
 // row moved to restarting with a fresh token only while it is as read here and the run is live, the sandbox
 // created and started, and the row moved to ready only while the run is still live; a false answer kills
 // what it started. A hit on the cut set after that write kills it and ends the run's rows. A failed
-// create or start fails that row alone.
+// create or start fails that row alone, and so does the watcher's restart that cannot prepare the sandbox.
 func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key string, actorType types.ActorType, actor string, auto bool) error {
 	st, m, ok := s.mcpSandboxSeams()
 	if !ok {
@@ -313,7 +313,15 @@ func (s *Server) restartMCPSandbox(ctx context.Context, run types.AgentRun, key 
 	}
 	rc, err := s.prepareMCPRecreate(ctx, run, b, servers[j], row, grants, w)
 	if err != nil {
-		s.auditMCPSandboxRestart(ctx, actorType, actor, row, "failure", mcpFailCreate)
+		wctx, cancel := mcpReviveWriteContext(ctx)
+		defer cancel()
+		if auto {
+			// What stops a prepare can last (a secret now withheld, a refused own grant, no image), and the
+			// watcher would try again every pass: the row is failed, which it never restarts. A person's
+			// Restart may still try.
+			_, _ = st.FailMCPSandboxIfUp(wctx, run.ID, row.Ordinal, mcpFailCreate)
+		}
+		s.auditMCPSandboxRestart(wctx, actorType, actor, row, "failure", mcpFailCreate)
 		return err
 	}
 	_ = m.KillMCPSandbox(ctx, id) // the old proxy drains first
