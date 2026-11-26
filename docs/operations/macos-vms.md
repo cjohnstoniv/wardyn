@@ -143,7 +143,7 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 - Serve the CRL over https. Over http, a control plane that has just started takes any unexpired CRL signed by your CA as its first.
 - It fails closed. A CRL that cannot be fetched is used until its next-update time or 24 hours after the last good fetch, whichever comes first. Then every Mac is refused until a fetch succeeds.
 - After a failed fetch the control plane retries after 1 minute, doubling to 10 minutes. The refusal names the cause: `timeout`, `network`, `status`, `size`, `redirect`, `parse`, `signature`, `unsupported`, `expired` or `older`.
-- The macOS runner presents the device identities your MDM installed in the System keychain while a CA is set: when it connects and every 6 hours. With no CA set it never reads the keychain. This has not yet been tried on a real Mac.
+- The macOS runner presents the device identities your MDM installed in the System keychain while a CA is set: when it connects and every 6 hours. A Mac that connects while no CA is set never reads the keychain. This has not yet been tried on a real Mac.
 - Setting a CA where none was set, or clearing it, ends each connected Mac runner's session once, within one 15-second ping interval. The runner reconnects with the new setting, and its running sandboxes keep running; a terminal open to one of them is disconnected.
 - Replacing one CA with another ends no session. Each Mac presents again at its next 6-hourly report or reconnect; until then, a Mac whose stored certificate is from the old CA is refused.
 - A runner on 0.11.0-rc.2 or 0.11.0-rc.3 reads the keychain whether or not a CA is set. A newer runner presents nothing to an organisation on 0.11.0-rc.3 or earlier.
