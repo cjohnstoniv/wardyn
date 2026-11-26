@@ -171,7 +171,8 @@ func mcpCanonicalDenies(deny []string) []string {
 
 // mcpSandboxResources is the size of a server's sandbox: what "own" authored, else the default, each field at
 // most bound's ("own" passes its clamp's size, so the creator's ceiling bounds CPU, memory and pids; the other
-// modes pass nil and author nothing) and capped by the creator's per-sandbox caps.
+// modes pass nil and author nothing) and capped by the creator's per-sandbox caps. Its disk is bound's, which
+// the clamp already sized against the ceiling, capped by MaxEphemeralDiskMiB as a dispatch caps it.
 func mcpSandboxResources(authored, bound *types.ResourceLimits, limits types.GovernanceLimits) *types.ResourceLimits {
 	r := types.ResourceLimits{CPUMillis: mcpSandboxDefaultCPUMillis, MemoryMiB: mcpSandboxDefaultMemoryMiB}
 	if authored != nil {
@@ -193,6 +194,7 @@ func mcpSandboxResources(authored, bound *types.ResourceLimits, limits types.Gov
 		r.CPUMillis = atMost(r.CPUMillis, bound.CPUMillis)
 		r.MemoryMiB = atMost(r.MemoryMiB, bound.MemoryMiB)
 		r.PidsLimit = atMost(r.PidsLimit, bound.PidsLimit)
+		r.DiskMiB = bound.DiskMiB
 	}
 	if limits.MaxCPUMillis > 0 {
 		r.CPUMillis = min(r.CPUMillis, limits.MaxCPUMillis)
@@ -200,6 +202,7 @@ func mcpSandboxResources(authored, bound *types.ResourceLimits, limits types.Gov
 	if limits.MaxMemoryMiB > 0 {
 		r.MemoryMiB = min(r.MemoryMiB, limits.MaxMemoryMiB)
 	}
+	r.DiskMiB = composer.CapDiskMiB(r.DiskMiB, limits.MaxEphemeralDiskMiB)
 	return &r
 }
 

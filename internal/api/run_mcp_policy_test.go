@@ -229,19 +229,24 @@ func TestMCPPolicyOwnLeqClampCeiling(t *testing.T) {
 // member ceiling of 2000 millicpu and 4096 MiB with no per-sandbox caps, is cut to the ceiling on every field
 // and is within it.
 func TestMCPPolicyOwnSizeWithinCeiling(t *testing.T) {
-	own := &types.RunPolicySpec{AllowedDomains: []string{"own.test"}, Resources: &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 262144, PidsLimit: 100000}}
+	own := &types.RunPolicySpec{AllowedDomains: []string{"own.test"},
+		Resources: &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 262144, PidsLimit: 100000, DiskMiB: 1048576}}
 	c := mcpOwnCeiling()
 	c.Limits = types.GovernanceLimits{}
+	c.Spec.Resources.DiskMiB = 8192
 	run := mcpPolicyRun()
 	run.MinConfinementClass = types.CC1
 	p := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: run, ceiling: c,
 		comps: mcpPolicyComps(&types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: own})})
 	r := p.spec.Resources
-	if r == nil || r.CPUMillis > 2000 || r.MemoryMiB > 4096 || r.PidsLimit <= 0 || r.PidsLimit >= 100000 {
-		t.Fatalf("own resources = %+v, want at most 2000m and 4096 MiB and a capped pids limit", r)
+	if r == nil || r.CPUMillis > 2000 || r.MemoryMiB > 4096 || r.PidsLimit <= 0 || r.PidsLimit >= 100000 || r.DiskMiB <= 0 || r.DiskMiB > 8192 {
+		t.Fatalf("own resources = %+v, want at most 2000m, 4096 MiB and 8192 MiB of disk, and a capped pids limit", r)
 	}
 	if !composer.Leq(p.spec, c.Spec, c.Limits, c.Limits) {
 		t.Fatalf("own %+v is not within its ceiling %+v", r, c.Spec.Resources)
+	}
+	if got := mcpSandboxResources(nil, &types.ResourceLimits{DiskMiB: 8192}, types.GovernanceLimits{MaxEphemeralDiskMiB: 1024}); got.DiskMiB != 1024 {
+		t.Fatalf("disk under a 1024 MiB cap = %d, want 1024", got.DiskMiB)
 	}
 }
 
