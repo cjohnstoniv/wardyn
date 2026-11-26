@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -501,6 +502,17 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 
 // DetectorSidecarFormatPresidio is the one detector_sidecar_format other than Wardyn's own.
 const DetectorSidecarFormatPresidio = "presidio"
+
+// AuthoredSecretValuesProblem refuses raw workspace_secret_values on a write: only dispatch fills them, in memory,
+// on the copy handed to the proxy, and a writer names the secrets in workspace_secret_names instead. nil when
+// li is nil or carries none.
+func (li *LLMInspectionSpec) AuthoredSecretValuesProblem() error {
+	if li == nil || len(li.WorkspaceSecretValues) == 0 {
+		return nil
+	}
+	return errors.New("llm_inspection.workspace_secret_values may not be set on a policy write " +
+		"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
+}
 
 // LLMInspectionSpec configures optional outbound LLM prompt inspection for a
 // run. The zero value (or a nil *LLMInspectionSpec on the policy) means OFF.

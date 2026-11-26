@@ -66,6 +66,10 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 	"GET /api/v1/runs/{id}/attach":               {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
 	"GET /api/v1/setup/status":                   {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
 	"GET /api/v1/me/machines":                    {"the caller's effective ceiling decides whether they may keep another machine (keptMachineKeepRefusal reads deny_kept_machines); the answer is their own machines, a count, a limit and a reason, never a spec", ""},
+	"GET /api/v1/me/components": {"mine is the caller's own rows, served whole because the Settings editor sends each back through withStored; " +
+		"org rows go through orgComponentView, which carries no MCP sandbox policy, and a raw secret value is refused at save", ""},
+	"GET /api/v1/components": {"operator-only (requireOperator), so always read at the full tier, and the admin editor sends each row back whole; " +
+		"a raw secret value in an MCP sandbox overlay is refused at save", ""},
 }
 
 // specCensus is the parsed source the route census reads.

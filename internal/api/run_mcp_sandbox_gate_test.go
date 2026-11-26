@@ -97,10 +97,14 @@ var mcpGatePlacements = []mcpGatePlacement{
 func TestMCPSandboxGate(t *testing.T) {
 	for _, flag := range []string{"", "1"} {
 		for _, setting := range []string{"unset", "off", "on", "read error"} {
-			for _, kind := range []types.MachineKind{types.MachineContainer, types.MachineLinuxVM, types.MachineMacOSVM} {
+			for _, kind := range []types.MachineKind{"", types.MachineContainer, types.MachineLinuxVM, types.MachineMacOSVM} {
 				for _, pl := range mcpGatePlacements {
 					for _, count := range []int{4, 5} {
-						name := strings.Join([]string{"flag=" + flag, setting, string(kind), pl.name, map[int]string{4: "4", 5: "5"}[count]}, "/")
+						kindName := map[types.MachineKind]string{"": "omitted"}[kind]
+						if kindName == "" {
+							kindName = string(kind)
+						}
+						name := strings.Join([]string{"flag=" + flag, setting, kindName, pl.name, map[int]string{4: "4", 5: "5"}[count]}, "/")
 						t.Run(name, func(t *testing.T) {
 							t.Setenv(envMCPOwnSandbox, flag)
 							mcpGateMatrixRow(t, flag, setting, kind, pl, count)
@@ -141,6 +145,11 @@ func mcpGateMatrixRow(t *testing.T, flag, setting string, kind types.MachineKind
 		return
 	}
 	// The fold: macOS VM, Linux VM, local or a kind the executor lacks, then the count.
+	// An omitted kind is a container run, named "container" as an executor advertises it.
+	advertised := kind
+	if advertised == "" {
+		advertised = types.MachineContainer
+	}
 	req := createRunRequest{MachineKind: string(kind)}
 	req.Placement = pl.req
 	got := s.mcpSandboxRefusal(context.Background(), req, pl.place, stdioComps(count))
@@ -150,7 +159,7 @@ func mcpGateMatrixRow(t *testing.T, flag, setting string, kind types.MachineKind
 		wantReason, want = reasonMCPOwnSandboxUnsupported, "A macOS VM run can't start an MCP server in its own sandbox. Choose another machine, or remove files."
 	case kind == types.MachineLinuxVM:
 		wantReason, want = reasonMCPOwnSandboxUnsupported, "Local MCP servers can't run beside a Linux VM yet. Choose a container machine, use a remote (HTTPS) MCP server, or remove files."
-	case pl.local || !slices.Contains(pl.kinds, kind):
+	case pl.local || !slices.Contains(pl.kinds, advertised):
 		wantReason, want = reasonMCPOwnSandboxUnsupported, "This runner can't start an MCP server in its own sandbox. Choose a runner that can, or remove files."
 	case count > mcpSandboxMax:
 		wantReason, want = reasonMCPSandboxLimit, "A run can have at most 4 MCP servers in their own sandboxes. Remove one, then launch again."
@@ -215,7 +224,7 @@ func TestMCPSandboxGatePassesRemoteServers(t *testing.T) {
 		MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportHTTP, URL: "https://mcp.linear.test/mcp"}}}}
 	s := &Server{}
 	s.cfg.Store, s.cfg.Runner = mcpSiteStore{err: errors.New("unreadable")}, mcpKindsRunner{}
-	for _, kind := range []types.MachineKind{types.MachineContainer, types.MachineLinuxVM, types.MachineMacOSVM} {
+	for _, kind := range []types.MachineKind{"", types.MachineContainer, types.MachineLinuxVM, types.MachineMacOSVM} {
 		req := createRunRequest{MachineKind: string(kind)}
 		req.Placement = types.PlacementLocal
 		if got := s.mcpSandboxRefusal(context.Background(), req, runPlacement{}, runComponents{attached: []attachedComponent{remote}}); got != nil {

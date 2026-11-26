@@ -102,7 +102,8 @@ func (s *Server) handleSetComponentOwningUnit(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "read component", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, saved)
+	// A security admin who is not the author reads the answer, and never sends it back as a component body.
+	writeJSON(w, http.StatusOK, redactComponentForRead(saved, s.specReadTierFor(r.Context())))
 }
 
 // componentPinTarget reads what a pin write needs before it decides, or writes the refusal and returns

@@ -174,8 +174,8 @@ func (m ComponentMCP) validateLocal() error {
 }
 
 // validate checks a stdio server's sandbox block: a mode of the three, an overlay only on narrower and a
-// spec only on own, nothing in a spec an MCP sandbox cannot have, and no hold rule, which raises a kind of
-// approval an MCP sandbox may not raise.
+// spec only on own, nothing in a spec an MCP sandbox cannot have, no raw secret value in an overlay (as a
+// policy write refuses one), and no hold rule, which raises a kind of approval an MCP sandbox may not raise.
 func (b *ComponentMCPSandbox) validate() error {
 	if b == nil {
 		return nil
@@ -198,6 +198,11 @@ func (b *ComponentMCPSandbox) validate() error {
 		}
 		if err := mcpSandboxNoHold("mcp.sandbox.policy.spec", p.Spec.HostRules); err != nil {
 			return err
+		}
+	}
+	if p.Overlay != nil {
+		if err := p.Overlay.LLMInspection.AuthoredSecretValuesProblem(); err != nil {
+			return fmt.Errorf("mcp.sandbox.policy.overlay.%w", err)
 		}
 	}
 	if p.Overlay != nil && p.Overlay.HostRules != nil {
