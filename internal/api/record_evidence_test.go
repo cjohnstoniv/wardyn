@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -918,5 +919,65 @@ func TestRecordConfinedReplayWaitsForAnAuditPosition(t *testing.T) {
 	newTestSrv(t, positionlessStore{open}).reconcileRecordRun(context.Background(), runID)
 	if res := open.savedResult(t, "build"); res.Status != recordStatusRecorded {
 		t.Fatalf("open recording: status %q, want recorded", res.Status)
+	}
+}
+
+// mcpSandboxRow is ev as an MCP proxy's request writes it: its data carries the server key (audit.StampMCPSandbox).
+func mcpSandboxRow(ev types.AuditEvent) types.AuditEvent {
+	ev.Data = audit.StampMCPSandbox(audit.WithMCPSandbox(context.Background(), "github"), ev.Data)
+	return ev
+}
+
+// replayVerdict is the result a confined replay whose trail holds row gets at its capture.
+func replayVerdict(t *testing.T, row func(uuid.UUID) types.AuditEvent) RecordTaskResult {
+	t.Helper()
+	fake, runID := confinedRecording(t)
+	fake.events = append(fake.events, row(runID))
+	newTestSrv(t, fake).reconcileRecordRun(context.Background(), runID)
+	return fake.savedResult(t, "verify:build")
+}
+
+// An MCP proxy's summary of decisions it dropped, or its spool's report of decisions it lost or refused for room
+// (runHasDeny), is the server's, not the agent's: it leaves the agent's confined replay clean. The same row with
+// no server key is the agent's, and still fails the replay.
+func TestRecordReplayLeavesOutAnMCPProxysLostDecisions(t *testing.T) {
+	for _, tc := range []struct{ rule, hint string }{
+		{"egress:dropped-decisions-3", recordDecisionsDroppedHint},
+		{"builtin:spool-lost", recordDecisionsLostHint},
+		{"builtin:spool-full", recordSpoolFullHint},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			row := func(runID uuid.UUID) types.AuditEvent {
+				return types.AuditEvent{ID: uuid.New(), RunID: &runID, Action: "egress.deny", Outcome: "denied",
+					Data: mustJSON(map[string]any{"host": "", "rule_source": tc.rule})}
+			}
+			mcp := func(id uuid.UUID) types.AuditEvent { return mcpSandboxRow(row(id)) }
+			if res := replayVerdict(t, mcp); res.Status == recordStatusFailed || res.Clean == nil || !*res.Clean {
+				t.Fatalf("MCP proxy row: status %q, clean %v, hint %q; want a clean replay", res.Status, res.Clean, res.FailureHint)
+			}
+			if res := replayVerdict(t, row); res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != tc.hint {
+				t.Fatalf("agent row: status %q, clean %v, hint %q; want record_failed, no verdict, hint %q", res.Status, res.Clean, res.FailureHint, tc.hint)
+			}
+		})
+	}
+}
+
+// A post of an MCP proxy that the decision door refused or could not take (runDecisionPostRefused) is the server's,
+// not the agent's: it leaves the agent's confined replay clean. The same row with no server key is the agent's,
+// and still fails the replay.
+func TestRecordReplayLeavesOutAnMCPProxysRefusedDecisionPost(t *testing.T) {
+	for name, row := range map[string]func(uuid.UUID) types.AuditEvent{
+		"refused": refusedDecisionPost,
+		"lost":    lostDecisionPost,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mcp := func(id uuid.UUID) types.AuditEvent { return mcpSandboxRow(row(id)) }
+			if res := replayVerdict(t, mcp); res.Status == recordStatusFailed || res.Clean == nil || !*res.Clean {
+				t.Fatalf("MCP proxy row: status %q, clean %v, hint %q; want a clean replay", res.Status, res.Clean, res.FailureHint)
+			}
+			if res := replayVerdict(t, row); res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordDecisionRefusedHint {
+				t.Fatalf("agent row: status %q, clean %v, hint %q; want record_failed, no verdict, the refused-report hint", res.Status, res.Clean, res.FailureHint)
+			}
+		})
 	}
 }

@@ -170,13 +170,15 @@ func runSpoolWasFull(events []types.AuditEvent) bool {
 	return runHasDeny(events, func(rule string) bool { return rule == ruleSourceSpoolFull })
 }
 
-// runHasDeny reports whether events hold an egress deny whose rule source matches.
+// runHasDeny reports whether events hold an egress deny whose rule source matches. A row an MCP proxy's
+// request wrote (audit.MCPSandboxOfData) is the server's, not the agent's, and is left out.
 func runHasDeny(events []types.AuditEvent, match func(rule string) bool) bool {
 	for _, ev := range events {
 		var d struct {
 			RuleSource string `json:"rule_source"`
 		}
-		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && match(d.RuleSource) {
+		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && match(d.RuleSource) &&
+			audit.MCPSandboxOfData(ev.Data) == "" {
 			return true
 		}
 	}
@@ -186,9 +188,11 @@ func runHasDeny(events []types.AuditEvent, match func(rule string) bool) bool {
 // runDecisionPostRefused reports whether events hold internalAuth's refusal of a post to the decision door,
 // such as one the egress proxy sent after its run's tail grace (terminalGraceRoutes), or a post the door
 // could not take (runReportLostAction). What it posted is not on the trail, and it could have been a deny.
+// A refused post of an MCP proxy (audit.MCPSandboxOfData) is the server's, not the agent's, and is left out.
 func runDecisionPostRefused(events []types.AuditEvent) bool {
 	for _, ev := range events {
-		if (ev.Action == authz.AuditAction || ev.Action == runReportLostAction) && ev.Target == decisionsDoor {
+		if (ev.Action == authz.AuditAction || ev.Action == runReportLostAction) && ev.Target == decisionsDoor &&
+			audit.MCPSandboxOfData(ev.Data) == "" {
 			return true
 		}
 	}
