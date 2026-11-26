@@ -78,3 +78,32 @@ func TestMCPBroker_ThinSandboxEmptyAllowlist(t *testing.T) {
 	}
 	wantDecision(t, f.buf, egress.Deny, ruleSourceMCPNotEnabled)
 }
+
+// TestMCPBroker_ThinSandboxRelayServer: on the same thin sandbox, a server in its own sandbox is
+// reached through the broker alone. Its relay address is refused on every other lane, and a tool
+// the rules deny never reaches it.
+func TestMCPBroker_ThinSandboxRelayServer(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{
+		FirstUseApproval: types.FirstUseAlwaysDeny,
+		ToolRules:        []types.ToolRule{{Tool: "mcp__docs__delete_page", Effect: types.ToolDeny}},
+	}, nil, nil)
+	if rec := f.post(t, mcpToken("claude-code"), "docs", mcpCall(1, "search")); rec.Code != http.StatusOK || f.relay.hitCount() != 1 {
+		t.Fatalf("broker call: status %d, relay hits %d; want 200 and one", rec.Code, f.relay.hitCount())
+	}
+	wantDecision(t, f.buf, egress.Allow, ruleSourceMCP)
+	if rec := f.post(t, mcpToken("claude-code"), "docs", mcpCall(2, "delete_page")); !strings.Contains(rec.Body.String(), mcpBlockedMessage) || f.relay.hitCount() != 1 {
+		t.Fatalf("denied tool: %q, relay hits %d; want refused and not sent", rec.Body, f.relay.hitCount())
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://"+mcpRelayAddr+routeMCPRelay+mcpRelayToken, strings.NewReader(mcpCall(3, "search")))
+	direct := httptest.NewRecorder()
+	f.p.ServeHTTP(direct, req)
+	if direct.Code < 400 || f.relay.hitCount() != 1 {
+		t.Fatalf("direct request to the relay address: status %d, relay hits %d; want refused and not sent", direct.Code, f.relay.hitCount())
+	}
+	if d, _, _ := f.p.evaluate(context.Background(), "10.77.0.5", 3130, http.MethodConnect, ""); d != egress.Deny {
+		t.Fatalf("CONNECT to the relay address: %s, want deny", d)
+	}
+	if !f.p.mcp.mcpDirectOrigin("10.77.0.5") {
+		t.Fatal("the relay address is not held to the broker")
+	}
+}

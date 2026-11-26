@@ -5,10 +5,12 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -44,14 +46,24 @@ type mcpUpstream struct {
 	// mintStatus, when set, is the status every gateway identity ask answers, with mintRefusal as its body.
 	mintStatus  int
 	mintRefusal string
+	// path is the path the last MCP call arrived on; reply, when set, is the body every MCP call is answered with.
+	path, reply string
+	hdr         http.Header // the headers the last MCP call arrived with
 }
 
 const mcpServerSecret = "Bearer mcp-server-secret-value"
 
 func newMCPUpstream(t *testing.T) *mcpUpstream {
 	t.Helper()
+	return newMCPUpstreamOn(t, httptest.NewTLSServer)
+}
+
+// newMCPUpstreamOn is newMCPUpstream on a server newSrv starts: plain HTTP stands in for an MCP
+// proxy's relay listener.
+func newMCPUpstreamOn(t *testing.T, newSrv func(http.Handler) *httptest.Server) *mcpUpstream {
+	t.Helper()
 	u := &mcpUpstream{status: http.StatusOK}
-	u.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	u.srv = newSrv(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		if strings.HasPrefix(r.URL.Path, "/api/v1/internal/injection/") {
@@ -75,6 +87,7 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 			return
 		}
 		u.hits++
+		u.path, u.hdr = r.URL.Path, r.Header.Clone()
 		u.identity, u.callID = r.Header.Get(gatewayIdentityHeader), r.Header.Get(gatewayCallIDHeader)
 		w.Header().Set("X-Echo", u.identity)
 		u.auth, u.smuggled = r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")
@@ -84,7 +97,7 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(u.status)
-		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+		_, _ = io.WriteString(w, cmp.Or(u.reply, `{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
 	t.Cleanup(u.srv.Close)
 	return u
@@ -100,20 +113,28 @@ func mcpBindingFor(harness string, servers ...string) MCPBinding {
 	return MCPBinding{Harness: harness, SHA256: hex.EncodeToString(sum[:]), Servers: servers}
 }
 
-// mcpFixture builds a proxy with two servers: linear (credentialed, on for
-// both harnesses) and github (on for claude-code only). dial records every
-// target the transport dialled.
+// mcpFixture builds a proxy with three servers: linear (credentialed, on for
+// both harnesses), github (on for claude-code only) and docs (in its own
+// sandbox, reached at mcpRelayAddr on the relay link, on for claude-code only).
+// dial records every target the transport dialled.
 type mcpFixture struct {
 	p       *Proxy
 	buf     *bytes.Buffer
 	up      *mcpUpstream
+	relay   *mcpUpstream // docs's MCP proxy
 	mu      sync.Mutex
 	targets []string
 }
 
+// mcpRelayAddr and mcpRelayToken are docs's relay address and token in these tests.
+const (
+	mcpRelayAddr  = "10.77.0.5:3130"
+	mcpRelayToken = "rly-0123456789abcdefghijklmnopqrstuvwxyzABCDEF"
+)
+
 func newMCPFixture(t *testing.T, spec types.RunPolicySpec, res resolver, urls map[string]string) *mcpFixture {
 	t.Helper()
-	f := &mcpFixture{up: newMCPUpstream(t), buf: &bytes.Buffer{}}
+	f := &mcpFixture{up: newMCPUpstream(t), relay: newMCPUpstreamOn(t, httptest.NewServer), buf: &bytes.Buffer{}}
 	if res == nil {
 		res = publicResolver{}
 	}
@@ -125,6 +146,9 @@ func newMCPFixture(t *testing.T, spec types.RunPolicySpec, res resolver, urls ma
 			f.mu.Lock()
 			f.targets = append(f.targets, target)
 			f.mu.Unlock()
+			if target == mcpRelayAddr {
+				return (&net.Dialer{}).DialContext(ctx, network, upstreamAddr(f.relay.srv))
+			}
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		},
 		ControlPlaneURL: "https://wardynd.test:8080", RunToken: newTokenSource("RUNTOK"),
@@ -134,9 +158,10 @@ func newMCPFixture(t *testing.T, spec types.RunPolicySpec, res resolver, urls ma
 	servers := []MCPServerConfig{
 		{Key: "linear", URL: cmpURL(urls, "linear", "https://mcp.linear.test/mcp"), GrantID: &grant},
 		{Key: "github", URL: cmpURL(urls, "github", "https://mcp.github.test/mcp")},
+		{Key: "docs", Relay: &MCPRelayTarget{Addr: mcpRelayAddr, Token: mcpRelayToken}},
 	}
 	f.p.mcp = newMCPBroker(servers, []MCPBinding{
-		mcpBindingFor("claude-code", "linear", "github"),
+		mcpBindingFor("claude-code", "linear", "github", "docs"),
 		mcpBindingFor("codex-cli", "linear"),
 	})
 	return f
@@ -742,5 +767,102 @@ func TestMCPBroker_GatewayIdentityWrongAudienceNotSent(t *testing.T) {
 	f.up.mintAud = "https://elsewhere.test/"
 	if rec := f.post(t, mcpToken("claude-code"), "linear", mcpInit); rec.Code != http.StatusBadGateway || f.up.hitCount() != 0 {
 		t.Fatalf("status %d, %d hits: want the call not sent", rec.Code, f.up.hitCount())
+	}
+}
+
+// TestMCPBrokerRefusalsRemoteAndRelay runs the broker's refusals over both kinds of server: a
+// remote one (linear, github) and one in its own sandbox (docs, on the relay link). Each is
+// refused, recorded and never sent the same way, since every check runs before the send.
+func TestMCPBrokerRefusalsRemoteAndRelay(t *testing.T) {
+	big := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":{"pad":"` + strings.Repeat("a", maxMCPBody) + `"}}}`
+	cases := []struct {
+		name       string
+		harness    string
+		key        func(remote bool) string
+		method     string
+		body       string
+		hdr        []string
+		wantStatus int
+		wantSource string
+		wantBody   string
+	}{
+		{"unbound", "nobody", serverOf("linear", "docs"), http.MethodPost, mcpInit, nil, http.StatusForbidden, ruleSourceMCPUnbound, ""},
+		{"not enabled", "codex-cli", serverOf("github", "docs"), http.MethodPost, mcpInit, nil, http.StatusForbidden, ruleSourceMCPNotEnabled, ""},
+		{"method", "claude-code", serverOf("linear", "docs"), http.MethodPut, mcpInit, nil, http.StatusMethodNotAllowed, ruleSourceMCPRequest, ""},
+		{"encoding", "claude-code", serverOf("linear", "docs"), http.MethodPost, mcpInit, []string{"Content-Encoding", "gzip"}, http.StatusUnsupportedMediaType, ruleSourceMCPEncoding, ""},
+		{"over 1 MiB", "claude-code", serverOf("linear", "docs"), http.MethodPost, big, nil, http.StatusRequestEntityTooLarge, ruleSourceMCPRequest, ""},
+		{"ambiguous keys", "claude-code", serverOf("linear", "docs"), http.MethodPost, `{"jsonrpc":"2.0","id":1,"Method":"tools/call","method":"tools/list","params":{"name":"x"}}`, nil, http.StatusOK, ruleSourceMCPRequest, "-32700"},
+		{"raw name denied", "claude-code", serverOf("linear", "docs"), http.MethodPost, mcpCall(1, "drop"), nil, http.StatusOK, ruleSourceMCPToolDeny, mcpBlockedMessage},
+		{"Claude Code name denied", "claude-code", serverOf("linear", "docs"), http.MethodPost, mcpCall(1, "rm all"), nil, http.StatusOK, ruleSourceMCPToolDeny, mcpBlockedMessage},
+		{"code-mode name denied", "claude-code", serverOf("linear", "docs"), http.MethodPost, mcpCall(1, "rm.all"), nil, http.StatusOK, ruleSourceMCPToolDeny, mcpBlockedMessage},
+		{"batch refused whole", "claude-code", serverOf("linear", "docs"), http.MethodPost, "[" + mcpCall(1, "list") + "," + mcpCall(2, "drop") + "]", nil, http.StatusOK, ruleSourceMCPToolDeny, `"id":1`},
+	}
+	for _, remote := range []bool{true, false} {
+		for _, c := range cases {
+			key := c.key(remote)
+			t.Run(fmt.Sprintf("%s/%s", key, c.name), func(t *testing.T) {
+				rules := []types.ToolRule{
+					{Tool: "mcp__" + key + "__drop", Effect: types.ToolDeny},
+					{Tool: "mcp__" + key + "__rm_all", Effect: types.ToolDeny},
+				}
+				f := newMCPFixture(t, types.RunPolicySpec{ToolRules: rules}, nil, nil)
+				req := mustLocalReq(t, c.method, "/wardyn/mcp/"+mcpToken(c.harness)+"/"+key, strings.NewReader(c.body))
+				for i := 0; i+1 < len(c.hdr); i += 2 {
+					req.Header.Set(c.hdr[i], c.hdr[i+1])
+				}
+				rec := httptest.NewRecorder()
+				f.p.ServeHTTP(rec, req)
+				if rec.Code != c.wantStatus || !strings.Contains(rec.Body.String(), c.wantBody) {
+					t.Fatalf("answer %d %.200q, want %d containing %q", rec.Code, rec.Body.String(), c.wantStatus, c.wantBody)
+				}
+				d := wantDecision(t, f.buf, egress.Deny, c.wantSource)
+				if strings.Contains(d.Request.Path, mcpToken(c.harness)) || strings.Contains(d.Request.Path, mcpRelayToken) {
+					t.Fatalf("row path %q carries a token", d.Request.Path)
+				}
+				if f.up.hitCount()+f.relay.hitCount() != 0 || len(f.dialled()) != 0 {
+					t.Fatalf("hits %d+%d, dialled %v; want nothing sent", f.up.hitCount(), f.relay.hitCount(), f.dialled())
+				}
+			})
+		}
+	}
+}
+
+func serverOf(remote, relay string) func(bool) string {
+	return func(r bool) string {
+		if r {
+			return remote
+		}
+		return relay
+	}
+}
+
+// TestMCPBrokerApproveEachAndListFilterRemoteAndRelay: an approve_each call is held, then sent
+// once, and a blocked tool is left out of a tool list, for a remote server and a relay server alike.
+func TestMCPBrokerApproveEachAndListFilterRemoteAndRelay(t *testing.T) {
+	for _, key := range []string{"linear", "docs"} {
+		t.Run(key+"/approve_each", func(t *testing.T) {
+			f, cp := newEachFixture(t, types.ToolRule{Tool: "mcp__" + key + "__delete_issue", Effect: types.ToolApproveEach})
+			cp.approveOnPoll = 1
+			up := map[string]*mcpUpstream{"linear": f.up, "docs": f.relay}[key]
+			rec := f.post(t, mcpToken("claude-code"), key, eachCall(1, "delete_issue", `{"id":"ENG-1"}`))
+			if rec.Code != http.StatusOK || up.hitCount() != 1 || cp.count() != 1 {
+				t.Fatalf("answer %d %q, hits %d, rows %d; want one approval and one send", rec.Code, rec.Body.String(), up.hitCount(), cp.count())
+			}
+			if d := findDecision(t, f.buf, ruleSourceMCPApproved); d.Decision != egress.Allow || d.ApprovalID == nil {
+				t.Fatalf("approved row %+v", d)
+			}
+		})
+		t.Run(key+"/list filter", func(t *testing.T) {
+			f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "mcp__" + key + "__delete_issue", Effect: types.ToolDeny}}}, nil, nil)
+			up := map[string]*mcpUpstream{"linear": f.up, "docs": f.relay}[key]
+			up.reply = `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"list_issues"},{"name":"delete_issue"}]}}`
+			rec := f.post(t, mcpToken("claude-code"), key, `{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}`)
+			if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "delete_issue") || !strings.Contains(rec.Body.String(), "list_issues") {
+				t.Fatalf("answer %d %q, want list_issues alone", rec.Code, rec.Body.String())
+			}
+			if d := findDecision(t, f.buf, "brokered:mcp:list-filtered"); d.Cause != "hid 1 of 2 tools" {
+				t.Fatalf("list row cause %q", d.Cause)
+			}
+		})
 	}
 }
