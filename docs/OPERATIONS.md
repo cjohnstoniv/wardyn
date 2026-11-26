@@ -4310,6 +4310,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0427` (`0427_drive_reclaim_fence`) creates `drive_reclaims`, the reclaim fence on one storage object of an organisation's drive (while a row exists no run attaches the object), and `drive_object_holds`, each run dispatched with a Docker volume or a provisioned claim. The migration grants `SELECT, INSERT, UPDATE, DELETE` on `drive_reclaims` and `SELECT, INSERT` on `drive_object_holds` to every role granted `UPDATE` on `user_drives`, other than that table's owner. A split-role install whose app role is not one of those roles, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then a drive reclaim is refused, and so is a run that names a Docker volume or claim drive.
 - `0410` (`0410_audit_hash_v2`) adds `hash_format`, `hash_salt` and `claim_salt` to `audit_events` (`0001`'s table), and replaces `audit_append`, which `0111` last created, so a new row takes format 2 and its own salt; it also creates `audit_row_hash_v2` and `audit_row_hash_any`, and replaces the chain function (`0214` last created it) so a row is hashed by its format from this migration on. The ten arguments of `audit_append` and its grants do not change. The verify sweep, the checkpoint signer and device ingest, which run as the app role, now call `audit_row_hash_any`, so that role needs `EXECUTE` on it and on `audit_row_hash_v2`; it has it from the default function privileges in step 4, and an install that removed those must grant it by hand.
 - `0412` (`0412_audit_chain_v2`) holds the same chain function body as `0410` and creates its trigger on `audit_events` again. It holds the trigger text so that it sorts last among the files the boot replay reads. No grant changes.
+- `0420` (`0420_sweeper_families`) creates `sweeper_families`: one row for each sweep family (runs, credentials, audit and records) with its fencing epoch and the replica that leads it. The migration grants `SELECT, UPDATE` on it to every role granted `UPDATE` on `sweeper_leader`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no replica leads the sweeps that run once.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5726,6 +5727,14 @@ What the switch needs, and refuses to render or boot without:
   holds its lock on a connection of its own, outside `pool_max_conns`, so every
   replica elects and is fenced on a pool of any size ([ENV.md](ENV.md),
   `WARDYN_PG_DSN`).
+  The sweeps that must run once are split into four families (runs, credentials, audit
+  and records), each led by one replica on that connection, and a watchdog gives a family
+  up to another replica when every sweep it watches has gone three intervals without a success.
+  A sweep that does not stop when its family is given up keeps the family's lock, and the
+  family reads as stalled, until the sweep returns; a session the database ends drops the
+  lock anyway.
+  A run's start locks share two connections per replica: one statement that takes longer than 2 seconds, or an unlock the database refuses, closes that connection and ends every start hold on it, and each of those starts is refused rather than run unfenced.
+  A sweep family is fenced against an older replica only while every replica runs this version: an older replica that takes the single sweeper lock after this replica's database session ends does not stop a family sweep still running here, so upgrade with every replica stopped.
 - **A PodDisruptionBudget** (`minAvailable: 1`, at two or more replicas) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).

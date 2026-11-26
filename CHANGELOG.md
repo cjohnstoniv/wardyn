@@ -106,6 +106,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A server egress proxy that cannot reach the control plane now keeps up to 50,000 decisions (32 MiB) in its container's temporary directory and sends them when it can, with their own times, instead of dropping them.
 - A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it. A Mac disk whose delete waits for its Mac shows as Deleting too (#4061).
 - A run that asks for a disk drive another run still holds is refused at create and at Review, instead of waiting on the Mac when it starts (#3851).
+- Multiple replicas share the sweeps that run once: each of four sweep families has its own leader and fencing epoch, and a family whose sweeps stop ticking is handed to another replica. Replicas that start together share the families; after a rolling restart a family stays with the replica that took it over until that replica gives it up (#4064).
+- A run's command start no longer opens a database connection of its own: start locks share two connections per replica, and no longer count against WARDYN_LOCK_POOL_MAX_CONNS (#4064).
 
 ### Fixed
 
@@ -139,6 +141,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   tables granted fewer verbs: the migrations take every other privilege on them away from every role but their owner.
 - Sites are off until an admin sets `features.org_sites.enabled` in the site config. While they are off, where a run goes and what its record and audit row say do not change. Migrations `04xx_org_sites` and `04xx_run_site` add the tables `org_sites`, `org_site_pools` and `org_site_drives` and the column `agent_runs.site_id`, and grant the app role the new tables on split-role installs. Stop every wardynd older than 0.11 first: an older server cannot read a run that a site's default pool placed.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `org_sites`, `org_site_pools` and `org_site_drives` to every role that was granted `UPDATE` on `runner_pools`, other than that table's owner. An install that granted by hand grants the new tables to the role that updates runner pools.
+- Each replica holds 2 more database connections for locks; budget max_connections for them.
+- Stop every older replica before this release's first replica starts: a sweep family is fenced against an older
+  replica only while every replica runs this version.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, UPDATE` on
+  `sweeper_families` to every role that was granted `UPDATE` on `sweeper_leader`, other than that table's owner. If the
+  app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no
+  replica leads the sweeps that run once.
 
 ## [0.11.0-rc.3] — 2026-11-25
 
