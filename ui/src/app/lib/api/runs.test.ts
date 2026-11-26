@@ -157,6 +157,20 @@ describe("runs.listRunsFiltered — counts", () => {
     const counted = await runs.listRunsFiltered({ view: "user" });
     expect(counted.countsRead).toBe(true);
   });
+
+  it("endedAfter sends ended_after and reads X-Wardyn-Ended-After back", async () => {
+    const cut = "2026-11-25T10:00:00.000Z";
+    fetchMock.mockResolvedValueOnce(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json", "X-Wardyn-Ended-After": cut } }),
+    );
+    const delta = await runs.listRunsFiltered({ view: "user", skipCounts: true, endedAfter: cut });
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`ended_after=${encodeURIComponent(cut)}`);
+    expect(delta.endedAfter).toBe(cut);
+
+    const whole = await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[1][0])).not.toContain("ended_after=");
+    expect(whole.endedAfter).toBeUndefined();
+  });
 });
 
 // #159: opting into BOTH limit and offset switches listRuns() onto explicit
