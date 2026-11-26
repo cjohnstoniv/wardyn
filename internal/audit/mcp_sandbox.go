@@ -42,3 +42,15 @@ func StampMCPSandbox(ctx context.Context, data json.RawMessage) json.RawMessage 
 	out, _ := json.Marshal(fields)
 	return out
 }
+
+// MCPSandboxOfData is the server key StampMCPSandbox put on a row's data, "" for a row no MCP proxy wrote. The
+// key is matched exactly, as the stamp writes it. A reader that learns from the agent's own trail (what a
+// recording observed, which denied hosts to offer) leaves such a row out: it is the server's, not the agent's.
+func MCPSandboxOfData(data json.RawMessage) string {
+	var top map[string]json.RawMessage
+	var key string
+	if json.Unmarshal(data, &top) != nil || json.Unmarshal(top["mcp_sandbox"], &key) != nil {
+		return ""
+	}
+	return key
+}
