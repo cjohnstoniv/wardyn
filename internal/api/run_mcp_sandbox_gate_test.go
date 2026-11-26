@@ -482,7 +482,7 @@ func TestReviveMCPSandboxRefusal(t *testing.T) {
 		f, _ := newRebootFixture(t)
 		cs := f.withRunComponents(row)
 		cs.siteErr = errors.New("site config unreadable")
-		got := f.srv.reviveMCPSandboxRefusal(context.Background(), f.run, true, types.ActorHuman, "admin")
+		got := f.srv.reviveMCPSandboxRefusal(context.Background(), f.run, true, false, types.ActorHuman, "admin")
 		if got == nil || got.reason != reasonComponentDefinitionInvalid || got.msg != d6 {
 			t.Fatalf("refusal %+v, want the switch-off sentence", got)
 		}

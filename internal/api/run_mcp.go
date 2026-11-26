@@ -344,7 +344,9 @@ func mintMCPToken() (token, digest string) {
 // reviveMCPBindings re-derives which harness reaches which MCP server from the
 // run's component rows, never from the stored config alone: a server whose row
 // is gone or erased is dropped, and each harness keeps only the servers its
-// row's mcp_harnesses record. It only narrows.
+// row's mcp_harnesses record. It only narrows. A server in its own sandbox is
+// reached at the address its MCP sandbox row pins, so a rebooted agent starts with
+// it before the revive re-creates the sandbox.
 func (s *Server) reviveMCPBindings(ctx context.Context, run types.AgentRun, cfg *proxy.Config) *reviveError {
 	if len(cfg.MCPServers) == 0 {
 		return nil
@@ -354,6 +356,17 @@ func (s *Server) reviveMCPBindings(ctx context.Context, run types.AgentRun, cfg 
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the run's MCP servers", err))
 	}
 	narrowMCPBindings(cfg, comps)
+	rows, err := s.reviveMCPRows(ctx, run.ID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "read the run's MCP servers", err))
+	}
+	for i := range cfg.MCPServers {
+		sv := &cfg.MCPServers[i]
+		j := slices.IndexFunc(rows, func(r store.RunMCPSandbox) bool { return r.Ordinal == sv.Ordinal })
+		if sv.Relay != nil && j >= 0 && rows[j].RelayAddr != "" {
+			sv.Relay.Addr = rows[j].RelayAddr
+		}
+	}
 	return nil
 }
 
