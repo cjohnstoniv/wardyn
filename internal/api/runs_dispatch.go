@@ -659,7 +659,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
 		return
 	}
-	if !s.startRunMCPSandboxes(ctx, run, mcpd, stopCreateLease) {
+	if !s.startRunMCPSandboxes(ctx, createCtx, run, mcpd, stopCreateLease) {
 		return
 	}
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)

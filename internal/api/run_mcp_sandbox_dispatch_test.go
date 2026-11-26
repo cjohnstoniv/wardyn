@@ -510,19 +510,22 @@ func TestMCPSecretResolveRowsNameTheServer(t *testing.T) {
 	}
 }
 
-// TestDispatchMCPReadinessWaitEndsWithItsContext: a dispatch whose context ends during the readiness wait
-// stops polling at once, rather than read the servers' status hot until the wait's deadline, and kills what
-// did not come up.
+// TestDispatchMCPReadinessWaitEndsWithItsContext: a kill during the readiness wait, which ends the dispatch's
+// create context (the dispatch's own is detached from its caller), stops the polling at once rather than read
+// the servers' status until the wait's deadline, and what did not come up is killed.
 func TestDispatchMCPReadinessWaitEndsWithItsContext(t *testing.T) {
 	f := newMCPDispatchFixture(t)
 	f.sbx.statusDead = true
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	f.sbx.statusFn = cancel
+	f.sbx.statusFn = func() { // a kill: the run moves to KILLED, then its in-flight create is cancelled
+		f.st.dispatchTestStore.mu.Lock()
+		f.st.dispatchTestStore.state = types.RunKilled
+		f.st.dispatchTestStore.mu.Unlock()
+		f.srv.creates.cancel(f.run.ID)
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.srv.dispatchRun(ctx, f.run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), f.p)
+		f.dispatch()
 	}()
 	select {
 	case <-done:

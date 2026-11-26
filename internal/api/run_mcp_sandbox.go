@@ -790,8 +790,9 @@ func mcpAgentSpecLeak(spec runner.SandboxSpec, servers []mcpServer, own []mcpOwn
 // sandbox is created: per server run.mcp_policy.resolve, StartMCPSandbox and run.mcp_sandbox.create, the row
 // moved to ready only while the run is STARTING (else what started is killed and the dispatch ends), then
 // one wait of up to mcpReadyWait for every server together. A server that does not come up, or does not
-// start, is failed alone and killed: the run goes on, and the relay answers its calls -32002.
-func (s *Server) startRunMCPSandboxes(ctx context.Context, run types.AgentRun, d *mcpSandboxDispatch, stopCreateLease func()) bool {
+// start, is failed alone and killed: the run goes on, and the relay answers its calls -32002. A kill ends the
+// wait at once: it cancels createCtx, while ctx, the dispatch's own, is detached from every cancel.
+func (s *Server) startRunMCPSandboxes(ctx, createCtx context.Context, run types.AgentRun, d *mcpSandboxDispatch, stopCreateLease func()) bool {
 	if d == nil {
 		return true
 	}
@@ -827,12 +828,12 @@ wait:
 			break
 		}
 		select {
-		case <-ctx.Done():
-			break wait // a done dispatch waits no longer; what has not come up is ended below
+		case <-createCtx.Done():
+			break wait // a killed dispatch waits no longer; what has not come up is ended below
 		case <-time.After(mcpReadyPoll):
 		}
 	}
-	// The ends land on a bound of their own, so a done dispatch still kills what did not come up.
+	// The ends land on a bound of their own, so a killed dispatch still kills what did not come up.
 	wctx, cancel := mcpReviveWriteContext(ctx)
 	defer cancel()
 	for _, made := range waiting {
