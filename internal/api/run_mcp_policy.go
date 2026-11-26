@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -291,4 +293,18 @@ func mcpNarrowerRefusal(spec types.RunPolicySpec, comps runComponents) *runRefus
 			"mcp.sandbox.policy.overlay."+field+": "+mcpSandboxSentence(mcpNarrowerWidensSentence, keys[i], ""))
 	}
 	return nil
+}
+
+// auditMCPPolicyResolve writes run.mcp_policy.resolve for one server of the run, before its sandbox is created:
+// the mode, the digest of the policy it runs under and the finish's decisions (how many hold rules became
+// deny, and each overlay entry the run's policy no longer permitted).
+func (s *Server) auditMCPPolicyResolve(ctx context.Context, runID uuid.UUID, ordinal int, key string, p mcpPolicy) {
+	data := map[string]any{
+		"ordinal": ordinal, "mcp_sandbox": key, "mode": p.mode, "mcp_policy_digest": p.spec.Digest(),
+		"holds_rewritten": p.holds, "warnings": slices.Concat([]string{}, p.warns),
+	}
+	if r := p.spec.Resources; r != nil {
+		data["cpu_millis"], data["memory_mib"] = r.CPUMillis, r.MemoryMiB
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.mcp_policy.resolve", key, "success", mustJSON(data)))
 }

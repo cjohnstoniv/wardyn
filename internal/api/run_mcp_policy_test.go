@@ -256,3 +256,23 @@ func TestMCPPolicyResealChangesNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPPolicyResolveRow: run.mcp_policy.resolve records the mode, the digest of the policy the server runs
+// under, the count of holds the finish made denies, the dropped overlay entries and the resources.
+func TestMCPPolicyResolveRow(t *testing.T) {
+	p := mcpPolicyOf(t, &Server{}, mcpPolicyBase{run: mcpPolicyRun(), comps: mcpPolicyComps(nil)})
+	p.warns = []string{"an overlay entry the run no longer permits"}
+	h := newHarness(t)
+	runID := uuid.New()
+	h.srv.auditMCPPolicyResolve(context.Background(), runID, 0, "files", p)
+	ev, data := onlyAuditRow(t, h)
+	if ev.Action != "run.mcp_policy.resolve" || ev.RunID == nil || *ev.RunID != runID || ev.ActorType != types.ActorSystem || ev.Outcome != "success" || ev.Target != "files" {
+		t.Fatalf("row %+v", ev)
+	}
+	warns, _ := data["warnings"].([]any)
+	if p.holds == 0 || data["mode"] != types.ComponentMCPSandboxSame || data["mcp_sandbox"] != "files" || data["ordinal"] != float64(0) ||
+		data["mcp_policy_digest"] != p.spec.Digest() || data["holds_rewritten"] != float64(p.holds) || len(warns) != 1 ||
+		data["cpu_millis"] != float64(mcpSandboxDefaultCPUMillis) || data["memory_mib"] != float64(mcpSandboxDefaultMemoryMiB) {
+		t.Fatalf("data %v (holds %d)", data, p.holds)
+	}
+}
