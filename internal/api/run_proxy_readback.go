@@ -620,7 +620,9 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun, gen
 	case loseWriteFailed:
 		s.revokeRunBroker(ctx, run.ID)
 		run.LostAt, run.LostReason = &now, types.LostOutage
-		if err := s.stopLostSandboxAt(ctx, run, gen); err != nil {
+		err := s.stopLostSandboxAt(ctx, run, gen)
+		s.endRunMCPSandboxes(ctx, run.ID, mcpEndLost) // whether or not the stop failed
+		if err != nil {
 			return true, err
 		}
 		return true, errLostMarkUnwritten

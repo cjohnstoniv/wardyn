@@ -60,6 +60,10 @@ type runLeaseState struct {
 	// run's proxy (run_revive.go, #1005), so a revive of a live run is bounded
 	// to one per reviveLiveEvery. An entry drops itself once it has lapsed.
 	liveRevived sync.Map
+	// lostCuts holds, per run this process cut on a lost path (stopLostSandboxAt), the policy generation the
+	// cut acted for, so the MCP restart watcher and the Restart route create nothing for a run cut under a
+	// lost mark that could not be written. Cleared by a revive that succeeded and by the run's end.
+	lostCuts sync.Map
 	// lapseHoldOpen is whether this replica has an open outage episode: the lapse sweep has written its
 	// run.lapse_sweep.hold row and no later pass has closed the episode (run_lapse_class.go).
 	lapseHoldOpen atomic.Bool

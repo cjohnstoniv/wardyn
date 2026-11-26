@@ -866,6 +866,8 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 			}
 		}
 	}
+	s.endRunMCPSandboxes(ctx, id, mcpEndKilled) // outside the ref guard: a run killed before its ref was set may hold some
+	s.lostCuts.Delete(id)
 	// The revokes below get their own window, opened after the teardown wait: a slow sandbox kill can
 	// use the whole kill deadline, and the revokes must not inherit what is left of it.
 	revokeCtx, revokeCancel := context.WithTimeout(context.WithoutCancel(ctx), killRevokeTimeout)

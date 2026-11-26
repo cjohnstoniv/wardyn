@@ -73,6 +73,9 @@ type RunContainmentPending struct {
 	// Tuple is the runner's record of the run's pods and nodes that a node record must name, shown to
 	// security operators only.
 	Tuple json.RawMessage `json:"tuple,omitempty"`
+	// MCPSandboxes is the key of each MCP server of the run, over, whose sandbox is not known to be gone yet:
+	// the kill confirm does not confirm the run's containment while one is (tryKillConfirm).
+	MCPSandboxes []string `json:"mcp_sandboxes,omitempty"`
 }
 
 // RunNodeRecord is one node record made for a run and what its runner answered.

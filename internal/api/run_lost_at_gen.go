@@ -38,10 +38,12 @@ func (s *Server) generationStopperFor(run types.AgentRun) (runner.ProxyGeneratio
 // runner that is not connected with ProxyFence stops the plain way.
 func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen int) error {
 	if gen <= 0 {
+		s.lostCuts.Store(run.ID, gen)
 		return s.stopLostSandbox(ctx, run)
 	}
 	gs, ok := s.generationStopperFor(run)
 	if !ok {
+		s.lostCuts.Store(run.ID, gen)
 		return s.stopLostSandbox(ctx, run)
 	}
 	newer := func(err error) bool {
@@ -65,6 +67,7 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 		if newer(cutErr) {
 			return nil // a newer revive owns the run: no end call, no stop mark
 		}
+		s.lostCuts.Store(run.ID, gen)
 		switch end {
 		case lostEndOpen:
 			return cutErr
@@ -79,6 +82,7 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 	if newer(err) {
 		return nil
 	}
+	s.lostCuts.Store(run.ID, gen)
 	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && run.LostReason == types.LostOutage && run.LostAt != nil {
 		// A failed write only leaves the run counted; the lease sweep re-asserts this stop every pass.
 		if merr := leaser.MarkRunAgentStopped(ctx, run.ID, *run.LostAt); merr != nil {

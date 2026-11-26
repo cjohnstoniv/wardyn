@@ -230,6 +230,8 @@ func (s *Server) loseRunAs(ctx context.Context, loser store.RunLoser, leaser sto
 		data["cause"] = v.cause
 	}
 	stopErr := s.stopLostSandboxAt(ctx, run, fence)
+	s.endRunMCPSandboxes(ctx, run.ID, mcpEndLost) // the mark applied, so every replica's store now refuses a create:
+	s.lostCuts.Delete(run.ID)                     // this replica's cut entry is no longer the guard
 	if err := stopErr; errors.Is(err, runner.ErrPendingOnRunner) {
 		data["containment"] = "pending_runner"
 		if errors.Is(err, errLostEndUnread) {

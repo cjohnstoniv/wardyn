@@ -344,6 +344,7 @@ func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, 
 		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, loggedMsg(ctx,
 			"the run's lock was lost before its proxy was replaced, and the run changed since (another revive took it over); this revive replaced and stopped nothing", err))
 	}
+	s.endRunMCPSandboxes(ctx, run.ID, mcpEndLost) // what a watcher or a Restart created while the claim had cleared lost_at
 	data["lost_again"] = true
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 	return &reviveError{status: http.StatusConflict, reason: reasonReviveRunChanged, lost: true, fate: relostLost, msg: loggedMsg(ctx,

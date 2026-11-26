@@ -129,6 +129,14 @@ func (s *Server) handleGetRunContainment(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	if out.Pending != nil {
+		up, err := s.mcpSandboxesUpAfterEnd(r.Context(), run)
+		if err != nil {
+			writeServerError(w, r, "read the run's MCP servers", err)
+			return
+		}
+		out.Pending.MCPSandboxes = up
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
