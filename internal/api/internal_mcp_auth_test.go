@@ -320,6 +320,41 @@ func TestMCPSandboxAudienceMatchesProxy(t *testing.T) {
 	}
 }
 
+// TestMCPRowWithEmptyKeyRefused: a row whose server key is empty would label its proxy's rows as the agent's,
+// so the door refuses its token on every one of the five routes as it refuses an unknown one.
+func TestMCPRowWithEmptyKeyRefused(t *testing.T) {
+	f := newMCPAuthFixture(t)
+	f.rows.set(func(r *store.RunMCPSandbox) { r.ServerKey = "" })
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, mcpDecisionsPath, mcpAllowDecision},
+		{http.MethodGet, "/api/v1/internal/injection/" + f.grant.String(), ""},
+		{http.MethodPost, "/api/v1/internal/token/renew", `{}`},
+		{http.MethodPost, mcpApprovalsPath, mcpEgressRaise},
+		{http.MethodGet, mcpApprovalsPath + "/" + uuid.NewString(), ""},
+	} {
+		w := do(t, f.srv, c.method, c.path, f.tok, c.body)
+		if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
+			t.Errorf("%s %s with an empty key: %d %s, want 403 %s", c.method, c.path, w.Code, w.Body.String(), reasonMCPSandboxUnknown)
+		}
+	}
+	allows := func() int {
+		n := 0
+		for _, ev := range f.h.audit.snapshot() {
+			if ev.Action == "egress.allow" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := allows(); n != 0 {
+		t.Errorf("%d egress.allow rows landed for a row with no key, want none", n)
+	}
+	f.rows.set(func(r *store.RunMCPSandbox) { r.ServerKey = "files" })
+	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision); w.Code/100 != 2 || allows() != 1 {
+		t.Fatalf("control: the same row keyed files got %d %s and %d allow rows, want it served", w.Code, w.Body.String(), allows())
+	}
+}
+
 // TestMCPTokenRelayedRefused: no run reached through a runner has an MCP sandbox, so a relayed MCP token is
 // refused.
 func TestMCPTokenRelayedRefused(t *testing.T) {

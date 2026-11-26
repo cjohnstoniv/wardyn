@@ -139,7 +139,8 @@ func (s *Server) mcpSandboxAuth(next http.Handler) http.Handler {
 
 // mcpSandboxRowFor is the run's server row the token names: the one whose current jti it is, or whose previous
 // jti it is while that token has not lapsed. A stopped row is refused, except at the decision door within
-// terminalUploadGrace of its stop, so the rows its proxy flushes as it stops still land. It writes its own
+// terminalUploadGrace of its stop, so the rows its proxy flushes as it stops still land; a row with no server
+// key is refused as no row (the table refuses one too). It writes its own
 // refusal and returns false once it has.
 func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims *identity.Claims) (store.RunMCPSandbox, bool) {
 	unknown := func() (store.RunMCPSandbox, bool) {
@@ -175,6 +176,9 @@ func (s *Server) mcpSandboxRowFor(w http.ResponseWriter, r *http.Request, claims
 		}
 		if row.State == store.MCPSandboxStopped &&
 			(r.URL.Path != decisionsDoor || row.StoppedAt == nil || now.Sub(*row.StoppedAt) > terminalUploadGrace) {
+			return unknown()
+		}
+		if row.ServerKey == "" { // the key is the label its rows carry, and an empty one reads as the agent's
 			return unknown()
 		}
 		return row, true

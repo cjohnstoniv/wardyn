@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS run_mcp_sandboxes (
     PRIMARY KEY (run_id, ordinal)
 );
 
+-- A row's server key is its label on every row its proxy writes; an empty key would read as the agent's
+-- own, so the table refuses it. The check is named and added again on a re-run, so a table made before it
+-- gets it too.
+ALTER TABLE run_mcp_sandboxes DROP CONSTRAINT IF EXISTS run_mcp_sandboxes_server_key_set;
+
+ALTER TABLE run_mcp_sandboxes
+    ADD CONSTRAINT run_mcp_sandboxes_server_key_set CHECK (server_key <> '');
+
 DO $mig$
 DECLARE
     r record;
