@@ -12,7 +12,7 @@ import (
 )
 
 func TestRender_BaselineAlone(t *testing.T) {
-	const want = `{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"]}`
+	const want = `{"ExtensionInstallBlocklist":["*"]}`
 	for _, org := range [][]byte{nil, []byte("  ")} {
 		got, err := Render(org)
 		if err != nil {

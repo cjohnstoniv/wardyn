@@ -23,11 +23,12 @@ import (
 const MaxOrgBytes = 64 << 10
 
 // baseline is what every locked-down browser runs with: no extension but those the organisation
-// allows, and no developer tools.
+// allows. Developer tools stay available: DeveloperToolsAvailability 2 also refuses every DevTools
+// session on a page (Target.attachToTarget answers "Not allowed"), so it would break the agent's
+// cdp --agent --session through the broker. The key stays in Owned, so no organisation file sets it.
 func baseline() map[string]any {
 	return map[string]any{
-		"DeveloperToolsAvailability": 2,
-		"ExtensionInstallBlocklist":  []string{"*"},
+		"ExtensionInstallBlocklist": []string{"*"},
 	}
 }
 

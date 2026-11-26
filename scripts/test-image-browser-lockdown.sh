@@ -14,7 +14,8 @@
 #   I-3   wardyn-signin browser opens no port, refuses a port flag, and ignores CHROMIUM_FLAGS and CHROME_FLAGS;
 #   I-3b  cdp --agent --session drives a page under the policy (I-3bc: and without it);
 #   I-4   the sign-in gate passes with the policy installed;
-#   I-5   records which policy keys leave the pipe and page sessions working (never fails);
+#   I-5   records which policy keys leave the pipe and page sessions working (never fails; I-5c is
+#         DeveloperToolsAvailability 2, which the baseline leaves out because it refuses page sessions);
 #   I-6   the agent cannot mask the policy directory in a user namespace of its own.
 # MEASURE lines are the measurements.
 #
@@ -28,10 +29,10 @@ export DOCKER_HOST="${DOCKER_HOST:-unix:///run/wardyn-docker.sock}"
 P="wardyn-lockdown-gate-$$"
 fail() { echo "test-image-browser-lockdown: FAIL: $*" >&2; exit 1; }
 pass() { echo "test-image-browser-lockdown: ok: $*"; }
-trap 'docker rm -f "$P-on" "$P-off" "$P-tar" "$P-i5" "$P-i5b" >/dev/null 2>&1 || true' EXIT
+trap 'docker rm -f "$P-on" "$P-off" "$P-tar" "$P-i5" "$P-i5b" "$P-i5c" >/dev/null 2>&1 || true' EXIT
 
 # browserpolicy.Render(nil), byte for byte: TestRender_BaselineAlone pins the same bytes.
-BASELINE='{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"]}'
+BASELINE='{"ExtensionInstallBlocklist":["*"]}'
 POLICY=/etc/chromium/policies/managed/wardyn.json
 
 run_c() {
@@ -242,7 +243,8 @@ measure() {
 	echo "MEASURE $label pipe=$pipe session=$session port=$port"
 	i5port=$port
 }
-measure "$P-i5" '{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
+measure "$P-i5c" '{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"]}' I-5c
+measure "$P-i5" '{"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
 measure "$P-i5b" '{"ExtensionInstallBlocklist":["*"]}' I-5b
 [ "$i5port" = listening ] || fail "I-5b control: an agent's Chromium opened no port with neither key set, so I-5's port= proves nothing"
 

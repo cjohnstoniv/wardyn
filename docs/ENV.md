@@ -1844,7 +1844,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_BROWSER_LOCKDOWN`
 
 - The sandbox browser lockdown (flag `-browser-lockdown`; [`internal/api/run_browser_lockdown.go`](../internal/api/run_browser_lockdown.go), #2970). `off` (the default) delivers nothing and refuses nothing.
-- `on` delivers one Chromium managed policy into every container and Linux VM run, root-owned and unwritable by the agent. It blocks every extension install but those `WARDYN_BROWSER_POLICY_FILE` allows (`ExtensionInstallBlocklist: ["*"]`), and turns developer tools off (`DeveloperToolsAvailability: 2`).
+- `on` delivers one Chromium managed policy into every container and Linux VM run, root-owned and unwritable by the agent. It blocks every extension install but those `WARDYN_BROWSER_POLICY_FILE` allows (`ExtensionInstallBlocklist: ["*"]`). Developer tools stay available: Chromium's `DeveloperToolsAvailability: 2` also refuses DevTools sessions on pages, which would stop the agent driving pages through `wardyn-signin cdp --agent --session`.
 - The file is `/etc/chromium/policies/managed/wardyn.json` in the sandbox. Chromium started the normal way reads it, whoever starts it and with whatever flags.
 - An agent that can run its own code can start a browser that ignores the policy file, so the run's network policy stays the wall.
 - A Linux VM guest image that already ships `/etc/chromium/policies/managed` gets `wardyn.json` beside its own files there.
