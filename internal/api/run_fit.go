@@ -38,8 +38,9 @@ type runFitVerdict struct {
 //
 // A run that waits for a slot (waits) is refused only when a quota could never hold it, whatever is
 // left: it may fit once other runs finish. Promotion asks again with the room left at that time.
-func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, lifetimeCap time.Duration, proxyAzure, waits bool) (warnings []string, refused bool) {
-	v := s.runFit(r.Context(), spec, lifetimeCap, proxyAzure, waits)
+// enforced and machineKind choose the RuntimeClass the fit judges the agent pod under (fitClass).
+func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, enforced types.ConfinementClass, machineKind string, lifetimeCap time.Duration, proxyAzure, waits bool) (warnings []string, refused bool) {
+	v := s.runFitAt(r.Context(), spec, fitClass(enforced, machineKind), lifetimeCap, proxyAzure, waits)
 	if v.refusal != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonNamespaceQuotaExceeded, v.refusal)
 		return nil, true
@@ -61,13 +62,14 @@ func (s *Server) runFitSpec(spec types.RunPolicySpec, md mainDrive) types.RunPol
 // own cap (zero for none): a run with a cap carries a pod deadline, which selects the Terminating
 // quota scope, so the fit answers for the scope the pods will land in. proxyAzure is a run whose proxy
 // carries an Azure route gate (runProxyAzure), which the drivers give more memory.
-func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeCap time.Duration, proxyAzure, waits bool) runFitVerdict {
+func (s *Server) runFitAt(ctx context.Context, spec types.RunPolicySpec, class types.ConfinementClass, lifetimeCap time.Duration, proxyAzure, waits bool) runFitVerdict {
 	fc, ok := s.cfg.Runner.(runner.FitChecker)
 	if !ok {
 		return runFitVerdict{}
 	}
 	res := resourceLimitsToRunner(spec.Resources)
 	res.LifetimeCap, res.ProxyAzure = lifetimeCap, proxyAzure
+	res.ConfinementClass = class
 	fit, err := fc.CheckFit(ctx, res)
 	if errors.Is(err, runner.ErrFitUnsupported) {
 		return runFitVerdict{}
@@ -76,6 +78,21 @@ func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeC
 		fit = runner.Fit{Quotas: runner.ReadUnavailable, Nodes: runner.ReadSkipped}
 	}
 	return judgeFit(fit, waits)
+}
+
+// runFit is runFitAt with no barrier class: the queue's promotion asks with the default envelope, as it
+// does for the proxy, and the quota's admission decides (run_queue_promote.go).
+func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeCap time.Duration, proxyAzure, waits bool) runFitVerdict {
+	return s.runFitAt(ctx, spec, "", lifetimeCap, proxyAzure, waits)
+}
+
+// fitClass is the class whose RuntimeClass the run's agent pod runs under: a VM is the CC3 pod, whatever
+// class the run named (internal/runner/k8s CreateSandbox), and any other run its enforced class.
+func fitClass(enforced types.ConfinementClass, machineKind string) types.ConfinementClass {
+	if types.MachineKind(machineKind).IsVM() {
+		return types.CC3
+	}
+	return enforced
 }
 
 // judgeFit turns a fit answer into sentences. The first quota that cannot hold the run decides

@@ -399,6 +399,8 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.NetworkPolicyCheck = runner.WorseNetPolCheck(caps.NetworkPolicyCheck, cs.NetworkPolicyCheck)
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
 		caps.ExecOutputUncaptured = caps.ExecOutputUncaptured || cs.ExecOutputUncaptured
+		caps.UntaintedPools = append(caps.UntaintedPools, cs.UntaintedPools...)
+		caps.AnyNodeClasses = append(caps.AnyNodeClasses, cs.AnyNodeClasses...)
 		drives = drives && cs.UserDrives
 		managed = managed && cs.ManagedFiles
 		extras = extras && cs.ExtraContainers

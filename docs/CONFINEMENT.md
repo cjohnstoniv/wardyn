@@ -13,8 +13,8 @@
 | Barrier | Class | Does not protect against | How it works | Where it runs |
 |---|---|---|---|---|
 | Fence | `CC1` | A kernel exploit or container escape: it shares your machine's kernel | Hardened runc container | Any host |
-| Wall | `CC2` | A flaw in the sandbox software itself (rare); it is not a separate machine | gVisor intercepts system calls | A Docker host with the `runsc` runtime installed |
-| Vault | `CC3` | A flaw in the virtualization layer itself (very rare) | Kata microVM with its own guest kernel | A Docker host with a Kata or krun runtime and KVM (`/dev/kvm`) |
+| Wall | `CC2` | A flaw in the sandbox software itself (rare); it is not a separate machine | gVisor intercepts system calls | A Docker host with the `runsc` runtime installed, or a Kubernetes runner whose `k8s.runtimeClasses.CC2` names gVisor |
+| Vault | `CC3` | A flaw in the virtualization layer itself (very rare) | Kata microVM with its own guest kernel | A Docker host with a Kata or krun runtime and KVM (`/dev/kvm`), or a Kubernetes runner whose `k8s.runtimeClasses.CC3` names Kata |
 
 ## Pick by agent shape
 

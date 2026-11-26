@@ -75,10 +75,10 @@ func (d *Driver) cachedNodes(ctx context.Context) ([]nodeInfo, runner.ReadState)
 // enough for": nil when every pod has one, else the largest pod request that has none. It
 // compares requests to allocatable, which is size, not free capacity: pods of other namespaces
 // are invisible to this role, so nothing here claims room, and the scheduler stays authoritative.
-func nodeShortfall(nodes []nodeInfo, pl Placement, pods []podDemand) *runner.NodeShortfall {
+func nodeShortfall(nodes []nodeInfo, pods []podDemand) *runner.NodeShortfall {
 	var short *runner.NodeShortfall
 	for _, p := range pods {
-		if slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.holds(p, pl) }) {
+		if slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.holds(p, p.placement) }) {
 			continue
 		}
 		cand := runner.NodeShortfall{CPUMillis: p.requests.Cpu().MilliValue(), MemoryBytes: p.requests.Memory().Value()}
