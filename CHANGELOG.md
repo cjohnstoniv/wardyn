@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A Mac runner no longer reads the System keychain unless the organisation has an MDM device CA set. The organisation now says so each time the runner connects, and turning the CA on or off reconnects each Mac runner within one 15-second ping interval; running sandboxes keep running. Before, the runner read the keychain at every connect and every 6 hours, which showed a standard user an administrator prompt they could not answer. A runner from this release presents no device certificate to an organisation on 0.11.0-rc.3 or earlier, so upgrade the organisation first. [On a managed fleet](docs/operations/macos-vms.md#on-a-managed-fleet) says what Apple's MDM payloads allow for the device identity's key.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
