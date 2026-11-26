@@ -478,7 +478,7 @@ func TestServiceGrant_RotationCommitsBeforePublish_TwoServers_PG(t *testing.T) {
 // the publication bound because the audit chain lock is held. When a rotation commits before the failure's
 // re-reads the retry mints T3; when it stays uncommitted until the attempt returns both callers get T1, and
 // never T2, whose row is recorded as publish_unavailable.
-// Plant: in the failed-publication branch return tok, nil. Callers then get T2.
+// Plant: in the failed-publication branch return tok, nil. failure.begin is never reached and its wait times out.
 func TestServiceGrant_PublishStalledAuditAcrossRotation_TwoServers_PG(t *testing.T) {
 	pubPGBounds(t, 2*time.Second, 2*time.Second)
 	t.Run("rotation commits before the re-reads", func(t *testing.T) {
@@ -545,6 +545,7 @@ func TestServiceGrant_PublishStalledAuditAcrossRotation_TwoServers_PG(t *testing
 		f := s.f
 		before := f.idp.count()
 		locked := s.gates.hold("publish.locked")
+		failure := s.gates.hold("failure.begin")
 		settle := s.gates.hold("settle.begin")
 		chain := f.holdAuditChain()
 		refresh := pubPGAsync(f, s.row, serviceGrantTriggerRefresh)
@@ -554,8 +555,12 @@ func TestServiceGrant_PublishStalledAuditAcrossRotation_TwoServers_PG(t *testing
 		commit := f.holdRotation(s.owner, s.name)
 		pubPGPoll(t, "the held rotation to wait on A's share lock", 2*time.Second, func() bool { return f.lockWaiters("secrets") >= 1 })
 		locked.release()
+		// A's publication has returned its cut, so it can no longer commit T2: a lock-view sample alone
+		// cannot show that (a waiter running its deadlock check reads as no waiter).
+		failure.await(t)
 		pubPGPoll(t, "the held rotation to take the row lock at A's cut", 8*time.Second, func() bool { return f.lockWaiters("secrets") == 0 })
 		chain()
+		failure.release()
 		for _, ch := range []<-chan pubPGMint{refresh, resolve} {
 			if res := pubPGRecv(t, ch, "a caller of A"); res.err != nil || res.tok.token != svcToken(1) {
 				t.Fatalf("a caller got %q, %v, want T1 as the fallback and never T2", res.tok.token, res.err)
