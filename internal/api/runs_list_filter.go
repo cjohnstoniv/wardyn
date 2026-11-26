@@ -71,6 +71,20 @@ type parsedRunsListParams struct {
 	skipCounts bool // ?counts=skip: leave both hidden-count headers out
 }
 
+// parseEndedAfter reads ?ended_after=: empty is no cut, anything else must be an RFC 3339 time. A refusal is
+// written and reported as false.
+func parseEndedAfter(w http.ResponseWriter, v string) (time.Time, bool) {
+	if v == "" {
+		return time.Time{}, true
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidEndedAfterParam, "invalid ended_after")
+		return time.Time{}, false
+	}
+	return t, true
+}
+
 // parseRunsListParams reads and validates the opt-in params, resolving
 // ?owner= (and the view=user owner force) against the caller's own tier. principal
 // is the caller's own principal (principalFromRequest), used when the
@@ -243,6 +257,10 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
+	endedAfter, ok := parseEndedAfter(w, r.URL.Query().Get("ended_after"))
+	if !ok {
+		return
+	}
 	pager, capable := s.cfg.Store.(store.RunsFilteredPager)
 	if !capable {
 		writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "run listing is not scoped for this request on this store backend")
@@ -305,6 +323,12 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		}
 		w.Header().Set("X-Wardyn-Hidden-Older", strconv.Itoa(olderHidden))
 		w.Header().Set("X-Wardyn-Hidden-Killed", strconv.Itoa(killedHidden))
+	}
+	// ended_after: the ended arm reads only the rows that ended after it, and the answer echoes it, so a client keeps
+	// the ended rows it holds from at or before it. Set after the counts, which never read it.
+	if !endedAfter.IsZero() {
+		params.filter.EndedAfter = endedAfter
+		w.Header().Set("X-Wardyn-Ended-After", endedAfter.UTC().Format(time.RFC3339Nano))
 	}
 	servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
 		runs, err := pager.ListRunsFiltered(r.Context(), params.filter, p)

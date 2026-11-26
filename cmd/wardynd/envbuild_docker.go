@@ -32,6 +32,7 @@ var (
 	_ api.ImageBuildSweeper   = envBuilderAdapter{}
 	_ api.ImageIdentifier     = envBuilderAdapter{}
 	_ api.ReusingImageBuilder = envBuilderAdapter{}
+	_ api.ReuseImageReclaimer = envBuilderAdapter{}
 )
 
 // builtImage maps the builder's result to the api's.
@@ -71,6 +72,21 @@ func (e envBuilderAdapter) FinalizeBaseReused(ctx context.Context, baseRef strin
 	b, reused, err := e.b.FinalizeBaseReused(ctx, baseRef, reuseOf(reuse), e.tee(logSink))
 	built, err := builtImage(b, err)
 	return built, reused, err
+}
+
+// ListReuseImages satisfies api.ReuseImageReclaimer.
+func (e envBuilderAdapter) ListReuseImages(ctx context.Context) ([]api.ReuseImage, error) {
+	imgs, err := e.b.ListReuseImages(ctx)
+	out := make([]api.ReuseImage, 0, len(imgs))
+	for _, im := range imgs {
+		out = append(out, api.ReuseImage{Ref: im.Ref, Created: im.Created})
+	}
+	return out, err
+}
+
+// RemoveReuseImage satisfies api.ReuseImageReclaimer.
+func (e envBuilderAdapter) RemoveReuseImage(ctx context.Context, ref string) error {
+	return e.b.RemoveReuseImage(ctx, ref)
 }
 
 // LocalImage satisfies api.ImageIdentifier.

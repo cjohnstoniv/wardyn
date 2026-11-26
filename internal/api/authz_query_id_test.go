@@ -300,6 +300,7 @@ var queryParamNotAnID = map[string]string{
 	"no_end":         "run list filter for live runs with no end; narrows an already-scoped listing, never widens it",
 	"service":        "run list filter for service runs; narrows an already-scoped listing, never widens it",
 	"counts":         "run list switch (skip) that leaves the two hidden-count headers out; names no entity and changes no row of an already-scoped listing",
+	"ended_after":    "run list cut (RFC 3339): the ended arm keeps only the rows that ended after it; narrows an already-scoped listing, never widens it",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",

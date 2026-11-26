@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { runs } from "../../../../lib/api/runs";
+import { PollPauseContext } from "../../../../lib/use-poll";
 import { shortTime } from "../../../../lib/format";
 import { whenText } from "../../../../lib/schedule";
 import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
@@ -38,6 +39,8 @@ const pools = { pools: [{ id: "pool-ci", name: "CI jobs", slots: { used: 40, max
 const getRun = vi.fn();
 const killRun = vi.fn();
 const go = vi.fn();
+const close = vi.fn();
+const follow = vi.fn<typeof runs.followEvents>();
 function Where() {
   const l = useLocation();
   return <p data-testid="where">{l.pathname + l.search}</p>;
@@ -55,8 +58,8 @@ function Typed() {
   return <p data-testid="typed">{launch.title}</p>;
 }
 
-function open(state?: LaunchedState) {
-  render(
+const tree = (state?: LaunchedState, held = false) => (
+  <PollPauseContext.Provider value={held}>
     <MemoryRouter initialEntries={[{ pathname: "/runs/new", search: `?launched=${ID}`, state }]}>
       <OperatorProvider operator={false} principal="alice">
         <NewRunDraftProvider owner="alice">
@@ -68,14 +71,21 @@ function open(state?: LaunchedState) {
           <Where />
         </NewRunDraftProvider>
       </OperatorProvider>
-    </MemoryRouter>,
-  );
+    </MemoryRouter>
+  </PollPauseContext.Provider>
+);
+
+function open(state?: LaunchedState, held = false) {
+  return render(tree(state, held));
 }
 
 beforeEach(() => {
   getRun.mockReset().mockResolvedValue(run());
   killRun.mockReset().mockResolvedValue(undefined);
   go.mockReset();
+  close.mockReset();
+  follow.mockReset().mockReturnValue(close);
+  vi.spyOn(runs, "followEvents").mockImplementation(follow);
   vi.spyOn(runs, "getRun").mockImplementation(getRun);
   vi.spyOn(runs, "killRun").mockImplementation(killRun);
   vi.spyOn(runnerPools, "list").mockResolvedValue(pools);
@@ -353,5 +363,68 @@ describe("Launched: reload and identity", () => {
     });
     expect(screen.getByTestId("launched-stale")).toHaveTextContent(NR_LAUNCH_STALE);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("nightly build");
+  });
+});
+
+describe("Launched: the run's event stream", () => {
+  it("reads the run again as soon as its event stream says it changed", async () => {
+    getRun.mockResolvedValueOnce(run({ state: "STARTING" })).mockResolvedValue(run({ state: "RUNNING" }));
+    open();
+    await screen.findByText(NR_LAUNCH.BADGE_STARTING);
+    act(() => follow.mock.calls[0][1]("ready"));
+    await waitFor(
+      () => {
+        expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument();
+        expect(getRun).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 1000 },
+    );
+    expect(follow).toHaveBeenCalledWith(ID, expect.any(Function));
+  });
+
+  it("follows the stream only while the run starts or waits", async () => {
+    getRun.mockResolvedValueOnce(run({ state: "STARTING" })).mockResolvedValue(run({ state: "RUNNING" }));
+    open();
+    await screen.findByText(NR_LAUNCH.BADGE_STARTING);
+    act(() => follow.mock.calls[0][1]("ready"));
+    await waitFor(() => expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument(), { timeout: 1000 });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(follow).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    close.mockReset();
+    follow.mockReset().mockReturnValue(close);
+    getRun.mockReset().mockRejectedValue(new Error("Failed to fetch"));
+    open();
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+  });
+
+  it("an older read that answers late does not undo a newer one", async () => {
+    let release!: (r: LaunchedRun) => void;
+    getRun
+      .mockResolvedValueOnce(run({ state: "STARTING" }))
+      .mockReturnValueOnce(new Promise<LaunchedRun>((r) => (release = r)))
+      .mockResolvedValue(run({ state: "RUNNING" }));
+    open();
+    await screen.findByText(NR_LAUNCH.BADGE_STARTING);
+    act(() => follow.mock.calls[0][1]("pulling"));
+    act(() => follow.mock.calls[0][1]("ready"));
+    await waitFor(() => expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument());
+    await act(async () => {
+      release(run({ state: "STARTING" }));
+    });
+    expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument();
+  });
+
+  it("holds the stream while the console is signed out, and opens it again after", async () => {
+    getRun.mockResolvedValue(run({ state: "STARTING" }));
+    const { rerender } = open(undefined, true);
+    await waitFor(() => expect(getRun).toHaveBeenCalledTimes(1));
+    await screen.findByText(NR_LAUNCH.BADGE_STARTING);
+    expect(follow).not.toHaveBeenCalled();
+    rerender(tree(undefined, false));
+    await waitFor(() => expect(follow).toHaveBeenCalledTimes(1));
+    rerender(tree(undefined, true));
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
   });
 });

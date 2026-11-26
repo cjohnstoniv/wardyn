@@ -43,7 +43,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -139,12 +138,16 @@ const driveReclaimTimeout = 30 * time.Second
 //	400  the request cannot name an object (a bad subject, a tier that has no
 //	     single object, a home the drive's template cannot derive)
 //	404  no such drive
-//	409  one of the person's runs is starting, or the substrate refused: the
-//	     object is not this drive's, a reclaim is already in flight, or a run
-//	     still holds it
+//	409  one of the person's runs is starting, a run that has not ended holds the
+//	     object, another reclaim of it started less than a minute ago, or the
+//	     substrate refused: the object is not this drive's, a reclaim is already
+//	     in flight, or a run still holds it
 //	422  this drive's backend allocates nothing this deployment may destroy
 //	501  the wired runner cannot reclaim at all
-//	500  anything else
+//	500  anything else; the object stays fenced until a later reclaim answers
+//	     deleted or already_absent once the substrate was asked, and when a
+//	     settle of the claim failed (user_drive_reclaim_failed, "the reclaim's
+//	     mark on the object could not be updated")
 //
 // operatorOnly (routes.go).
 func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) {
@@ -222,59 +225,14 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 			"remove the object with the substrate command in docs/OPERATIONS.md instead")
 		return
 	}
-	// SECURITY: one of this person's runs still STARTING may have checked the object and not yet mounted it, or may
-	// make it again right after the reclaim, so the object counts as in use until that run leaves STARTING, as a
-	// member drive's delete counts it (deleteMemberDrive). Each runner also refuses, at the mount, an object that
-	// is no longer the one it checked. A store that cannot answer refuses the reclaim.
-	starting, err := true, error(nil)
-	if st, ok := s.cfg.Store.(interface {
-		MemberDriveOwnerStarting(ctx context.Context, owner string, leaseFresh time.Duration) (bool, error)
-	}); ok {
-		starting, err = st.MemberDriveOwnerStarting(r.Context(), homeSubject, watcherLeaseStaleAfter)
-	}
-	if err != nil {
+	fs, ok := s.cfg.Store.(store.DriveReclaimFenceStore)
+	if !ok {
 		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeFailed, false)
-		writeServerError(w, r, "read the person's starting runs", err)
+		writeErrorReason(w, http.StatusInternalServerError, reasonUserDriveReclaimFailed, "this deployment cannot fence a reclaim, so it reclaims nothing; "+
+			"remove the object with the substrate command in docs/OPERATIONS.md instead")
 		return
 	}
-	if starting {
-		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
-		writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "reclaim refused: one of this person's runs is starting")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), driveReclaimTimeout)
-	defer cancel()
-	outcome, err := reclaimer.ReclaimDrive(ctx, types.DriveMount{
-		DriveID:      d.ID,
-		Backend:      d.Backend,
-		ObjectName:   object,
-		HostRoot:     d.HostRoot,
-		DriveName:    d.Name,
-		StorageClass: d.StorageClass,
-		HomeName:     driveHomeOf(object, d),
-		SubjectHash:  types.DriveSubjectHash(homeSubject),
-		Target:       runner.DriveTarget,
-	})
-	if err != nil {
-		if errors.Is(err, runner.ErrDriveInUse) || errors.Is(err, runner.ErrDriveNotReclaimable) {
-			// These wrap OUR OWN sentinel errors (runner.ErrDriveInUse /
-			// ErrDriveNotReclaimable). The drivers add the object's name and, on
-			// Kubernetes, the holding pod's name (wardyn-agent-<run id>); both
-			// are already in the 200 body and the audit row, and the route is
-			// super-admin only, so the body crosses no trust boundary.
-			s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
-			writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "reclaim refused: "+err.Error())
-			return
-		}
-		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeFailed, false)
-		writeServerError(w, r, "reclaim drive", err)
-		return
-	}
-	s.auditDriveReclaim(r, d, g, object, string(outcome), true)
-	writeJSON(w, http.StatusOK, userDriveReclaimResponse{
-		Drive: d.Name, DriveID: d.ID, SubjectType: g.SubjectType, Subject: g.Subject,
-		Backend: d.Backend, Object: object, Outcome: string(outcome),
-	})
+	s.reclaimFenced(w, r, fs, reclaimer, d, g, object, homeSubject)
 }
 
 // driveReclaimableHere answers whether THIS deployment may destroy anything for

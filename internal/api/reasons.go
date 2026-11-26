@@ -307,6 +307,7 @@ const (
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonInvalidServiceParam       = "invalid_service_param"        // ?service= is present and not "0" or "1"
 	reasonInvalidCountsParam        = "invalid_counts_param"         // ?counts= is not "" or "skip"
+	reasonInvalidEndedAfterParam    = "invalid_ended_after_param"    // ?ended_after= is not an RFC 3339 time
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
@@ -638,6 +639,9 @@ const (
 	// many runs are still asking. Shared with userDriveWriteRefusal's OWN
 	// org-switch check (user_drives.go): the identical cause, one route apart.
 	driveRefusalDrivesDisabled = "drives_disabled"
+	// driveRefusalReclaiming: a super admin's reclaim has claimed the drive's storage object, and no run attaches it
+	// until the reclaim confirms the object gone (user_drives_reclaim_fence.go).
+	driveRefusalReclaiming = "reclaiming"
 )
 
 // The drives[] carrier (run_drives.go); the sentences are drive_refusals.go's.

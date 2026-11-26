@@ -764,6 +764,9 @@ func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ce
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, spec, orgConfigKeys, llm, p) {
 		return false
 	}
+	if !s.holdReclaimableDrives(ctx, run, p.Drives) {
+		return false
+	}
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec)
 	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease)

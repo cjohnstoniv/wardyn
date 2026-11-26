@@ -11,6 +11,7 @@ package store_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -430,4 +431,66 @@ func idList(runs []types.AgentRun) []uuid.UUID {
 		out[i] = r.ID
 	}
 	return out
+}
+
+// TestPG_ListRunsFiltered_EndedAfterReadsOnlyLaterEnds pins ended_after: the ended arm keeps only the rows whose end
+// time (a lease-ended run's lost_at) is after it, live rows are listed as always, and the hidden counts never read it.
+func TestPG_ListRunsFiltered_EndedAfterReadsOnlyLaterEnds(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "ended-after-" + uuid.NewString()
+	now := time.Now().UTC()
+
+	older := newFilterRun(owner, types.RunRunning)
+	older.CreatedAt = now.Add(-2 * time.Hour)
+	older = persistRun(t, ctx, pool, older)
+	newer := newFilterRun(owner, types.RunRunning)
+	newer.CreatedAt = now.Add(-time.Hour)
+	newer = persistRun(t, ctx, pool, newer)
+
+	completed := func(ago time.Duration) types.AgentRun {
+		r := persistRun(t, ctx, pool, newFilterRun(owner, types.RunCompleted))
+		stampEnded(t, ctx, pool, r.ID, types.RunCompleted, timePtr(now.Add(-ago)), nil, "")
+		return r
+	}
+	completed(10 * time.Minute)
+	completed(3 * time.Minute)
+	recent := completed(30 * time.Second)
+	lease := persistRun(t, ctx, pool, newFilterRun(owner, types.RunRunning))
+	stampEnded(t, ctx, pool, lease.ID, types.RunRunning, nil, timePtr(now.Add(-20*time.Second)), types.LostEnded)
+	killed := persistRun(t, ctx, pool, newFilterRun(owner, types.RunKilled))
+	stampEnded(t, ctx, pool, killed.ID, types.RunKilled, timePtr(now.Add(-time.Minute)), nil, "")
+
+	cut := now.Add(-2 * time.Minute)
+	got, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, EndedAfter: cut}, store.Page{Limit: 50})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	want := []uuid.UUID{newer.ID, older.ID, lease.ID, recent.ID, killed.ID}
+	if gotIDs := idsOfRuns(got); !slices.Equal(gotIDs, want) {
+		t.Errorf("with EndedAfter: got %v, want %v", gotIDs, want)
+	}
+
+	got, err = pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, EndedAfter: cut, Statuses: []string{"ended"}}, store.Page{Limit: 50})
+	if err != nil {
+		t.Fatalf("list ended: %v", err)
+	}
+	if gotIDs, wantEnded := idsOfRuns(got), []uuid.UUID{lease.ID, recent.ID, killed.ID}; !slices.Equal(gotIDs, wantEnded) {
+		t.Errorf("status ended with EndedAfter: got %v, want %v", gotIDs, wantEnded)
+	}
+
+	f := store.RunFilter{Owner: owner, EndedWithin: 24 * time.Hour}
+	olderWithout, killedWithout, err := pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	f.EndedAfter = cut
+	olderWith, killedWith, err := pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("count with cut: %v", err)
+	}
+	if olderWith != olderWithout || killedWith != killedWithout {
+		t.Errorf("CountHiddenRuns read the cut: with (%d, %d), without (%d, %d)", olderWith, killedWith, olderWithout, killedWithout)
+	}
 }
