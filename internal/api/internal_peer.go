@@ -61,7 +61,6 @@ func (s *Server) refuseUnverifiedPeer(w http.ResponseWriter, r *http.Request, cl
 	return false
 }
 
-// denyPeer audits and writes one refusal of refuseUnverifiedPeer.
 // proxyPeerID is the SPIFFE ID a run's proxy presents to the control plane as its client certificate: the
 // run's own, only with WARDYN_INTERNAL_MTLS on and only for a sandbox this daemon's own Kubernetes runner
 // creates (runOnKubernetes with no runner placing the run). Every other proxy gets "" and presents none.
@@ -72,6 +71,7 @@ func (s *Server) proxyPeerID(run types.AgentRun) string {
 	return run.SPIFFEID
 }
 
+// denyPeer audits and writes one refusal of refuseUnverifiedPeer.
 func (s *Server) denyPeer(w http.ResponseWriter, r *http.Request, status int, reason, msg string) bool {
 	s.auditAuthFailedAs(r, internalAuthActor, reason)
 	writeErrorReason(w, status, reason, msg)

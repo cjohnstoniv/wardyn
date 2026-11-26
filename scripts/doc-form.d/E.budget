@@ -199,7 +199,7 @@
 # docs/ENV.md 47565 = ours 47537 + theirs 47328 - base 47300 at the 0.10 W7 merge of surface.
 # docs/ENV.md 47513 = ours 47315 + theirs 47498 - base 47300 at the 0.10 W7 merge of merge of train/018-w1b 9fae2024b into host-rule-holds.
 # docs/ENV.md 47580 = ours 47565 + theirs 47513 - base 47498 at the 0.10 W7 merge of host-rule-holds.
-docs/ENV.md=52713 share=5 # 52713 measured (+238: the WARDYN_INTERNAL_MTLS row and details section); earlier: 52475 measured (+178: the seven spire identity provider variables)
+docs/ENV.md=52739 share=5 # 52739 measured (+264: the WARDYN_INTERNAL_MTLS row and details section); earlier: 52475 measured (+178: the seven spire identity provider variables)
 # docs/ENV.md 42259 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/ENV.md 41191 adds 520 over 40671 (0.10 FEAT-1MCP), measured: the WARDYN_MCP_LOCAL_SERVERS row and details with its before-you-upgrade lines and its setup-status feature bit, and the WARDYN_MCP_STDIO_TOML row and details, which the env-doc guard requires.
 # docs/ENV.md 41208 adds 17 over 41191 (0.10 FEAT-1MCP review): the npx pin applies to the npx form only; an absolute program is trusted as the image is.

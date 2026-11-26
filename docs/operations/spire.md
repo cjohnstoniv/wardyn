@@ -118,6 +118,7 @@
 - With it on, a run on an organization pool's remote-hosted runner is refused `internal_peer_required` at its proxy's first control-plane call, because that proxy has no run certificate. Estates with remote-hosted runners leave it off.
 - A run already running when it is turned on has a proxy with no run certificate, so it is refused the same way.
 - Certificates are not revoked at the kill: one lasts until it expires, and the denied run token is what stops the run.
+- A run's last upload after it ends also needs an unexpired certificate, so one sent more than the certificate lifetime (`x509_svid_ttl`) after the kill is refused.
 - To turn it on, add it to the chart's `env`:
 
   ```yaml

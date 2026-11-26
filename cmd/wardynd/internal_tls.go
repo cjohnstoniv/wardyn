@@ -147,7 +147,7 @@ func startInternalListener(hop *hopTLS, f *bootFlags, handler http.Handler, errC
 	tc := hop.server.Clone()
 	if f.internalMTLS != nil && *f.internalMTLS {
 		// Asked, not required: the ground-truth ingest presents none, and internalAuth refuses a run's
-		// request that comes without one (internal_mtls.go).
+		// request that comes without one (internal/api/internal_peer.go).
 		tc.ClientAuth = tls.RequestClientCert
 	}
 	srv := &http.Server{
