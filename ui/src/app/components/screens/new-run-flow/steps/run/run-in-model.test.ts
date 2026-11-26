@@ -121,8 +121,13 @@ describe("run in reconcile", () => {
 
   it("says the person is no longer in the unit when no such request is held", () => {
     expect(reconcileRunIn("Gone unit", c, listOf([]), "Platform")).toEqual({ keep: false, notice: NR_RUN_IN.NO_LONGER_IN("Gone unit", "Platform") });
-    expect(reconcileRunIn("u-pay", c, null, "Platform")).toEqual({ keep: false, notice: NR_RUN_IN.NO_LONGER_IN("u-pay", "Platform") });
+    expect(reconcileRunIn("u-pay", c, listOf([]), "Platform")).toEqual({ keep: false, notice: NR_RUN_IN.NO_LONGER_IN("u-pay", "Platform") });
     expect(NR_RUN_IN.NO_LONGER_IN("Data science", "Platform")).toBe("You're no longer in Data science, so this run goes to your home unit, Platform.");
+  });
+
+  it("keeps a unit it cannot check when the requests could not be read", () => {
+    expect(reconcileRunIn("u-pay", c, null, "Platform")).toEqual({ keep: true });
+    expect(reconcileRunIn("Gone unit", c, null, "Platform", { unitId: "Gone unit", name: "Gone unit" })).toEqual({ keep: true });
   });
 
   it("names a unit the person picked by the name it had then, and only that unit", () => {

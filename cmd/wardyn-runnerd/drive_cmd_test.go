@@ -175,6 +175,34 @@ func driveOpenJobIn(t *testing.T, entries ...driveOpenEntry) (driveOpenJob, *dri
 		mark: func(*os.File) error { return nil }, out: out}, g, dir, out
 }
 
+// A cancel ends the copy into a guest command that reads none of its input: the session closes, which wakes
+// the write parked on the guest's flow control.
+func TestDriveOpenRunEndsOnCancelWhileTheGuestReadsNoInput(t *testing.T) {
+	release := make(chan struct{})
+	g := &driveOpenGuest{during: func(argv []string) {
+		if argv[0] == "/usr/bin/tar" {
+			<-release // reads no stdin until the test ends
+		}
+	}}
+	j := driveOpenJob{agent: driveOpenAgent(t, g)}
+	t.Cleanup(func() { close(release) })
+	ctx, cancel := context.WithCancel(t.Context())
+	ran := make(chan error, 1)
+	go func() {
+		ran <- j.run(ctx, bytes.NewReader(make([]byte, 32<<20)), "/usr/bin/tar", "-C", "/x", "-xf", "-")
+	}()
+	time.Sleep(300 * time.Millisecond) // far more than the stream's window: the copy is parked by now
+	cancel()
+	select {
+	case err := <-ran:
+		if err == nil {
+			t.Fatal("a cancelled run reported success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the copy into a guest command that reads no input did not end within 2s of the cancel")
+	}
+}
+
 func driveOpenSentNames(t *testing.T, stdin []byte) map[string]string {
 	t.Helper()
 	sent := map[string]string{}

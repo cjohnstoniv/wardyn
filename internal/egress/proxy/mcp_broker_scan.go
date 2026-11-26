@@ -28,7 +28,7 @@ func (x *mcpExchange) scanBody(w http.ResponseWriter, body []byte) (scan *egress
 	}
 	// The scan slot bounds extraction's memory, as on the forward path; a body that waits past it
 	// is not inspected, so it is not sent.
-	free, err := x.p.scan.takeSlot(x.r.Context())
+	free, err := x.p.scan.takeSlot(x.r.Context(), int64(len(body)))
 	if err != nil {
 		x.deny(w, ruleSourceMCPRequest, "the MCP request body could not be inspected in time", http.StatusBadGateway)
 		return nil, false

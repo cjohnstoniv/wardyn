@@ -157,11 +157,12 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	// (push_advert.go). Without it a shallow clone's push is thin and every
 	// one of them is refused as uninspectable.
 	noThin := p.noThinAdvert(r, verb)
-	authorize := func(out *http.Request) {
+	authorize := func(out *http.Request) error {
 		if noThin {
 			out.Header.Set("Accept-Encoding", "identity")
 		}
 		out.Header.Set(hdr.name, hdr.value)
+		return nil
 	}
 	body, replay := adoGitReplayBody(r, verb, body)
 	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, allowSrc, ruleSourceADOGitDenied, authorize)

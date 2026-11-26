@@ -1672,6 +1672,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Requests, answers and ends are audited as `support.request`, `support.accept`, `support.decline` and `support.end`. The grant ends even when its `support.end` row is not written: a row lost because wardynd stopped, or because the audit sink and spool refused it, right after the end is not retried.
 - `GET /setup/status` publishes it as `features.support_sessions`, present only when on.
 - Needs migration `0293_run_support_grants`.
+- The server's database role needs `SELECT` and `UPDATE` on `run_support_grants`. Without `SELECT`, approval decisions are refused, since the server cannot tell whether the person deciding helped in the run, and a person's erasure fails until the grant is fixed. Without `UPDATE`, an erasure that has support-request text to remove fails the same way.
 - A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_MCP_LOCAL_SERVERS`
@@ -2288,9 +2289,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **The re-originating proxy needs this too:** the Phase B AWS-SSO MITM lane (`WARDYN_AWS_SSO_PROXY_INJECT`, above) terminates and re-originates `portal.sso.<region>` on that SAME sidecar forwarding transport.
 - So behind a TLS-intercepting corporate proxy this var is what lets the re-origination trust it.
 - Unset, the re-origination fails `x509: certificate signed by unknown authority`, filed as the same bare `builtin:dial-failed` as any other dial failure.
-- Installing a CA is one action PER TOOLCHAIN, so dispatch sets five vars.
+- Installing a CA is one action PER TOOLCHAIN, so dispatch sets six vars.
 - Grep for whichever yours reads: `NODE_EXTRA_CA_CERTS` (Node — ADDS to its bundled roots, so it gets the bare CA)
-- Plus `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `AWS_CA_BUNDLE` (OpenSSL-Python, `requests`, curl, AWS CLI v2 — each REPLACES its trust store, so all four get the combined bundle
+- Plus `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `AWS_CA_BUNDLE` / `GIT_SSL_CAINFO` (OpenSSL-Python, `requests`, curl, AWS CLI v2, git — each REPLACES its trust store, so all five get the combined bundle
 - AWS CLI v2 needs its own because it ships its own Python and CA store and reads none of the other four).
 - **Java is reached by none of them**: the JVM's `cacerts` keystore sits behind no environment variable, so a Java toolchain in a custom image needs its own build-time `keytool -importcert` step.
 - Wardyn does not do it for you (same for Deno's `DENO_CERT`).
@@ -2554,7 +2555,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PROXY_LIVE_DENY_DIR` | path | (unset) | Set by wardynd or a runner on a Kubernetes proxy pod, never by an operator. The proxy keeps live edit denies in `live-denies.json` here, reapplies them at start and takes new ones on `narrow.sock`. An invalid list stops the proxy. |
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
-| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
+| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits per request, queued behind another or for a `wait_for_review` approval, before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
 | `WARDYN_PROXY_STALE_CREDENTIAL_MAX` | duration | `15m` | how long past its lease the proxy adds an injected credential's last good value while wardynd does not answer; never past the credential's own expiry. `0` adds none; longer or invalid keeps `15m`. Forwarded to every proxy sidecar. |
 
 ### `WARDYN_PROXY_CONFIG_STDIN`
@@ -2659,21 +2660,22 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `WARDYN_URL` | string | `http://localhost:8080` | control plane URL the CLI dials, from OUTSIDE the daemon (flag `-url`); a permanent CLI-side alias, not a stale duplicate. [Details](#wardyn_url) |
+| `WARDYN_URL` | string | `http://localhost:8080` | control plane URL the CLI dials, from OUTSIDE the daemon (flag `--url`); a permanent CLI-side alias, not a stale duplicate. [Details](#wardyn_url) |
 | `WARDYN_ADMIN_TOKEN` 🔒 | string | (unset) | admin bearer for CLI calls |
 | `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer ([`cmd/wardyn/main.go`](../cmd/wardyn/main.go)) — read by the CLI and by `wardyn-runnerd setup --claim` (your own personal API token), never by `wardynd` |
 | `WARDYN_CLI_ALLOW_PLAINTEXT` | bool | `false` | silence the warning the CLI prints when the admin token would travel in cleartext (`http://` to a non-loopback wardynd). Advisory only — the call is never refused; set it when TLS terminates in front of the control plane |
 
 ### `wardyn doctor`
 
-- Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
-- It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
+- Checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
+- It never prints a token or a proxy credential and changes no setting. Like every command that calls the server, it renews a saved sign-in whose access token is spent, and stores the renewal, or the server's refusal of it, with that sign-in.
+- It exits 1 when a stage fails; `--json` gives the stages as data.
 - It trusts what the CLI trusts: the system roots, and for the organisation's host the CAs `wardyn ca add` stored. It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle, which a runner trusts, would verify the server.
 - With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)). Its `runner-exits` stage fails when the organisation parked one of that runner's exit receipts ([runner-offline.md](runner-offline.md)).
 
 ### `WARDYN_URL`
 
-- Control plane URL the CLI dials, from OUTSIDE the daemon (flag `-url`).
+- Control plane URL the CLI dials, from OUTSIDE the daemon (flag `--url`).
 - **#203: a permanent CLI-side alias, not a stale duplicate** — `WARDYN_CONTROL_PLANE_URL` above is the canonical name for wardynd's own internal TLS listener address (what the daemon advertises to its OWN proxies).
 - `WARDYN_URL` is the separate, CLI-facing name for the address a human or script reaches the daemon's public API on.
 - The two can be, and usually are, different addresses (a CLI on a laptop talking to a control plane behind a load balancer, say)

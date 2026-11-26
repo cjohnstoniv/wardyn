@@ -16,6 +16,7 @@
 package recording
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -562,6 +563,53 @@ func (s *FSStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 		return size, nil, err
 	}
 	return size, tail, nil
+}
+
+// statHeadTail is StatAndTail plus the cast's header line, all read through one open file. A save replaces the
+// file by rename, so one handle is one revision: the three never come from two saves. The header is read as
+// replay reads it (up to its newline), but no more than maxJoinHeaderBytes of it is read; a header longer than
+// that comes back nil.
+func (s *FSStore) statHeadTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, []byte, error) {
+	f, lock, err := s.openCast(ctx, key)
+	if lock != nil {
+		defer lock.Close()
+	}
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	size := info.Size()
+	// Section readers bound every read to the size stated above, as StatAndTail's LimitReader does.
+	header, err := readJoinHeader(io.NewSectionReader(f, 0, size))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	start := max(size-tailBytes, 0)
+	tail, err := io.ReadAll(io.NewSectionReader(f, start, size-start))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return size, header, tail, nil
+}
+
+// readJoinHeader reads r's first line, newline included, from at most maxJoinHeaderBytes+1 bytes. A line longer
+// than maxJoinHeaderBytes comes back nil; a short r with no newline comes back whole, as joinedHeader reads it.
+func readJoinHeader(r io.Reader) ([]byte, error) {
+	head, err := io.ReadAll(io.LimitReader(r, maxJoinHeaderBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if i := bytes.IndexByte(head, '\n'); i >= 0 {
+		head = head[:i+1]
+	}
+	if len(head) > maxJoinHeaderBytes {
+		return nil, nil
+	}
+	return head, nil
 }
 
 // maxCastKeyBytes bounds a whole cast key, suffixes included. FSStore names

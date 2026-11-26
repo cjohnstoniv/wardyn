@@ -846,6 +846,11 @@ only at the end.`,
 			if _, err := c.GetRun(cmd.Context(), id); err != nil {
 				return err
 			}
+			if follow {
+				if err := checkFollowServer(cmd.Context(), c); err != nil {
+					return err
+				}
+			}
 			var tail logTail
 			// Polls taken AFTER the run was first seen terminal. The completion
 			// watcher flips the state BEFORE finalizeRunTail writes run.complete,
@@ -854,9 +859,10 @@ only at the end.`,
 			// promises. Bounded: two extra polls, and it stops as soon as one
 			// comes back with nothing new.
 			drains := 0
-			for {
+			wait := interval
+			for later := false; ; later = true {
 				newEvents, err := tail.poll(func(offset int) ([]types.AuditEvent, bool, error) {
-					return c.AuditEventsPage(cmd.Context(), id, sdk.AuditFilter{Order: "desc"}, sdk.ListOpts{Offset: offset})
+					return c.AuditEventsPage(cmd.Context(), id, sdk.AuditFilter{Order: "desc"}, logsPage(later, offset))
 				})
 				if err != nil {
 					return err
@@ -878,16 +884,16 @@ only at the end.`,
 					}
 					drains++
 				}
-				select {
-				case <-cmd.Context().Done():
-					return cmd.Context().Err()
-				case <-time.After(interval):
+				// A quiet run is read less often (logsMaxInterval at most); anything new, or its end, returns to --interval.
+				wait = nextLogsWait(wait, interval, fresh, run.State.IsTerminal())
+				if err := logsSleep(cmd.Context(), wait); err != nil {
+					return err
 				}
 			}
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", true, "keep polling until the run reaches a terminal state (like tail -f)")
-	cmd.Flags().DurationVar(&interval, "interval", logsInterval, "poll interval while following")
+	cmd.Flags().DurationVar(&interval, "interval", logsInterval, "poll interval while following; a quiet run is read less often, up to every 10s")
 	return cmd
 }
 

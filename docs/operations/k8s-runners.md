@@ -88,7 +88,8 @@
 
 7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
 8. An admin adds the runner to an organisation pool with `wardyn runner pool add <pool> <runner>` (`PUT /api/v1/runner-pools/{pool}/runners/{runner}`). `wardyn runner pool remove`, or `DELETE` on the same path, takes it out. An organisation runner goes only into an organisation pool. It serves each runs namespace for one pool only: see [Several runs namespaces](#several-runs-namespaces).
-9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
+9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd connects only after its boot checks, the network-policy canary among them, pass.
+   - The chart sets no readiness probe: a `Running` pod or a finished `kubectl rollout status` can still be waiting on the canary.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
 - The chart is not published to a registry. A checkout's default `image.tag` is its own release.
@@ -204,6 +205,7 @@
 2. Run `helm upgrade` with the new `image.tag`. The chart pins runnerd and the proxy to one tag.
 3. `Recreate` stops the old pod before the new one starts. The organisation supports runnerd N and N-1.
 4. Runs survive the restart only if runnerd is READY again and each proxy renews before its deadline: see [Self-lapse](#self-lapse-and-outages).
+5. Confirm in *Admin → Runners* that the runner is Online again, with its architecture and trust class, as in install step 9. A `Running` pod does not show that the canary passed.
 
 - The state volume holds the runner's identity. If it is lost, mint a new token, use a fresh volume and revoke the old runner. There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.

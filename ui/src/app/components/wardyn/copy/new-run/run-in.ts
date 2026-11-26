@@ -26,6 +26,7 @@ export const NR_RUN_IN = {
   BLOCKER_WAITING: (unit: string) => `Your request for ${unit} is waiting for approval. You can launch once someone approves it, or pick another unit.`,
   LOADING: "Loading your units…",
   UNITS_UNREADABLE: "Couldn't load your other units. This run goes to your home unit.",
+  REQUESTS_UNREADABLE: (unit: string) => `Couldn't load your requests, so ${unit} can't be checked here. The run asks for ${unit}, and the server checks your access when it starts.`,
   ENDED: (unit: string, home: string) => `Your elevation in ${unit} ended, so this run goes to your home unit, ${home}.`,
   NO_LONGER_IN: (unit: string, home: string) => `You're no longer in ${unit}, so this run goes to your home unit, ${home}.`,
 } as const;

@@ -5,8 +5,10 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -158,5 +160,19 @@ func TestServeBoundsTheCrashLogAtStart(t *testing.T) {
 	defer restore2()
 	if got := fileSize(t, crash); got != 5 {
 		t.Errorf("a crash log under the bound became %d bytes, want it kept at 5", got)
+	}
+}
+
+// TestLogFileDocStatesTheBound: docs/runner-registration.md states the log's bound as logFileMax and logFileKeep give
+// it, and that a failed rotation lets the log grow, as TestRotatingLogSurvivesAFailedRotation shows it does.
+func TestLogFileDocStatesTheBound(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "runner-registration.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("rotates that log itself, %d MiB at most while rotation succeeds; a failed rotation lets it grow until the next one succeeds.",
+		logFileMax*(logFileKeep+1)>>20)
+	if !strings.Contains(string(b), want) {
+		t.Errorf("docs/runner-registration.md does not say %q", want)
 	}
 }

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -175,14 +176,13 @@ func (e *scimCovEnv) wantNoForeignEffect(t *testing.T, st *scimCovStore, tokens 
 	}
 }
 
-// A foreign member the group still holds is left alone by a remove-all PATCH and by a group DELETE, while the
+// A foreign member the group still holds is left alone by a remove-all PATCH, while the
 // endpoint's own member is removed: only the own member opens a ledger.
 func TestSCIMCovRetainedForeignMembersAreNotRemoved(t *testing.T) {
 	for _, c := range []struct {
 		name, method, body string
 	}{
 		{"remove all", http.MethodPatch, scimCovPatch(`{"op":"Remove","path":"members"}`)},
-		{"delete group", http.MethodDelete, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()
@@ -222,7 +222,7 @@ func TestSCIMCovSweeperResumeOfAForeignRemovalDoesNothing(t *testing.T) {
 			}
 			e := newSCIMCovEnv(t, st)
 
-			if err := e.srv.removeGroupMember(context.Background(), st, g, target.ID, scimSweeperSlot, true); err != nil {
+			if err := e.srv.removeGroupMember(context.Background(), st, g, target.ID, scimSweeperSlot, true, false); err != nil {
 				t.Fatalf("removeGroupMember = %v, want nil", err)
 			}
 			if got := st.callCount("ResumeGroupRemoval") + st.callCount("StartGroupRemoval"); got != 0 {
@@ -326,4 +326,57 @@ func TestSCIMCovSweeperResumesOwnRemovalsBehindAFullBatchOfForeignOnes(t *testin
 		t.Errorf("own token revoked = %t, legacy token revoked = %t, want both", st.tokenRevoked(ownTok), st.tokenRevoked(legacyTok))
 	}
 	e.wantNoForeignEffect(t, st, foreignTokens, foreign...)
+}
+
+// A group DELETE cuts every member it removes before the group goes, a member of another issuer or tenant
+// included: their sessions are cut, their group-holding tokens revoked, and no sessions or tokens step is left.
+func TestSCIMCovDeleteGroupCutsForeignMembersBeforeTheGroupGoes(t *testing.T) {
+	st := newSCIMCovStore()
+	g, own, fIssuer, fTenant, tokens := scimCovForeignHolds(st)
+	e := newSCIMCovEnv(t, st)
+
+	if w := e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if _, ok := st.groups[g.ID]; ok {
+		t.Error("the group is still stored")
+	}
+	for _, tok := range tokens {
+		if !st.tokenRevoked(tok) {
+			t.Errorf("a foreign member's group-holding token %v survived the delete", tok)
+		}
+	}
+	_, cut := e.rev.snapshot()
+	for _, f := range []store.PrincipalIdentity{fIssuer, fTenant} {
+		if !slices.ContainsFunc(cut, func(c string) bool { return strings.Contains(c, f.Principal) }) {
+			t.Errorf("no session cut names foreign %s: %v", f.Principal, cut)
+		}
+	}
+	for _, id := range []uuid.UUID{own.ID, fIssuer.ID, fTenant.ID} {
+		for _, step := range st.pendingSteps(id, store.JobKindGroupRemove) {
+			if step == store.GroupStepSessions || step == store.GroupStepTokens {
+				t.Errorf("identity %v still owes its %s step after the 204", id, step)
+			}
+		}
+	}
+}
+
+// A cut that fails keeps the group: the delete is never asked for, the answer is a 5xx, and the member's removal
+// stays pending for the retry.
+func TestSCIMCovDeleteGroupKeepsTheGroupWhenAForeignCutFails(t *testing.T) {
+	st := newSCIMCovStore()
+	g, _, fIssuer, _, _ := scimCovForeignHolds(st)
+	e := newSCIMCovEnv(t, st)
+	e.rev.set(nil, errors.New("cut unavailable"))
+
+	scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), "cut unavailable")
+	if _, ok := st.groups[g.ID]; !ok {
+		t.Fatal("the group is gone although a member's cut failed")
+	}
+	if st.callCount("DeleteScimGroup") != 0 {
+		t.Error("the group delete was asked for while a cut was failing")
+	}
+	if steps := st.pendingSteps(fIssuer.ID, store.JobKindGroupRemove); len(steps) == 0 {
+		t.Error("the foreign member's removal is not pending after the failed cut")
+	}
 }

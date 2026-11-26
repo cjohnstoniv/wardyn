@@ -454,6 +454,9 @@ func TestMCPBroker_RebindingPinned(t *testing.T) {
 	if got := f.dialled(); len(got) == 0 || got[len(got)-1] != "93.184.216.34:443" || res.calls["mcp.linear.test"] != 1 {
 		t.Fatalf("dials %v after %d resolves; want the pinned public address from one resolve", got, res.calls["mcp.linear.test"])
 	}
+	// The proxy reuses an answer for dnsCacheTTL: the rebound one is looked up once that has passed, which an
+	// empty cache over the same resolver stands for.
+	f.p.res = newCachedResolver(res, time.Now)
 	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpInit); rec.Code != http.StatusBadGateway || f.up.hitCount() != 1 {
 		t.Fatalf("rebound: status %d hits %d; want 502", rec.Code, f.up.hitCount())
 	}

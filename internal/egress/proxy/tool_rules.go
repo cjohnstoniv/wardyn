@@ -7,9 +7,6 @@ package proxy
 // can answer without waking a human.
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -130,16 +127,10 @@ func (p *Proxy) harnessOf(r *http.Request) string {
 	if !ok || tok == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(tok))
-	got := hex.EncodeToString(sum[:])
-	name := ""
-	for _, c := range p.harnessCreds {
-		// No early exit: the loop's length must not depend on which credential matched.
-		if subtle.ConstantTimeCompare([]byte(got), []byte(c.SHA256)) == 1 {
-			name = c.Harness
-		}
+	if i := types.MatchDigest(types.TokenDigest(tok), len(p.harnessCreds), func(i int) string { return p.harnessCreds[i].SHA256 }); i >= 0 {
+		return p.harnessCreds[i].Harness
 	}
-	return name
+	return ""
 }
 
 // writeToolDecision answers a tool-approval request the policy already

@@ -726,6 +726,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-check-managed-settings-drift.sh
 	./scripts/test-ci-cache-prune.sh
 	./scripts/test-ci-candidate-marker.sh
+	./scripts/test-ci-classify.sh
 	./scripts/test-ci-pick-dispatched-run.sh
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-ci-wait-run.sh
@@ -874,6 +875,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	./scripts/test-helm-groundtruth.sh
 	./scripts/test-helm-spire.sh
 	./scripts/test-helm-env-once.sh
+	./scripts/test-helm-ingress-ports.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \

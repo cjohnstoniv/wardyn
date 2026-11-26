@@ -24,3 +24,6 @@
 #   runs.spec.ts | Runs page › filters by status | #1234 | @cjohnstoniv | 2026-10-07
 #
 # Entries:
+runner-pools.spec.ts | Admin Runners with a remote-hosted runner › Back from a runner opened out of a pool returns to that pool (FR-0122) | #4011 | @cjohnstoniv | 2026-12-08
+run-policy.spec.ts | Run detail — the Policy tab (#1425) › shows what the run got after its saved policy was edited, and Copy YAML puts exactly that on the clipboard | #4017 | @cjohnstoniv | 2026-12-08
+runner-macvm.spec.ts | Runner drawer: macOS virtual machines › ready: the guest, the live runs, the smallest run and the desktop | #4018 | @cjohnstoniv | 2026-12-08

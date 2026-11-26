@@ -196,7 +196,7 @@ func TestAuditRetention_DropAndItsRefusals(t *testing.T) {
 	t.Run("an internal failure", func(t *testing.T) {
 		srv, _ := retentionServer(t, &retentionFake{dropErr: errors.New("password=hunter2")})
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", sec, body)
-		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "audit_retention_drop_failed") || strings.Contains(w.Body.String(), "hunter2") {
+		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "audit_retention_drop_failed") || strings.Contains(w.Body.String(), "hunter2") || !strings.Contains(w.Body.String(), "answer was lost") {
 			t.Errorf("%d %s, want a 500 audit_retention_drop_failed that leaks nothing", w.Code, w.Body.String())
 		}
 	})
@@ -303,7 +303,7 @@ func TestDropAuditPartition_RefusesTheSweeperName(t *testing.T) {
 	})
 }
 
-// /setup/status warns when the partition runway is short, and says nothing while it is healthy.
+// /setup/status warns when the partition runway is short or cannot be read, and says nothing while it is healthy.
 func TestAuditPartitionChecks(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -314,7 +314,7 @@ func TestAuditPartitionChecks(t *testing.T) {
 		{"exactly three months", &retentionFake{ahead: minPartitionsAhead}, false},
 		{"two months", &retentionFake{ahead: minPartitionsAhead - 1}, true},
 		{"none", &retentionFake{ahead: 0}, true},
-		{"unreadable", &retentionFake{aheadErr: errors.New("down")}, false},
+		{"unreadable", &retentionFake{aheadErr: errors.New("down")}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv, _ := retentionServer(t, c.fake)
@@ -324,6 +324,9 @@ func TestAuditPartitionChecks(t *testing.T) {
 			}
 			if c.wantRow && (rows[0].ID != "audit_partitions" || rows[0].Status != "warn" || rows[0].Blocking) {
 				t.Errorf("row = %+v, want a non-blocking audit_partitions warning", rows[0])
+			}
+			if c.name == "unreadable" && !strings.Contains(rows[0].Detail, "could not be checked") {
+				t.Errorf("detail = %q, want it to say the runway could not be checked", rows[0].Detail)
 			}
 		})
 	}

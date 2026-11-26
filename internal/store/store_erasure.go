@@ -224,18 +224,19 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 		}
 	}
 	// What a helper gave as a reason and the emails a revoke may name, on the grants the person asked for or
-	// owns. A blank email only weakens an email-only revoke check on a grant that lasts an hour at most.
-	// Skipped for a role without INSERT on the table (a split-role app role the grant missed): it can have
-	// written no row. A role that can insert but not update fails the erasure loudly, so the blank is never
-	// silently left undone.
-	canBlank, err := s.hasSupportGrantPrivilege(ctx, "INSERT")
-	if err != nil {
-		return 0, err
+	// owns. A blank email only weakens an email-only revoke check on a grant that lasts an hour at most. Read
+	// first, as the agent tasks above: a role that cannot read the table fails the erasure loudly, one with
+	// nothing to blank never issues the UPDATE, and one with text to blank and no UPDATE fails it too, so the
+	// blank is never silently left undone.
+	const grantsOf = `(reason <> '' OR helper_email <> '' OR owner_email <> '')
+			  AND (helper = $1 OR run_id IN (SELECT id FROM agent_runs WHERE created_by = $1))`
+	var granted bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_support_grants WHERE `+grantsOf+`)`, createdBy).Scan(&granted); err != nil {
+		return 0, fmt.Errorf("store: read a person's support grants: %w", err)
 	}
-	if canBlank {
+	if granted {
 		if _, err := s.Pool.Exec(ctx, `UPDATE run_support_grants SET reason = '', helper_email = '', owner_email = ''
-			WHERE (reason <> '' OR helper_email <> '' OR owner_email <> '')
-			  AND (helper = $1 OR run_id IN (SELECT id FROM agent_runs WHERE created_by = $1))`, createdBy); err != nil {
+			WHERE `+grantsOf, createdBy); err != nil {
 			return 0, fmt.Errorf("store: blank a person's support grants: %w", err)
 		}
 	}

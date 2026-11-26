@@ -106,7 +106,7 @@ export function KindBadge({ kind }: { kind: Exclude<FileKind, "computer"> }) {
 export function PathText({ path, className }: { path: string; className?: string }) {
   const parts = path.split("/");
   return (
-    <code className={cn("font-mono text-[13px] [overflow-wrap:normal] [word-break:normal]", className)} title={path}>
+    <code className={cn("font-mono text-body [overflow-wrap:normal] [word-break:normal]", className)} title={path}>
       {parts.map((part, i) => (
         <span key={i}>
           {i > 0 && "/"}

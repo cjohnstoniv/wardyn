@@ -11,10 +11,10 @@ import (
 )
 
 // TestInstallSandboxTrustedCA_AppendsToExistingMITMCert covers a MITM'd run:
-// provisionDispatchMITMCA already staged the per-run interception CA and FOUR
+// provisionDispatchMITMCA already staged the per-run interception CA and FIVE
 // bundle vars (it sets no AWS_CA_BUNDLE): InstallSandboxTrustedCA must APPEND
-// the corp PEM (a 2-cert bundle), leave those four untouched, and still SEED
-// the fifth.
+// the corp PEM (a 2-cert bundle), leave those five untouched, and still SEED
+// the sixth.
 func TestInstallSandboxTrustedCA_AppendsToExistingMITMCert(t *testing.T) {
 	env := map[string]string{
 		"WARDYN_MITM_CA_PEM":  "run-ca-pem",
@@ -22,13 +22,14 @@ func TestInstallSandboxTrustedCA_AppendsToExistingMITMCert(t *testing.T) {
 		"SSL_CERT_FILE":       "/tmp/wardyn/ca-bundle.pem",
 		"REQUESTS_CA_BUNDLE":  "/tmp/wardyn/ca-bundle.pem",
 		"CURL_CA_BUNDLE":      "/tmp/wardyn/ca-bundle.pem",
+		"GIT_SSL_CAINFO":      "/tmp/wardyn/ca-bundle.pem",
 	}
 	InstallSandboxTrustedCA("corp-ca-pem", env)
 
 	if want := "run-ca-pem\ncorp-ca-pem"; env["WARDYN_MITM_CA_PEM"] != want {
 		t.Errorf("WARDYN_MITM_CA_PEM = %q, want %q (append, not replace)", env["WARDYN_MITM_CA_PEM"], want)
 	}
-	for _, k := range []string{"NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"} {
+	for _, k := range []string{"NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"} {
 		if env[k] != "/tmp/wardyn/mitm-ca.pem" && env[k] != "/tmp/wardyn/ca-bundle.pem" {
 			t.Errorf("%s = %q, want unchanged (provisionDispatchMITMCA's paths must not be clobbered)", k, env[k])
 		}
@@ -42,7 +43,7 @@ func TestInstallSandboxTrustedCA_AppendsToExistingMITMCert(t *testing.T) {
 
 // TestInstallSandboxTrustedCA_SeedsOnNonMITMRun covers a run with NO Wardyn-
 // side MITM: WARDYN_MITM_CA_PEM would otherwise be entirely absent (a single
-// cert once this runs), and the five bundle vars must be SEEDED — install_mitm_ca
+// cert once this runs), and the six bundle vars must be SEEDED — install_mitm_ca
 // (agent-run-lib.sh) is a no-op without WARDYN_MITM_CA_PEM, so without this
 // seeding a non-MITM run's OpenSSL-shaped clients would never see the corp CA.
 func TestInstallSandboxTrustedCA_SeedsOnNonMITMRun(t *testing.T) {
@@ -58,6 +59,7 @@ func TestInstallSandboxTrustedCA_SeedsOnNonMITMRun(t *testing.T) {
 		"REQUESTS_CA_BUNDLE":  "/tmp/wardyn/ca-bundle.pem",
 		"CURL_CA_BUNDLE":      "/tmp/wardyn/ca-bundle.pem",
 		"AWS_CA_BUNDLE":       "/tmp/wardyn/ca-bundle.pem",
+		"GIT_SSL_CAINFO":      "/tmp/wardyn/ca-bundle.pem",
 	} {
 		if env[k] != want {
 			t.Errorf("%s = %q, want %q (seeded so install_mitm_ca actually runs)", k, env[k], want)
@@ -80,6 +82,7 @@ func TestInstallSandboxTrustedCA_PinsTheCompleteVarSet(t *testing.T) {
 	want := []string{
 		"AWS_CA_BUNDLE",       // AWS CLI v2 (own Python + own store)
 		"CURL_CA_BUNDLE",      // curl
+		"GIT_SSL_CAINFO",      // git (libcurl-gnutls reads none of the others)
 		"NODE_EXTRA_CA_CERTS", // Node
 		"REQUESTS_CA_BUNDLE",  // Python requests
 		"SSL_CERT_FILE",       // OpenSSL / Python ssl

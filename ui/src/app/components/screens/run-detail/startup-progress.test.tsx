@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import type { AgentRun } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { SIGNIN_PROGRESS } from "../settings/login-pane-copy";
 import { PENDING_NO_DETAIL, RUN_STARTUP } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
@@ -18,13 +19,13 @@ const T0 = Date.UTC(2000, 0, 1, 12); // fixed reference instant for the mocked c
 const iso = (ms: number) => new Date(ms).toISOString();
 
 function run(over: Partial<AgentRun>): AgentRun {
-  return {
+  return makeRun({
     id: "run-1",
     state: "STARTING",
     created_at: iso(T0),
     updated_at: iso(T0),
     ...over,
-  } as AgentRun;
+  });
 }
 
 const states = () => screen.getAllByRole("listitem").map((li) => li.getAttribute("data-state"));

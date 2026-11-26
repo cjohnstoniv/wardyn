@@ -157,25 +157,77 @@ df="$ROOT/deploy/compose/Dockerfile.wardynd"
 [ "$(grep -c 'internal/version.releaseBuild=\${RELEASE_BUILD}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp releaseBuild into wardynd and every wardyn build"
 grep -q 'run_in_image /host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the linux/amd64 host CLI from the image"
 
-# Moving tags: the build pushes only the per-commit tag; :latest and the other names are applied by a later step, after
-# the image has been checked and signed, and each must resolve to the signed digest.
+# Names: every tag, the per-commit one included, is applied after the image has been checked and signed. The build
+# pushes by digest under no name. The sign and retag steps' own scripts run here with docker and cosign stubbed: the
+# signature goes on the built digest, each name is then pointed at that digest and read back, and a failed signature,
+# a failed copy or a name that resolves to another digest fails the step.
 runtags "$sha" ""
-grep -qx 'first_tag=ghcr.io/cjohnstoniv/wardynd:sha-1111111' "$out" || fail "the tags step did not output the per-commit tag as first_tag: $(cat "$out")"
-later="$(awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out")"
-grep -qx 'ghcr.io/cjohnstoniv/wardynd:latest' <<<"$later" || fail "later_tags does not hold :latest for main's tip"
-! grep -q 'sha-1111111' <<<"$later" || fail "later_tags repeats the per-commit tag"
+names="$(awk '/^tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out")"
+[ "$names" = "ghcr.io/cjohnstoniv/wardynd:sha-1111111
+ghcr.io/cjohnstoniv/wardynd:latest" ] || fail "the tags step does not list the per-commit tag and then :latest for main's tip: $(cat "$out")"
 step_line() { grep -n "^      - name: $1\$" "$PI" | head -1 | cut -d: -f1 || true; }
 b_line="$(grep -n '^        id: build$' "$PI" | head -1 | cut -d: -f1 || true)"
 c_line="$(step_line 'Check the image reports its revision')"
 g_line="$(step_line 'Sign the pushed image (keyless, by digest)')"
-r_line="$(step_line 'Point the remaining tags at the signed image')"
+r_line="$(step_line 'Point the tags at the signed image')"
 [ -n "$b_line" ] && [ -n "$c_line" ] && [ -n "$g_line" ] && [ -n "$r_line" ] || fail "publish-image.yml lacks the build, check, sign or retag step"
 [ "$b_line" -lt "$c_line" ] && [ "$c_line" -lt "$g_line" ] && [ "$g_line" -lt "$r_line" ] || fail "publish-image.yml must build, check, sign, then retag, in that order"
-shallow='^ {0,6}[^ ]' # the next line leaves the tags value: no second tag under it
-grep -A1 '^          tags: ' "$PI" | sed -n '1,2p' | { IFS= read -r l1; IFS= read -r l2; [ "$l1" = '          tags: ${{ steps.tags.outputs.first_tag }}' ] && [[ "$l2" =~ $shallow ]]; } || fail "the build pushes more than the per-commit tag"
+# The build is an action, so its keys are read: no tags or push key, and one image output pushed by digest.
+build_with="$(awk -v b="$b_line" 'NR > b && /^      - / { exit } NR > b' "$PI")"
+! grep -Eq '^          (tags|push):' <<<"$build_with" || fail "the build step pushes a tag: $build_with"
+[ "$(grep -c '^          outputs: ' <<<"$build_with")" -eq 1 ] \
+  && grep -qx '          outputs: type=image,name=ghcr.io/cjohnstoniv/wardynd,push-by-digest=true,name-canonical=true,push=true' <<<"$build_with" \
+  || fail "the build step does not push the image by digest under no name: $build_with"
 [ "$(grep -c 'imagetools create' "$PI")" -eq 1 ] && [ "$(grep -n 'imagetools create' "$PI" | cut -d: -f1)" -gt "$g_line" ] || fail "a tag is applied outside the retag step that follows the signature"
-grep -q 'imagetools create --tag "\$t" "\$IMAGE_REF"' "$PI" || fail "the retag step does not copy the signed digest"
-grep -q 'want the signed' "$PI" || fail "the retag step does not check each tag's digest against the signed one"
+step_run() { # NAME: the run script of publish-image.yml's step NAME, a `run: |` block or a one-line run
+  awk -v name="      - name: $1" '
+    $0 == name { want = 1; next }
+    want && /^      - / { exit }
+    want && /^        run: \|$/ { grab = 1; next }
+    want && /^        run: / { sub(/^        run: /, ""); print; exit }
+    grab && /^          / { sub(/^          /, ""); print; next }
+    grab { exit }
+  ' "$PI"
+}
+step_run 'Sign the pushed image (keyless, by digest)' >"$WORK/sign.sh"
+step_run 'Point the tags at the signed image' >"$WORK/retag.sh"
+[ -s "$WORK/sign.sh" ] && [ -s "$WORK/retag.sh" ] || fail "no run script in the sign or the retag step"
+mkdir -p "$WORK/pub"
+cat >"$WORK/pub/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $*" >>"$STUBLOG"
+case "$*" in
+  "buildx imagetools create "*) [ -z "${CREATE_FAIL:-}" ] ;;
+  "buildx imagetools inspect "*) echo "${INSPECT_DIGEST:-$WANT_DIGEST}" ;;
+esac
+STUB
+cat >"$WORK/pub/cosign" <<'STUB'
+#!/usr/bin/env bash
+echo "cosign $*" >>"$STUBLOG"
+[ -z "${COSIGN_FAIL:-}" ]
+STUB
+chmod +x "$WORK/pub/docker" "$WORK/pub/cosign"
+signed="ghcr.io/cjohnstoniv/wardynd@$digest"
+pub() { # SCRIPT [VAR=value...]: runs one step's script with the stubs first on PATH -> sets rc; the calls land in $WORK/publog
+  local s="$1"; shift
+  : >"$WORK/publog"; rc=0
+  env PATH="$WORK/pub:$PATH" STUBLOG="$WORK/publog" WANT_DIGEST="$digest" IMAGE_REF="$signed" DIGEST="$digest" TAGS="$names" "$@" \
+    bash -e "$WORK/$s" >"$WORK/pubout" 2>&1 || rc=$?
+}
+pub sign.sh
+[ "$rc" -eq 0 ] && [ "$(cat "$WORK/publog")" = "cosign sign --yes $signed" ] || fail "the sign step does not sign the built digest, and only that (rc $rc): $(cat "$WORK/publog")"
+pub sign.sh COSIGN_FAIL=1
+[ "$rc" -ne 0 ] || fail "the sign step carried on past a failed signature"
+pub retag.sh
+[ "$rc" -eq 0 ] && [ "$(cat "$WORK/publog")" = "docker buildx imagetools create --tag ghcr.io/cjohnstoniv/wardynd:sha-1111111 $signed
+docker buildx imagetools inspect ghcr.io/cjohnstoniv/wardynd:sha-1111111 --format {{.Manifest.Digest}}
+docker buildx imagetools create --tag ghcr.io/cjohnstoniv/wardynd:latest $signed
+docker buildx imagetools inspect ghcr.io/cjohnstoniv/wardynd:latest --format {{.Manifest.Digest}}" ] \
+  || fail "the retag step does not point each name at the signed digest and read it back (rc $rc): $(cat "$WORK/publog")"
+pub retag.sh CREATE_FAIL=1
+[ "$rc" -ne 0 ] || fail "the retag step carried on past a failed copy"
+pub retag.sh INSPECT_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+[ "$rc" -ne 0 ] || fail "the retag step accepted a name that resolves to another digest"
 
 # Publisher guard: a job that holds packages or id-token write (its own permissions block, or the workflow's when it has
 # none) must not execute a file taken out of the image on the runner. The image is unsigned until that job signs it, so
@@ -304,7 +356,7 @@ PIN_STEPS='      - uses: actions/checkout
       - uses: docker/build-push-action
       - name: Check the image reports its revision
       - name: Sign the pushed image (keyless, by digest)
-      - name: Point the remaining tags at the signed image'
+      - name: Point the tags at the signed image'
 PIN_JOB="$(cat <<'PIN_JOB_END'
 needs: gate
 if: needs.gate.outputs.green == 'true'
@@ -365,9 +417,8 @@ if [ -n "${EXTRA_TAG:-}" ]; then
 tags+=("ghcr.io/cjohnstoniv/wardynd:${EXTRA_TAG}")
 fi
 {
-echo "first_tag=${tags[0]}"
-echo "later_tags<<TAGEOF"
-printf '%s\n' "${tags[@]:1}"
+echo "tags<<TAGEOF"
+printf '%s\n' "${tags[@]}"
 echo "TAGEOF"
 if [ "$REF_TYPE" = "tag" ]; then echo "revision="; else echo "revision=${SHA}"; fi
 } >> "$GITHUB_OUTPUT"
@@ -377,12 +428,11 @@ id: build
 with:
 context: .
 file: deploy/compose/Dockerfile.wardynd
-push: true
+outputs: type=image,name=ghcr.io/cjohnstoniv/wardynd,push-by-digest=true,name-canonical=true,push=true
 platforms: linux/amd64,linux/arm64
 provenance: false
 build-args: |
 REVISION=${{ steps.tags.outputs.revision }}
-tags: ${{ steps.tags.outputs.first_tag }}
 - name: Check the image reports its revision
 env:
 IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
@@ -430,11 +480,11 @@ echo "image reports: $got"
 env:
 IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
 run: cosign sign --yes "${IMAGE_REF}"
-- name: Point the remaining tags at the signed image
+- name: Point the tags at the signed image
 env:
 IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
 DIGEST: ${{ steps.build.outputs.digest }}
-LATER_TAGS: ${{ steps.tags.outputs.later_tags }}
+TAGS: ${{ steps.tags.outputs.tags }}
 run: |
 set -euo pipefail
 while IFS= read -r t; do
@@ -442,7 +492,7 @@ while IFS= read -r t; do
 docker buildx imagetools create --tag "$t" "$IMAGE_REF"
 now="$(docker buildx imagetools inspect "$t" --format '{{.Manifest.Digest}}')"
 [ "$now" = "$DIGEST" ] || { echo "::error::$t points at $now, want the signed $DIGEST"; exit 1; }
-done <<< "$LATER_TAGS"
+done <<< "$TAGS"
 PIN_JOB_END
 )"
 publisher_whole_pin() { # reads the workflow on stdin; prints each difference, exits 1 on any

@@ -713,3 +713,44 @@ func TestSCIMCovSweepOfAnUnboundEmailDeletesByTheExactNameWhenTwoPrincipalsHoldI
 		t.Errorf("keys left = %v, want only the two principals' own", left)
 	}
 }
+
+// A run the suspension killed whose teardown then failed is not spared when a later pass finds the person active
+// again: the kill was applied, so the teardown is retried and the kill counted. A row with no failed attempt, and
+// a live run whose attempt failed before its kill, are spared as before.
+func TestSCIMCovKilledRunWithAFailedTeardownIsNotSpared(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		state    types.RunState
+		failed   bool
+		wantKill int
+	}{
+		{"a killed run whose teardown failed", types.RunKilled, true, 1},
+		{"a killed run's row with no failed attempt", types.RunKilled, false, 0},
+		{"a live run whose attempt failed before its kill", types.RunRunning, true, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := newSCIMCovStore()
+			pat := scimCovPerson(st, "sub-pat")
+			e := newSCIMCovEnv(t, st)
+			ctx := context.Background()
+			run := st.addRun("sub-pat", c.state, "sandbox-1")
+			key := store.JobKey{Step: jobStepKillRun, Target: run.String()}
+			if err := st.EnsureDeprovisionJobs(ctx, pat.ID, store.JobKindSuspend, []store.JobKey{key}); err != nil {
+				t.Fatal(err)
+			}
+			if c.failed {
+				if err := st.FailDeprovisionJob(ctx, pat.ID, store.JobKindSuspend, key, errors.New("teardown failed")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			j := st.ledger(pat.ID, store.JobKindSuspend)[0]
+			if err := e.srv.killPendingRun(ctx, e.srv.scimOrigin(), st, pat.ID, j, run, true); err != nil {
+				t.Fatalf("killPendingRun = %v", err)
+			}
+			j = st.ledger(pat.ID, store.JobKindSuspend)[0]
+			if !j.Done || j.Detail["runs_killed"] != c.wantKill || e.runner.killCount() != c.wantKill {
+				t.Errorf("row done %t, runs_killed %d, %d sandbox kill(s); want done with %d", j.Done, j.Detail["runs_killed"], e.runner.killCount(), c.wantKill)
+			}
+		})
+	}
+}

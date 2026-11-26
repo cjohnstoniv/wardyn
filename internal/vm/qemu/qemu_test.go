@@ -133,7 +133,8 @@ func TestVirtiofsdReadOnly(t *testing.T) {
 }
 
 // An unprivileged virtiofsd creates files only as itself: the guest's agent user must map to the
-// runner's user, or every guest write to a writable folder fails with EPERM.
+// runner's user, or every guest write to a writable folder fails with EPERM. A runner whose ids are
+// the agent's gets no map.
 func TestVirtiofsdMapsTheAgentUserToTheRunner(t *testing.T) {
 	a := VirtiofsdArgs(0, false, 1001, 121)
 	for _, f := range []string{"--translate-uid=map:1000:1001:1", "--translate-uid=forbid-guest:1001:1",
@@ -143,8 +144,21 @@ func TestVirtiofsdMapsTheAgentUserToTheRunner(t *testing.T) {
 		}
 	}
 	for _, f := range VirtiofsdArgs(0, false, 1000, 1000) {
-		if strings.HasPrefix(f, "--translate-") {
+		if strings.Contains(f, "map:") || strings.Contains(f, "forbid-guest:1000:") {
 			t.Fatalf("an identity map was passed: %q", f)
+		}
+	}
+}
+
+// The guest's root may not create in a share or make root a file's owner: whatever the runner's ids,
+// both translations forbid guest id 0, or its new files land as the runner's user.
+func TestVirtiofsdForbidsTheGuestsRoot(t *testing.T) {
+	for _, ids := range [][2]int{{1000, 1000}, {1001, 121}, {65532, 65532}} {
+		a := VirtiofsdArgs(0, false, ids[0], ids[1])
+		for _, f := range []string{"--translate-uid=forbid-guest:0:1", "--translate-gid=forbid-guest:0:1"} {
+			if !slices.Contains(a, f) {
+				t.Fatalf("args for runner %d:%d %q lack %s", ids[0], ids[1], a, f)
+			}
 		}
 	}
 }

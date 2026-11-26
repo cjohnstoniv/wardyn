@@ -528,6 +528,11 @@ func (f *forgeRepo) get(ctx context.Context, path string, v any) (int, error) {
 			}
 			f.tok = tok
 		}
+		// After this read's vet, and on every read: the token cached for the comparison goes on only while
+		// the proxy is inside its offline bound.
+		if err := f.p.brokerOfflineErr(); err != nil {
+			return fmt.Errorf("the run's credential: %w", err)
+		}
 		req.Header.Set("Authorization", "Bearer "+f.tok)
 		req.Header.Set("Accept", "application/vnd.github+json")
 		return nil

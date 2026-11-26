@@ -461,6 +461,8 @@ func (d *Driver) deleteRunSandbox(ctx context.Context, ns string, runID uuid.UUI
 	if err := sandboxes.Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("delete agent sandbox: %w", err)
 	}
+	// A poll, not the pod watch: this waits on the Sandbox object, which rings no pod bell, and the runs Role
+	// grants no watch on sandboxes.
 	err = wait.PollUntilContextTimeout(ctx, k8sPollInterval, agentSandboxDeleteTimeout, true, func(pollCtx context.Context) (bool, error) {
 		got, gerr := sandboxes.Get(pollCtx, name, metav1.GetOptions{})
 		if isNotFound(gerr) {

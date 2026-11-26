@@ -41,35 +41,46 @@ import (
 // auditRecordingRead is an operator's replay of a recording of a run someone else created.
 const auditRecordingRead = "recording.read"
 
-func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, runIDPrefix string) bool {
+func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, runIDPrefix string) (bool, func()) {
 	id, err := uuid.Parse(runIDPrefix)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	// An operator reads every recording (recordingReader). Replaying another person's session is
-	// audited, as attaching to it live is; an owner's own replay is not.
+	// audited, as attaching to it live is; an owner's own replay is not. The row is the receipt
+	// recording.Handler calls once the recording has opened, before any of it is sent, so a replay
+	// that finds no recording writes none. A run whose owner cannot be read is audited as another
+	// person's, marked owner_unknown: a failed read never serves a replay without its receipt.
 	if s.isOperator(r.Context()) {
-		if run, err := s.cfg.Store.GetRun(r.Context(), id); err == nil && run.CreatedBy != principalFromRequest(r) {
-			actorType, actor := actorFromRequest(r)
-			s.recordAudit(r.Context(), s.auditEvent(&id, actorType, actor, auditRecordingRead, chi.URLParam(r, "runID"), "success", nil))
+		run, err := s.cfg.Store.GetRun(r.Context(), id)
+		if err == nil && run.CreatedBy == principalFromRequest(r) {
+			return true, nil
 		}
-		return true
+		var data []byte
+		if err != nil {
+			data = mustJSON(map[string]bool{"owner_unknown": true})
+		}
+		actorType, actor := actorFromRequest(r)
+		key := chi.URLParam(r, "runID")
+		return true, func() {
+			s.recordAudit(r.Context(), s.auditEvent(&id, actorType, actor, auditRecordingRead, key, "success", data))
+		}
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), id)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	if s.recordingReader(r, run) {
 		// data_out review or blocked keeps a recording from its owner, and says so; a rule that cannot be read
 		// answers 503. refuseDataOutReader writes the answer, so the handler does not add its 404.
-		return !s.refuseDataOutReader(w, r, run, "recording", dataOutRecordingMsg, false)
+		return !s.refuseDataOutReader(w, r, run, "recording", dataOutRecordingMsg, false), nil
 	}
 	// Audited only once the run is confirmed to genuinely exist — a
 	// malformed prefix or an unknown run (both branches above) stays silent;
 	// only a POSITIVELY identified foreign run reaches this audit. The 404
 	// recording.Handler writes on a false return is unaffected either way.
 	s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
-	return false
+	return false, nil
 }
 
 // recordingReader is the one rule for who may read a run's recording, and

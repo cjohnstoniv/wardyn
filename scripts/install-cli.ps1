@@ -82,6 +82,14 @@ try {
 
   $dir = Join-Path $env:LOCALAPPDATA 'Wardyn\bin'
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  # A run stopped between parking the old wardyn.exe and moving the new one in leaves only wardyn.exe.old. Put it
+  # back before anything is fetched, so the command works even if this run fails too.
+  $target = Join-Path $dir 'wardyn.exe'
+  $old = Join-Path $dir 'wardyn.exe.old'
+  if (-not (Test-Path $target) -and (Test-Path $old)) {
+    Move-Item -Path $old -Destination $target
+    Say "put back $target, which an earlier run left as wardyn.exe.old"
+  }
   $work = Join-Path ([IO.Path]::GetTempPath()) ("wardyn-install-" + [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $work | Out-Null
   $stage = Join-Path $dir (".wardyn.new." + [Guid]::NewGuid().ToString('N') + '.exe')
@@ -137,15 +145,24 @@ try {
     if ($signed) { Say 'checksum: matches the SHA256SUMS list that cosign verified as signed by the release' }
     else { Say 'checksum: matches SHA256SUMS from the same place: catches a broken download, not a tampered release' }
 
-    $target = Join-Path $dir 'wardyn.exe'
-    if (Test-Path $target) {
-      # A running wardyn.exe cannot be overwritten, but it can be renamed.
-      $old = Join-Path $dir 'wardyn.exe.old'
-      Remove-Item -Force -ErrorAction SilentlyContinue $old
-      Move-Item -Force -Path $target -Destination $old
+    $swapped = $false
+    try {
+      if (Test-Path $target) {
+        # A running wardyn.exe cannot be overwritten, but it can be renamed.
+        Remove-Item -Force -ErrorAction SilentlyContinue $old
+        Move-Item -Force -Path $target -Destination $old
+      }
+      Move-Item -Force -Path $stage -Destination $target
+      $swapped = $true
+    } finally {
+      # A failed or interrupted swap (finally also runs on Ctrl-C) must not leave the command missing: put the
+      # parked copy back, and let the error go on. A stop this block cannot see is undone by the next run, before
+      # it fetches anything.
+      if (-not $swapped -and -not (Test-Path $target) -and (Test-Path $old)) {
+        Move-Item -Force -Path $old -Destination $target
+      }
     }
-    Move-Item -Force -Path $stage -Destination $target
-    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dir 'wardyn.exe.old')
+    Remove-Item -Force -ErrorAction SilentlyContinue $old
     Say "installed $target"
   } finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $work

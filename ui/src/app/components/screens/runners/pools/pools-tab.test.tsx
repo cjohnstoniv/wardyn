@@ -186,6 +186,24 @@ describe("Pools tab", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("CI jobs is switched off right now. Choose another pool.");
   });
 
+  it("clears nothing when another pool became the default after the page loaded, and says which", async () => {
+    renderTab();
+    await userEvent.click(await within(await screen.findByRole("table", { name: "Organisation pools" })).findByRole("button", { name: "General" }));
+    const sheet = await screen.findByRole("dialog");
+    orgDefaultsMock.mockResolvedValue({ pool_id: "p-ci", barrier: "CC2", revision: 5 });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Clear default" }));
+    expect(await within(sheet).findByRole("alert")).toHaveTextContent("The organisation default changed to CI jobs since this page loaded, so nothing was cleared.");
+    expect(setOrgDefaultsMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the default it shows, with the revision it read", async () => {
+    orgDefaultsMock.mockResolvedValue({ pool_id: "p-gen", barrier: "CC2", revision: 4 });
+    renderTab();
+    await userEvent.click(await within(await screen.findByRole("table", { name: "Organisation pools" })).findByRole("button", { name: "General" }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Clear default" }));
+    await waitFor(() => expect(setOrgDefaultsMock).toHaveBeenCalledWith({ pool_id: undefined, barrier: "CC2", revision: 4 }));
+  });
+
   it("opens a pool's details from its name and from Details", async () => {
     renderTab();
     await userEvent.click(await screen.findByRole("button", { name: "Details of CI jobs" }));

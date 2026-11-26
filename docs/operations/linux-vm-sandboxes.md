@@ -15,6 +15,8 @@
 | The boot | Direct kernel boot of the image's own kernel and initrd, with `noresume` |
 | The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000). It accepts the run's setup once per boot, even after it restarts |
 | Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each. No other host folder is shared, and a guest write lands as the runner's user |
+| Guest root in shared folders | Cannot create a file, folder or link in a shared folder, nor make root a file's owner |
+| Nested shared folders | A folder whose path is inside another writable folder gets its mount folder made in that folder on the host, as in a container |
 | Bound folders | A workspace folder bound to this runner, inside its `--drive-root` ([more](hybrid-laptops.md#a-workspace-folder-on-your-runner)) |
 | Drives | An admin or team drive bound to this runner, shared the way a folder is ([Drives](#drives)) |
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |

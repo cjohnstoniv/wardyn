@@ -173,6 +173,9 @@ type metrics struct {
 
 	// queueHist is how long runs waited in a runner pool's queue, by how they left it (metrics_queue.go).
 	queueHist queueWaitHist
+
+	// latency is the route, start-phase and egress-decision histograms (metrics_latency.go), each behind its own lock.
+	latency latencyHists
 }
 
 // startWaited records one stretch a starting sandbox spent on one reason.
@@ -536,6 +539,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) MetricsText(ctx context.Context) []byte {
 	var body bytes.Buffer
 	s.metrics.write(&body)
+	s.metrics.writeLatency(&body)
 	s.cfg.PortalRefreshFailures.write(&body)
 	s.writeHealthGauges(ctx, &body)
 	s.writeFleetGauges(ctx, &body)

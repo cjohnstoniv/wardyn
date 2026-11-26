@@ -93,6 +93,60 @@ func TestEnsureLocalSSHKey_CorruptExistingFile_ErrorsWithoutOverwrite(t *testing
 	}
 }
 
+// A .pub beside the private key must be exactly that key's line: a copy (a comment is fine) is used as it is, and
+// another key's, an unreadable one, or the key followed by a second line is refused, with both files unchanged.
+func TestEnsureLocalSSHKey_CompanionPublicKeyMustMatch(t *testing.T) {
+	dir := t.TempDir()
+	read := func(p string) string {
+		t.Helper()
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	keyA, keyB := filepath.Join(dir, "a"), filepath.Join(dir, "b") // two generated pairs
+	pubA, _, err := ensureLocalSSHKey(keyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubB, _, err := ensureLocalSSHKey(keyB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fpA, fpB := ssh.FingerprintSHA256(pubA), ssh.FingerprintSHA256(pubB)
+	for _, c := range []struct {
+		name, pub, wantErr string
+	}{
+		{"copied pair", read(keyA + ".pub"), ""},
+		{"copied pair, comment added", strings.TrimSpace(read(keyA+".pub")) + " laptop\n", ""},
+		{"another key's .pub", read(keyB + ".pub"), "not the public key of"},
+		{"the key and then another", read(keyA+".pub") + read(keyB+".pub"), "more than one key line"},
+		{"malformed .pub", "not a key\n", "not a readable public key"},
+		{"empty .pub", "", "not a readable public key"},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(c.name, " ", "_"))
+		if err := os.WriteFile(path, []byte(read(keyA)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+".pub", []byte(c.pub), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, generated, err := ensureLocalSSHKey(path)
+		switch {
+		case c.wantErr == "" && (err != nil || generated || ssh.FingerprintSHA256(got) != fpA):
+			t.Errorf("%s: got %v, %v, %v; want key A reused", c.name, got, generated, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr) || !strings.Contains(err.Error(), "move "+path+".pub aside")):
+			t.Errorf("%s: error = %v, want it to contain %q and to name the .pub to move", c.name, err, c.wantErr)
+		case c.name == "another key's .pub" && !(strings.Contains(err.Error(), fpA) && strings.Contains(err.Error(), fpB)):
+			t.Errorf("%s: error %q does not name both fingerprints", c.name, err)
+		}
+		if read(path+".pub") != c.pub || read(path) != read(keyA) {
+			t.Errorf("%s: a file changed", c.name)
+		}
+	}
+}
+
 // --------------------------------------------------------------------------
 // `ssh-key ensure` against a fake /api/v1/me/ssh-keys.
 // --------------------------------------------------------------------------

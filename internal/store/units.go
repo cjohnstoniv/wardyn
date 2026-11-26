@@ -152,8 +152,9 @@ const refreshUnitDepths = `
 	UPDATE governance_units u SET depth = tree.d FROM tree WHERE u.id = tree.id AND u.depth <> tree.d`
 
 // LockGovernanceGraph takes the transaction-scoped lock every write to the governance profile graph
-// holds, so one write at a time sees and changes it. Every assignment write takes it too, so a profile
-// write reads the assignments no other write is changing. q must be a pgx.Tx.
+// holds, so one write at a time sees and changes it. Every assignment write takes it too (a direct write
+// shared, LockGovernanceMembershipWrite), so a profile write reads the assignments no other write is changing.
+// q must be a pgx.Tx.
 func LockGovernanceGraph(ctx context.Context, q Querier) error {
 	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.GovernanceGraphLockClass); err != nil {
 		return fmt.Errorf("store: lock the governance profile graph: %w", err)
@@ -436,12 +437,7 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 		return types.GovernanceMembership{}, err
 	}
 	defer db.Rollback(ctx, tx) // a no-op after Commit
-	// The locks a held change's approval takes too, in its order: the upsert and that approval never
-	// interleave, and neither does a profile write.
-	if err := LockGovernanceGraph(ctx, tx); err != nil {
-		return types.GovernanceMembership{}, err
-	}
-	if err := LockGovernanceMembershipKey(ctx, tx, string(a.SubjectType), a.Subject); err != nil {
+	if err := LockGovernanceMembershipWrite(ctx, tx, a.UnitID, string(a.SubjectType), a.Subject); err != nil {
 		return types.GovernanceMembership{}, err
 	}
 	out, err := UpsertGovernanceMembershipQ(ctx, tx, a)
@@ -452,6 +448,23 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 		return types.GovernanceMembership{}, err
 	}
 	return out, nil
+}
+
+// LockGovernanceMembershipWrite takes the locks a direct assignment write holds (UpsertGovernanceMembership). The
+// profile graph lock is taken shared: a profile write and a held change's approval take it exclusive, so neither
+// interleaves with this write, while direct writes to other units or other subjects go ahead together (#3478).
+// The lock keyed to this unit and subject then serializes two writes of one assignment. The write reads and
+// changes no other unit's row, so no subject-wide lock is needed here; the held and envelope paths, which read
+// across units, keep LockGovernanceGraph and LockGovernanceMembershipKey. q must be a pgx.Tx.
+func LockGovernanceMembershipWrite(ctx context.Context, q Querier, unitID uuid.UUID, subjectType, subject string) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.GovernanceGraphLockClass); err != nil {
+		return fmt.Errorf("store: lock the governance profile graph: %w", err)
+	}
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		db.GovernanceMembershipUnitLockClass, unitID.String()+"\x1f"+subjectType+"\x1f"+subject); err != nil {
+		return fmt.Errorf("store: lock the governance assignment: %w", err)
+	}
+	return nil
 }
 
 // LockGovernanceMembershipKey takes the transaction-scoped lock keyed to one assignment's natural

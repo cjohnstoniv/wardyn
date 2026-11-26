@@ -254,31 +254,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TAGLINE_FENCE` | mock | Weakest |
 | `TAGLINE_WALL` | mock | Stronger |
 | `TAGLINE_VAULT` | mock | Strongest |
-| `STRENGTH_ARIA(n)` | mock | Barrier strength {n} of 3 |
 | `ABOUT_ARIA(barrier)` | mock | About {barrier} |
 | `PROTECTS_HEAD` | mock | Protects against |
 | `NOT_PROTECTS_HEAD` | mock | Doesn't protect against |
 | `HOW_HEAD` | mock | How it works |
-| `FENCE_PROTECTS` | mock | The agent seeing or touching the rest of your machine — it gets its own files, processes, and network. |
-| `FENCE_NOT_PROTECTS` | mock | A kernel exploit or container escape — it shares your machine's kernel (the “holes” in the fence). |
-| `FENCE_HOW` | mock | Shared-kernel container (runc) hardened with user namespaces, seccomp, AppArmor, and capability drop. |
-| `WALL_PROTECTS` | mock | Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed). |
-| `WALL_NOT_PROTECTS` | mock | A flaw in the sandbox software itself (rare); it's still not a fully separate machine. |
 | `WALL_HOW` | mock | gVisor userspace kernel intercepts syscalls; needs a native Docker engine with its runsc runtime registered (a one-time setup step). |
-| `VAULT_PROTECTS` | mock | Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside. |
-| `VAULT_NOT_PROTECTS` | mock | A flaw in the virtualization layer itself — a very rare hypervisor- or CPU-level escape. |
-| `VAULT_HOW` | mock | Kata microVM — hardware-virtualized, with its own guest kernel (requires /dev/kvm). |
-| `ROW_ISOLATION` | mock | Isolated from your files, processes, and network |
-| `ROW_KERNEL` | mock | A kernel exploit can't reach your host kernel |
-| `ROW_BREAK_IN` | mock | A full break-in stays sealed inside |
-| `ROW_WHERE` | mock | Where it runs |
-| `WHERE_FENCE` | mock | Any host |
-| `WHERE_WALL` | mock | Native Docker engine + setup |
-| `WHERE_VAULT` | mock | Needs KVM hardware |
-| `STATUS_YES` | mock | Yes |
-| `STATUS_NO` | mock | No |
-| `STATUS_CAVEAT` | mock | With a caveat |
-| `CAVEAT_EXCEPT(text)` | mock | Except: {text} |
 | `BADGE_ORG_DEFAULT` | mock | Organisation default |
 | `BADGE_DEFAULT` | deviation (DS-5 §8) | Default |
 | `BADGE_EXPERIMENTAL` | mock | Experimental |
@@ -564,7 +544,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUB_STARTS` | mock | Starts with the run |
 | `SUB_AVAILABLE` | mock | Available inside the sandbox |
 | `SUB_COMMAND` | mock | Runs on its own; no harness |
-| `SUB_NO_CREDENTIAL` | mock | No credential |
 | `SUB_SAVED` | mock | Saved to your components |
 | `SUB_RUN_ONLY` | mock | This run only |
 | `NOTE_COMMAND` | mock | Package registry access comes from your organisation's default policy. |
@@ -572,11 +551,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `REPO_SUB` | pending (W-35) | Via Wardyn's git broker · this run's repositories only |
 | `STATUS_NEEDS_SETUP` | mock | Needs setup |
 | `STATUS_READY` | mock | Ready |
-| `STATUS_HELD` | mock | Held for approval |
 | `DETAILS_FOR(name)` | mock | Details for {name} |
 | `DETAIL_NETWORK` | mock | Network |
 | `DETAIL_CREDENTIAL` | mock | Credential |
-| `DETAIL_APPROVAL` | mock | Approval |
 | `DETAIL_MCP` | mock | MCP |
 | `DETAIL_IMAGE` | mock | Image |
 | `DETAIL_NOTE` | mock | Note |
@@ -763,8 +740,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SETUP_CHOOSE_PROVIDER(name)` | mock | Choose a model provider for {name} |
 | `SETUP_SIGN_IN_TO(provider)` | pending (W-38) | Sign in to {provider} |
 | `SETUP_SIGN_IN_AGAIN` | pending (W-54) | Sign in again |
-| `SIGN_IN_INTRO` | mock | You'll sign in with your own account in a new window. Wardyn keeps a refresh grant and issues the run a short-lived credential when it starts. The sandbox never sees your sign-in. |
-| `SIGN_IN_CONFIRM` | mock | Continue to sign in |
 | `SIGNED_IN` | mock | Signed in. The credential is issued when the run starts. |
 | `TOKEN_INTRO` | mock | Paste the token once. It's stored encrypted as one of your secrets, and the proxy adds it to requests, so the sandbox never holds it. |
 | `TOKEN_LABEL` | mock | Token |

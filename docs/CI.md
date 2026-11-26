@@ -376,7 +376,7 @@ wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
 A pipeline can keep a [workload](operations/workloads.md) declared with `wardyn apply`. Use a service identity's token as `WARDYN_TOKEN`, as above, with `WARDYN_URL`.
 
 - A service identity's token may `apply`, `diff`, `apply --dry-run`, `workload list|get|delete|restart` and read runs.
-- `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored and the old run keeps running). [Exit codes](operations/workloads.md#apply)
+- `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored, and the old run, if there is one, keeps running). [Exit codes](operations/workloads.md#apply)
 - Before the approval gate, run `wardyn apply --dry-run`, as both examples do. It exits `1` when the apply would be refused and stores nothing. It calls `POST /api/v1/workloads/{name}/preview`, which answers created, updated or unchanged, each changed field, whether a run starts, and any refusal. [Preview an apply](operations/workloads.md#preview-an-apply)
 - Put the step behind your platform's approval gate: a GitHub environment with required reviewers, or an Azure DevOps environment with approvals.
 - The workload runs under the service identity's walls and grants, like any run it launches.

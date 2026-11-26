@@ -39,9 +39,9 @@ func refusalGet(t *testing.T, authorize recording.Authorizer) (int, string) {
 // An authorizer that writes its own refusal and returns false is answered with that refusal, never with the
 // 404 an absent recording gets.
 func TestHandlerAuthorizerWritesRefusal(t *testing.T) {
-	code, body := refusalGet(t, func(w http.ResponseWriter, _ *http.Request, _ string) bool {
+	code, body := refusalGet(t, func(w http.ResponseWriter, _ *http.Request, _ string) (bool, func()) {
 		http.Error(w, "kept in", http.StatusForbidden)
-		return false
+		return false, nil
 	})
 	if code != http.StatusForbidden || !strings.Contains(body, "kept in") {
 		t.Fatalf("got %d %q, want 403 with the authorizer's body", code, body)
@@ -53,7 +53,7 @@ func TestHandlerAuthorizerWritesRefusal(t *testing.T) {
 
 // An authorizer that returns false and writes nothing is the same 404 as before.
 func TestHandlerAuthorizerSilentFalseIs404(t *testing.T) {
-	code, body := refusalGet(t, func(http.ResponseWriter, *http.Request, string) bool { return false })
+	code, body := refusalGet(t, func(http.ResponseWriter, *http.Request, string) (bool, func()) { return false, nil })
 	if code != http.StatusNotFound || !strings.Contains(body, "recording not found") {
 		t.Fatalf("got %d %q, want 404 recording not found", code, body)
 	}
@@ -61,7 +61,7 @@ func TestHandlerAuthorizerSilentFalseIs404(t *testing.T) {
 
 // An authorizer that returns true and writes nothing is served.
 func TestHandlerAuthorizerSilentTrueServes(t *testing.T) {
-	code, body := refusalGet(t, func(http.ResponseWriter, *http.Request, string) bool { return true })
+	code, body := refusalGet(t, func(http.ResponseWriter, *http.Request, string) (bool, func()) { return true, nil })
 	if code != http.StatusOK || body != refusalCast {
 		t.Fatalf("got %d %q, want 200 with the cast", code, body)
 	}
@@ -69,9 +69,9 @@ func TestHandlerAuthorizerSilentTrueServes(t *testing.T) {
 
 // An authorizer that writes a refusal and then returns true serves no cast: the client gets the refusal only.
 func TestHandlerAuthorizerWroteAndAllowedServesNoCast(t *testing.T) {
-	code, body := refusalGet(t, func(w http.ResponseWriter, _ *http.Request, _ string) bool {
+	code, body := refusalGet(t, func(w http.ResponseWriter, _ *http.Request, _ string) (bool, func()) {
 		http.Error(w, "kept in", http.StatusForbidden)
-		return true
+		return true, nil
 	})
 	if code != http.StatusForbidden {
 		t.Fatalf("got %d, want the authorizer's 403", code)
@@ -97,13 +97,13 @@ func TestHandlerRefusalIsNeverHTML(t *testing.T) {
 			if err := store.SaveCast(context.Background(), refusalRun, strings.NewReader(refusalCast)); err != nil {
 				t.Fatal(err)
 			}
-			srv := httptest.NewServer(newTestRouterWithAuth(store, func(w http.ResponseWriter, _ *http.Request, _ string) bool {
+			srv := httptest.NewServer(newTestRouterWithAuth(store, func(w http.ResponseWriter, _ *http.Request, _ string) (bool, func()) {
 				if tc.setType != "" {
 					w.Header().Set("Content-Type", tc.setType)
 				}
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = io.WriteString(w, "<script>alert(1)</script>")
-				return false
+				return false, nil
 			}))
 			defer srv.Close()
 			resp, err := http.Get(srv.URL + "/api/v1/runs/" + refusalRun + "/recording/" + refusalRun)
@@ -122,5 +122,39 @@ func TestHandlerRefusalIsNeverHTML(t *testing.T) {
 				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
 			}
 		})
+	}
+}
+
+// The authorizer's receipt runs once for a served recording, and never for a missing one or a refusal.
+func TestHandlerReceiptOnlyForAnOpenedRecording(t *testing.T) {
+	store, _ := recording.NewFSStore(t.TempDir())
+	if err := store.SaveCast(context.Background(), refusalRun, strings.NewReader(refusalCast)); err != nil {
+		t.Fatal(err)
+	}
+	served := 0
+	allow := func(http.ResponseWriter, *http.Request, string) (bool, func()) { return true, func() { served++ } }
+	deny := func(w http.ResponseWriter, _ *http.Request, _ string) (bool, func()) {
+		http.Error(w, "kept in", http.StatusForbidden)
+		return false, func() { served++ }
+	}
+	get := func(authorize recording.Authorizer, run string) int {
+		srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
+		defer srv.Close()
+		resp, err := http.Get(srv.URL + "/api/v1/runs/" + run + "/recording/" + run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := get(allow, refusalRun); code != http.StatusOK || served != 1 {
+		t.Fatalf("served recording: %d, receipt ran %d times; want 200 and once", code, served)
+	}
+	if code := get(allow, "0a000000-0000-4000-8000-0000000000ff"); code != http.StatusNotFound || served != 1 {
+		t.Fatalf("missing recording: %d, receipt ran %d times; want 404 and no new receipt", code, served)
+	}
+	if code := get(deny, refusalRun); code != http.StatusForbidden || served != 1 {
+		t.Fatalf("refusal: %d, receipt ran %d times; want 403 and no new receipt", code, served)
 	}
 }

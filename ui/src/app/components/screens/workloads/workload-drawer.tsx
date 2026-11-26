@@ -214,7 +214,7 @@ export function WorkloadDrawer({
                       {/* Only a refusal of the spec as it stands leaves a run to keep running: an older one's run is not known. */}
                       {refusedNow(w) && w.run_id ? ` · ${W.PREVIOUS_KEPT}` : ""}
                     </p>
-                    <p className="font-mono text-[11px] text-muted-foreground">{refusal.reason}</p>
+                    <p className="font-mono text-meta text-muted-foreground">{refusal.reason}</p>
                   </div>
                 </Row>
               )}

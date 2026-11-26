@@ -159,9 +159,13 @@ func (s *Server) dropInboundSessions() {
 	s.uiReassertMu.Unlock()
 }
 
-// inboundDropRoots are the /api/v1 families whose writes can change what a cached inbound session was
-// admitted under: the run's policy (policies), its governance profile with the memberships, restrictions and
-// boundary that bind it (governance), and the capability grants (permissions).
+// inboundDropRoots are the /api/v1 families a write under which drops the inbound session cache. What a cached
+// session rests on that can change is the profile arm (uiInboundUnitDenial): the run's profile as it stands now,
+// the base profiles it composes from and the restrictions the run captured, written under governance (units,
+// restrictions, an approved held change). The app, its callers and the data_out rule are read as recorded at
+// dispatch, and capability grants are not read, so a write under policies or permissions changes nothing a
+// session rests on; those roots are dropped on anyway, a harmless over-drop that keeps the cache honest if a
+// later check reads them.
 var inboundDropRoots = []string{"policies", "governance", "permissions"}
 
 // inboundReadOnlyPosts are the POSTs under inboundDropRoots that write nothing.

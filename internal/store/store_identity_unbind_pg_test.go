@@ -239,6 +239,43 @@ func TestPG_UnbindIdentity_RefusesWhileItHoldsRunners(t *testing.T) {
 	}
 }
 
+// TestPG_UnbindIdentity_RefusesWhileADenyNamesTheSub: a person-keyed capability deny on the old sub refuses the
+// unbind, since after the re-bind it would name nobody; an allow on the sub and a deny on the person's email do not.
+func TestPG_UnbindIdentity_RefusesWhileADenyNamesTheSub(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	row, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "Sub-Deny", Issuer: "https://login.example/" + uuid.NewString() + "/v2.0",
+		TenantID: uuid.NewString(), ObjectID: uuid.NewString()}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := func(subject, effect string) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO capability_grants (id, subject_type, subject, capability, value, effect, created_by)
+			VALUES ($1, 'user', $2, 'launch_runs', 'true', $3, 'admin')`, id, subject, effect); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	grant("Sub-Deny", "allow")
+	grant("deny@corp.example", "deny")
+	deny := grant("sub-deny", "deny") // case differs from the principal: matched like the leaver purge matches
+
+	var inUse *store.PrincipalInUseError
+	if err := st.UnbindIdentity(ctx, row.ID, "Sub-Deny"); !errors.As(err, &inUse) || *inUse != (store.PrincipalInUseError{CapabilityDenies: 1}) {
+		t.Fatalf("unbind while a deny names the sub = %v, want *PrincipalInUseError with exactly one capability deny", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM capability_grants WHERE id = $1`, deny); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UnbindIdentity(ctx, row.ID, "Sub-Deny"); err != nil {
+		t.Fatalf("unbind once only an allow on the sub and a deny on the email remain: %v", err)
+	}
+}
+
 // TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner: with an identity guard on the context the
 // mint is refused for a deactivated owner and goes through for a live one.
 func TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner(t *testing.T) {

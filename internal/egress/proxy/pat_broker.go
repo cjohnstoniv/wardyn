@@ -209,11 +209,16 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// must be PARSEABLE to be rewritten, so identity is requested explicitly.
 	noThin := p.noThinAdvert(r, verb)
 	resp, ok := p.forwardBrokeredGit(w, r, host, rest, reqBody, allowSrc, ruleSourcePATDenied,
-		func(out *http.Request) {
+		func(out *http.Request) error {
+			// The vet in forwardBrokeredGit can wait on DNS: the credential goes on only while the bound holds.
+			if err := p.brokerOfflineErr(); err != nil {
+				return err
+			}
 			if noThin {
 				out.Header.Set("Accept-Encoding", "identity")
 			}
 			out.SetBasicAuth(username, token)
+			return nil
 		})
 	if !ok {
 		return
@@ -230,9 +235,9 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 // forwardBrokeredGit is the outbound leg both /wardyn/git/ lanes share: it
 // re-originates the validated request to the granted forge over HTTPS with
 // the sandbox's own credential headers stripped and the lane's credential
-// set by authorize. On ok=false it has already answered the sandbox.
+// set by authorize, whose error refuses the request (502). On ok=false it has already answered the sandbox.
 func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host, rest string, reqBody io.Reader,
-	allowSrc, denySrc string, authorize func(*http.Request),
+	allowSrc, denySrc string, authorize func(*http.Request) error,
 ) (*http.Response, bool) {
 	// Build the upstream URL from the MATCHED allowlist key + the validated
 	// rest and let net/url do the escaping — never a raw concatenation of the
@@ -277,7 +282,11 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// Header.Del("Authorization") would leave Private-Token, X-Api-Key,
 	// Api-Key, X-Auth-Token and Cookie for the forge to choose between.
 	stripSandboxCredentials(outReq.Header, "")
-	authorize(outReq)
+	if err := authorize(outReq); err != nil {
+		p.emitPATDecision(r, host, egress.Deny, denySrc)
+		p.httpError(w, "git credential unavailable", err, http.StatusBadGateway)
+		return nil, false
+	}
 	outReq.Host = hostHeader
 	outReq.Header.Del("Host")
 

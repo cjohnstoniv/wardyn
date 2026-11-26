@@ -411,6 +411,10 @@ func (s *scimCovStore) applyUpdate(id uuid.UUID, u store.IdentityUpdate) (store.
 			}
 		}
 	}
+	if p := strings.ToLower(strings.TrimSpace(u.PrimaryEmail)); p != "" {
+		s.addAlias(id, "email", p)
+		i.EmailLower = p
+	}
 	if u.Reactivate {
 		for _, other := range s.idents {
 			if other.PurgedAt == nil && (other.ID == id || (i.Principal != "" && other.Principal == i.Principal)) {
@@ -787,20 +791,20 @@ func (s *scimCovStore) CreateScimGroup(_ context.Context, externalID, displayNam
 
 // CreateScimGroupWithMembers is all or nothing, as the store's transaction is: a failure of the member write
 // leaves no group.
-func (s *scimCovStore) CreateScimGroupWithMembers(_ context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (store.ScimGroup, error) {
+func (s *scimCovStore) CreateScimGroupWithMembers(_ context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (store.ScimGroup, []uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("CreateScimGroup"); err != nil {
-		return store.ScimGroup{}, err
+		return store.ScimGroup{}, nil, err
 	}
 	externalID = strings.TrimSpace(externalID)
 	for _, g := range s.groups {
 		if strings.EqualFold(g.ExternalID, externalID) {
-			return store.ScimGroup{}, store.ErrScimGroupExists
+			return store.ScimGroup{}, nil, store.ErrScimGroupExists
 		}
 	}
 	if err := s.enter("AddScimGroupMembers"); err != nil {
-		return store.ScimGroup{}, err
+		return store.ScimGroup{}, nil, err
 	}
 	g := &store.ScimGroup{ID: s.newID(), ExternalID: externalID, DisplayName: displayName, CreatedAt: now}
 	s.groups[g.ID] = g
@@ -809,7 +813,7 @@ func (s *scimCovStore) CreateScimGroupWithMembers(_ context.Context, externalID,
 			s.members[g.ID] = append(s.members[g.ID], m)
 		}
 	}
-	return *g, nil
+	return *g, slices.Clone(s.members[g.ID]), nil
 }
 
 func (s *scimCovStore) addGroup(externalID, name string, members ...uuid.UUID) store.ScimGroup {
@@ -849,7 +853,7 @@ func (s *scimCovStore) SearchScimGroups(_ context.Context, attr, value string, l
 	var out []store.ScimGroup
 	for _, g := range s.groups {
 		if (attr == store.SearchExternalID && strings.ToLower(strings.TrimSpace(g.ExternalID)) == v) ||
-			(attr == store.SearchDisplayName && strings.ToLower(g.DisplayName) == v) {
+			(attr == store.SearchDisplayName && strings.EqualFold(g.DisplayName, value)) {
 			out = append(out, *g)
 		}
 	}
@@ -962,7 +966,7 @@ func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UU
 	return out, nil
 }
 
-func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, tenant string) error {
+func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("DeleteScimGroup"); err != nil {
@@ -971,11 +975,14 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, 
 	if _, ok := s.groups[id]; !ok {
 		return store.ErrNotFound
 	}
-	// Every member of the issuer and tenant still recorded leaves with a removal owed, as the store's delete
-	// opens it.
-	for _, m := range slices.Clone(s.members[id]) {
-		if i, known := s.idents[m]; known && i.Issuer == issuer && (tenant == "" || i.TenantID == "" || i.TenantID == tenant) {
-			s.startGroupRemoval(id, m)
+	// As the store's delete: refused while anyone is still a member, of any issuer, or a removal's cut is owed.
+	if len(s.members[id]) > 0 {
+		return store.ErrGroupRemovalOwed
+	}
+	for _, j := range s.jobs {
+		if j.Kind == store.JobKindGroupRemove && j.Target == id.String() && !j.Done &&
+			(j.Step == store.GroupStepSessions || j.Step == store.GroupStepTokens) {
+			return store.ErrGroupRemovalOwed
 		}
 	}
 	delete(s.groups, id)

@@ -70,3 +70,12 @@ func TestClient_RefusesToFollowARedirect(t *testing.T) {
 		t.Fatalf("the redirect target was reached %d times", n)
 	}
 }
+
+// Credential records the shared token digest.
+func TestTokenSHA256IsTheSharedDigest(t *testing.T) {
+	for _, tok := range []string{"", "abc", "wardyn-org-token"} {
+		if got, want := TokenSHA256(tok), types.TokenDigest(tok); got != want {
+			t.Errorf("TokenSHA256(%q) = %s, want %s", tok, got, want)
+		}
+	}
+}

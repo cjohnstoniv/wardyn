@@ -154,6 +154,7 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 		return
 	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceGitHubAPI, denied: ruleSourceGitHubAPIRefused, mintFailed: "mint github token",
+		beforeSend: p.brokerOfflineErr,
 		credential: func(ctx context.Context) (string, string, error) {
 			if p.ghAPIStopped.Load() {
 				return "", "", errGitHubAPIStopped
@@ -235,11 +236,16 @@ func (p *Proxy) revokeGitHubAPITokens(ctx context.Context) {
 		p.gitTokMu.Lock()
 		e := p.gitTokens[id]
 		p.gitTokMu.Unlock()
-		if e == nil || !e.reMu.TryLock() {
+		if e == nil {
 			continue
 		}
+		select {
+		case e.turn <- struct{}{}:
+		default:
+			continue // a mint in flight: its own request hands the token back when it lands
+		}
 		tok := e.token
-		e.reMu.Unlock()
+		<-e.turn
 		if tok == "" {
 			continue
 		}

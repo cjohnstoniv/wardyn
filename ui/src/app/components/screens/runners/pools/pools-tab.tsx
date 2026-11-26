@@ -191,10 +191,17 @@ export function PoolsTab({
   const [defaultsError, setDefaultsError] = React.useState("");
 
   // Both the row button and the sheet write the default. A refusal throws; each caller shows the server's sentence.
-  // Every field this tab does not edit (the barrier, recording) is sent back as read.
+  // Every field this tab does not edit (the barrier, recording) is sent back as read, with the read's revision, so a
+  // change landing after the read is refused. A clear names the pool it clears (clearing): when the read finds the
+  // default moved since the page loaded, nothing is written.
   const setDefault = React.useCallback(
-    async (poolId: string | null) => {
+    async (poolId: string | null, clearing?: string) => {
       const current = await runnerPools.orgDefaults();
+      if (poolId === null && current.pool_id !== clearing) {
+        reload();
+        if (!current.pool_id) throw new Error(POOLS.DEFAULT_GONE);
+        throw new Error(POOLS.DEFAULT_MOVED(entries.find((x) => x.pool.id === current.pool_id)?.pool.name ?? current.pool_id));
+      }
       await runnerPools.setOrgDefaults({ ...current, pool_id: poolId ?? undefined });
       const name = entries.find((x) => x.pool.id === poolId)?.pool.name ?? "";
       toast.success(poolId ? POOLS.DEFAULT_MADE(name) : POOLS.DEFAULT_CLEARED);
@@ -334,7 +341,7 @@ export function PoolsTab({
         onChanged={reload}
         onOpenRunner={onOpenRunner}
         onEdit={(p) => navigate(`/admin/runners/pools/${p.id}/edit`)}
-        onSetDefault={setDefault}
+        onSetDefault={(id) => setDefault(id, open?.pool.id)}
       />
     </div>
   );

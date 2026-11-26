@@ -5,7 +5,9 @@ package guestagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +64,103 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err == nil {
 			t.Errorf("%q allowed", argv)
+		}
+	}
+}
+
+// An app item from a zip or a disk image is unpacked or copied into its own stage, made root's there (links
+// included) with no group or other write and no set-id bit, has its older copy in /Applications removed, and
+// only then is copied in; the first step that fails is the answer and nothing after it runs. Every other form, including the admin profile's ditto, runs as given.
+func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
+	E := MacItemStageDir + "/edr"
+	stage := E + "/" + itemAppStage
+	for _, c := range []struct {
+		name string
+		argv []string
+		want [][]string
+	}{
+		{"zip", []string{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", MacApplications}, [][]string{
+			{"/bin/rm", "-rf", stage},
+			{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", stage},
+			{"/usr/sbin/chown", "-h", "-R", "-P", "root:wheel", stage},
+			{"/bin/chmod", "-R", "-P", "go-w,ug-s", stage},
+			{"/usr/sbin/chown", "root:admin", stage},
+			{"/bin/chmod", "0775", stage},
+			{"/bin/rm", "-rf", MacApplications + "/Tool.app"},
+			{"/usr/bin/ditto", "--noacl", stage, MacApplications},
+		}},
+		{"dmg", []string{"/usr/bin/ditto", E + "/mnt/Tool.app", MacApplications + "/Tool.app"}, [][]string{
+			{"/bin/rm", "-rf", stage},
+			{"/usr/bin/ditto", E + "/mnt/Tool.app", stage + "/Tool.app"},
+			{"/usr/sbin/chown", "-h", "-R", "-P", "root:wheel", stage},
+			{"/bin/chmod", "-R", "-P", "go-w,ug-s", stage},
+			{"/bin/rm", "-rf", MacApplications + "/Tool.app"},
+			{"/usr/bin/ditto", stage + "/Tool.app", MacApplications + "/Tool.app"},
+		}},
+		{"a package runs as given", []string{"/usr/sbin/installer", "-pkg", E + "/item.pkg", "-target", "/"}, [][]string{
+			{"/usr/sbin/installer", "-pkg", E + "/item.pkg", "-target", "/"},
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := newToolsRig(t)
+			rig.t.listDir = func(dir string) ([]string, error) {
+				if dir != stage {
+					t.Errorf("listed %q, want the stage %q", dir, stage)
+				}
+				return []string{"Tool.app", "Helper.pkg", "Utilities"}, nil
+			}
+			if w := rig.exec(c.argv...); w.Code != 200 || !strings.Contains(w.Body.String(), `"exit_code":0`) {
+				t.Fatalf("%q = %d %s, want 200 exit 0", c.argv, w.Code, w.Body)
+			}
+			if !slices.EqualFunc(rig.ran, c.want, slices.Equal) {
+				t.Errorf("ran %q, want %q", rig.ran, c.want)
+			}
+		})
+	}
+
+	t.Run("an unreadable stage stops before any removal or copy", func(t *testing.T) {
+		rig := newToolsRig(t)
+		var ran [][]string
+		rig.t.listDir = func(string) ([]string, error) { return nil, errors.New("stage unreadable") }
+		rig.t.run = func(_ context.Context, argv []string) ([]byte, int, error) {
+			ran = append(ran, argv)
+			return nil, 0, nil
+		}
+		if w := rig.exec("/usr/bin/ditto", "-x", "-k", E+"/item.zip", MacApplications); w.Code != http.StatusInternalServerError {
+			t.Fatalf("answer = %d %s, want 500", w.Code, w.Body)
+		}
+		if slices.ContainsFunc(ran, func(a []string) bool { return strings.HasPrefix(a[len(a)-1], MacApplications) }) {
+			t.Errorf("ran %q, want no removal or copy in /Applications", ran)
+		}
+	})
+
+	t.Run("a failed chown stops before the copy", func(t *testing.T) {
+		rig := newToolsRig(t)
+		var ran [][]string
+		rig.t.listDir = func(string) ([]string, error) { return []string{"Tool.app"}, nil }
+		rig.t.run = func(_ context.Context, argv []string) ([]byte, int, error) {
+			ran = append(ran, argv)
+			if argv[0] == "/usr/sbin/chown" {
+				return []byte("chown: denied\n"), 1, nil
+			}
+			return nil, 0, nil
+		}
+		w := rig.exec("/usr/bin/ditto", "-x", "-k", E+"/item.zip", MacApplications)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"exit_code":1`) || !strings.Contains(w.Body.String(), "chown: denied") {
+			t.Fatalf("answer = %d %s, want the chown's exit 1 and output", w.Code, w.Body)
+		}
+		if len(ran) != 3 || slices.ContainsFunc(ran, func(a []string) bool { return strings.HasPrefix(a[len(a)-1], MacApplications) }) {
+			t.Errorf("ran %q, want rm, unpack, chown and no removal or copy in /Applications", ran)
+		}
+	})
+
+	for _, argv := range [][]string{
+		{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", "/usr/local/bin"},
+		{"/usr/bin/ditto", E + "/item.mobileconfig", AdminProfile("edr")},
+		{"/usr/bin/ditto", E + "/mnt/Tool.app", MacApplications + "/Other.app"},
+	} {
+		if steps := appInstallSteps(argv); steps != nil {
+			t.Errorf("appInstallSteps(%q) = %q, want nil", argv, steps)
 		}
 	}
 }

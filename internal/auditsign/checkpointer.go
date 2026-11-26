@@ -358,14 +358,17 @@ func (s *Signer) noteRetired(ctx context.Context, c Checkpoint) {
 	s.retiredSeen = &lo
 	s.start = nil // the genesis point is the chain head as of now, not the head read before any checkpoint existed
 	s.Status.fail(ReasonForeignRow)
-	slog.ErrorContext(ctx, "wardynd: audit checkpoint: the newest stored checkpoint is signed by a retired key and is not chained to; signing continues from a new genesis; run wardyn audit chain verify",
+	slog.ErrorContext(ctx, "wardynd: audit checkpoint: the newest stored checkpoint is signed by a retired key and is not chained to; signing continues from a new genesis; "+chainCheckHint,
 		slog.String("reason", ReasonForeignRow), slog.Int64("broken_seq", c.SeqLo), slog.String("kid", c.Kid))
 }
+
+// chainCheckHint is what a signing break tells the operator to run: the live chain check, on the security tier.
+const chainCheckHint = "check the chain with GET /api/v1/audit/chain/verify (security tier) and read its ok field"
 
 func (s *Signer) latch(ctx context.Context, reason string, seq int64, detail string) {
 	s.latched = true
 	s.Status.fail(reason)
-	slog.ErrorContext(ctx, "wardynd: audit checkpoint signing stopped until wardynd restarts; run wardyn audit chain verify",
+	slog.ErrorContext(ctx, "wardynd: audit checkpoint signing stopped until wardynd restarts; "+chainCheckHint,
 		slog.String("reason", reason), slog.Int64("broken_seq", seq), slog.String("detail", detail))
 }
 

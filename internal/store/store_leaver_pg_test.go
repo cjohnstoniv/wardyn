@@ -403,6 +403,35 @@ func queryIDs(t *testing.T, pool *pgxpool.Pool, q string, args ...any) []uuid.UU
 	return ids
 }
 
+// A SCIM email rename replaces the address the identity answers with; the old one stays an alias a removal finds,
+// an update that names no primary leaves the address alone, and the next sign-in records the email it carries.
+func TestPG_ScimEmailRenameReplacesTheAddress(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	row, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, leaverOID,
+		store.IdentityUpdate{ExternalID: leaverOID, Emails: []string{"Old@corp.example"}, PrimaryEmail: "Old@corp.example"}, now)
+	if err != nil || row.EmailLower != "old@corp.example" {
+		t.Fatalf("create = %+v, %v; want old@corp.example", row, err)
+	}
+	row, err = st.ApplyIdentityUpdate(ctx, row.ID, store.IdentityUpdate{Emails: []string{"New@corp.example"}, PrimaryEmail: "New@corp.example"}, now)
+	if err != nil || row.EmailLower != "new@corp.example" {
+		t.Fatalf("rename = %+v, %v; want new@corp.example", row, err)
+	}
+	if aliases, err := st.IdentityAliasValues(ctx, row.ID); err != nil || !slices.Contains(aliases, "old@corp.example") || !slices.Contains(aliases, "new@corp.example") {
+		t.Errorf("aliases = %v, %v; want both addresses", aliases, err)
+	}
+	if found, err := st.SearchIdentities(ctx, idIssuer, store.SearchEmail, "old@corp.example", 10); err != nil || len(found) != 1 || found[0].ID != row.ID {
+		t.Errorf("search by the old address = %+v, %v; want the identity", found, err)
+	}
+	if row, err = st.ApplyIdentityUpdate(ctx, row.ID, store.IdentityUpdate{Emails: []string{"third@corp.example"}}, now); err != nil || row.EmailLower != "new@corp.example" {
+		t.Errorf("an update that names no primary = %+v, %v; want the address kept", row, err)
+	}
+	if signed := signedIn(t, st, "sub-renamed", "Login@corp.example", leaverOID); signed.EmailLower != "login@corp.example" {
+		t.Errorf("after a sign-in = %q, want the email the sign-in carries", signed.EmailLower)
+	}
+}
+
 // The SCIM lookups were rewritten from an OR over an alias sub-select into a UNION of indexable arms; this
 // holds them to the answers of the OR form over a corpus that tells the arms apart.
 func TestPG_ScimLookupsMatchTheirOrForm(t *testing.T) {
