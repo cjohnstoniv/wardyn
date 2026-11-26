@@ -606,3 +606,27 @@ func TestMCPSandboxGateD5(t *testing.T) {
 		})
 	}
 }
+
+// TestMCPAdmissionRefusesUpstreamProxy: a site whose traffic goes through an upstream proxy, by URL or by
+// secret, refuses a server that starts from a command at admission, since its sandbox's proxy has no
+// upstream; a remote server is admitted.
+func TestMCPAdmissionRefusesUpstreamProxy(t *testing.T) {
+	want := "MCP servers that start from a command can't run here yet: this organisation sends traffic through its own proxy. Use a remote (HTTPS) MCP server, or remove files."
+	for _, site := range []types.SiteConfig{
+		{UpstreamProxyURL: "http://proxy.corp.test:3128"},
+		{UpstreamProxySecretRef: "corp-proxy"},
+	} {
+		site.Components = localMCPSite("on").Components
+		t.Setenv(envMCPOwnSandbox, "1")
+		refused := mcpAdmissionRefusal(site, stdioComps(1).attached[0], 0)
+		if refused == nil || refused.reason != reasonMCPOwnSandboxUnsupported || refused.refusal.status != http.StatusUnprocessableEntity ||
+			refused.refusal.body.Error != want {
+			t.Fatalf("site %+v: admission = %+v, want 422 %q %q", site, refused, reasonMCPOwnSandboxUnsupported, want)
+		}
+		remote := attachedComponent{snapshot: types.RunComponent{Name: "Remote", Definition: types.ComponentDefinition{
+			MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportHTTP, URL: "https://mcp.remote.test/mcp"}}}}
+		if refused := mcpAdmissionRefusal(site, remote, 0); refused != nil {
+			t.Fatalf("a remote server is refused: %+v", refused)
+		}
+	}
+}
