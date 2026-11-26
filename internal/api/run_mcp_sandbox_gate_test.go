@@ -561,10 +561,10 @@ func mcpCanonColumn(t *testing.T, doc, heading string, col int) []string {
 	return out
 }
 
-// TestMCPSandboxGateD5 is the matrix's step 6, D5: the fold, at preview, preflight and create alike, admits a
+// TestMCPSandboxGateNarrowerOverlay is the matrix's step 6: the fold, at preview, preflight and create alike, admits a
 // narrower overlay within "same" computed from the folded policy, and refuses one that names a host outside
 // it with the overlay's field path.
-func TestMCPSandboxGateD5(t *testing.T) {
+func TestMCPSandboxGateNarrowerOverlay(t *testing.T) {
 	i := slices.IndexFunc(runFoldSteps, func(st runFoldStep) bool {
 		return strings.HasSuffix(runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name(), ".stepMCPSandbox")
 	})

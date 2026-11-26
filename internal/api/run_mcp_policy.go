@@ -270,7 +270,7 @@ func (s *Server) mcpHoldsRewritten(ctx context.Context, in accessInputs) map[str
 	return out
 }
 
-// mcpNarrowerRefusal is the fold's step 6 (D5): a "narrower" overlay that names anything "same" does not
+// mcpNarrowerRefusal is the fold's step 6: a "narrower" overlay that names anything "same" does not
 // permit, judged against "same" from the folded policy, is refused with the overlay's field. No component
 // save can judge it, since there is no run to read "same" from.
 func mcpNarrowerRefusal(spec types.RunPolicySpec, comps runComponents) *runRefusal {
