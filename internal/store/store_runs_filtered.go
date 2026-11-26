@@ -58,6 +58,9 @@ type RunFilter struct {
 	// one with a PENDING approval. It narrows the attention reads' live set and never changes which of those
 	// rows need attention, which the api layer still decides.
 	AttentionCandidates bool
+	// EndedAfter, when set, keeps only the ended rows whose end time is after it; live rows are read as always. It is
+	// a range on agent_runs_end_time_idx. CountHiddenRuns never reads it.
+	EndedAfter time.Time
 }
 
 // RunUnitScope is a set of units a run list is limited to: the subtree a portal's pin names. A run with
@@ -238,6 +241,7 @@ var _ RunsFilteredPager = PG{}
 // and ended rows by end time, which agent_runs_end_time_idx serves together with the ended_within window. Each arm
 // asks for offset+limit rows, all the outer page can need from it. The outer ORDER BY is runOrderSQL, so the page
 // is the one a single ordered query returns. A status filter that can match only one side reads only that arm.
+// The ended arm takes f.EndedAfter as a range on the same index.
 func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.AgentRun, error) {
 	var args []any
 	nonTerminal := bindArg(&args, nonTerminalStateList())
@@ -264,6 +268,9 @@ func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.
 			killedVisibleSQL(bindArg(&args, f.IncludeKilled), bindArg(&args, int(killedVisibleFor.Seconds())))}
 		if secs := endedWithinSecs(f.EndedWithin); secs != nil {
 			ended = append(ended, runEndTimeSQL+` >= now() - make_interval(secs => `+bindArg(&args, *secs)+`::int)`)
+		}
+		if !f.EndedAfter.IsZero() {
+			ended = append(ended, runEndTimeSQL+` > `+bindArg(&args, f.EndedAfter))
 		}
 		arms = append(arms, arm(runEndTimeSQL+` DESC, id DESC`, ended...))
 	}

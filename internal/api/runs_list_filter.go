@@ -68,7 +68,8 @@ func isNeedsStatus(statuses []string) bool {
 type parsedRunsListParams struct {
 	view       string // "" | "user" | "admin", already coerced fail-closed
 	filter     store.RunFilter
-	skipCounts bool // ?counts=skip: leave both hidden-count headers out
+	skipCounts bool      // ?counts=skip: leave both hidden-count headers out
+	endedAfter time.Time // ?ended_after=: only the ended rows whose end time is after it (RFC 3339)
 }
 
 // parseRunsListParams reads and validates the opt-in params, resolving
@@ -203,6 +204,16 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		return parsedRunsListParams{}, false
 	}
 
+	var endedAfter time.Time
+	if v := q.Get("ended_after"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidEndedAfterParam, "invalid ended_after")
+			return parsedRunsListParams{}, false
+		}
+		endedAfter = t
+	}
+
 	searchQuery := q.Get("q")
 	if len(searchQuery) > maxRunsListQueryLen {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunsSearchQueryTooLong, "q is too long")
@@ -212,6 +223,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	return parsedRunsListParams{
 		view:       view,
 		skipCounts: skipCounts,
+		endedAfter: endedAfter,
 		filter: store.RunFilter{
 			Owner:         resolvedOwner,
 			WithSponsored: withSponsored,
@@ -305,6 +317,12 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		}
 		w.Header().Set("X-Wardyn-Hidden-Older", strconv.Itoa(olderHidden))
 		w.Header().Set("X-Wardyn-Hidden-Killed", strconv.Itoa(killedHidden))
+	}
+	// ended_after: the ended arm reads only the rows that ended after it, and the answer echoes it, so a client keeps
+	// the ended rows it holds from at or before it. Set after the counts, which never read it.
+	if !params.endedAfter.IsZero() {
+		params.filter.EndedAfter = params.endedAfter
+		w.Header().Set("X-Wardyn-Ended-After", params.endedAfter.UTC().Format(time.RFC3339Nano))
 	}
 	servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
 		runs, err := pager.ListRunsFiltered(r.Context(), params.filter, p)
