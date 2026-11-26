@@ -307,3 +307,12 @@ func TestProxyOnlyNetDialLeavesTheDefaultResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The production dialer owns its resolver, so no test (in this package or one
+// that builds a relay) races a swap of net.DefaultResolver against a dial.
+func TestProxyDialerOwnsItsResolver(t *testing.T) {
+	d := proxyDialer()
+	if d.Resolver == nil || d.Resolver == net.DefaultResolver {
+		t.Fatalf("proxyDialer resolver = %p; want one of its own", d.Resolver)
+	}
+}
