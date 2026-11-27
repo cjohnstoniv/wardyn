@@ -42,8 +42,8 @@ func withholdUnboundDispatchInjections(policy *types.RunPolicySpec, p dispatchPa
 // not the one to bind it. It pairs them by host and secret name, as the take does.
 func sandboxedMCPRule(servers []componentMCP, rule egress.InjectionRule) bool {
 	return slices.ContainsFunc(servers, func(m componentMCP) bool {
-		return m.Launch != nil && slices.ContainsFunc(m.Headers, func(sec types.ComponentSecret) bool {
-			return hostEqual(rule.Host, sec.Delivery.Host) && rule.SecretName == sec.SecretName
+		return m.Launch != nil && slices.ContainsFunc(m.Headers, func(h mcpHeaderSecret) bool {
+			return hostEqual(rule.Host, h.Host) && rule.SecretName == h.SecretName
 		})
 	})
 }

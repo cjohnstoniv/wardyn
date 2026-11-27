@@ -114,7 +114,7 @@ func (c runComponents) dispatch() componentDispatch {
 				Launch: def.MCP.Launch, EnvNames: componentEnvNames(def)}
 			for _, sec := range def.Secrets {
 				if sec.Delivery.Mode == types.ComponentDeliveryHeader {
-					m.Headers = append(m.Headers, sec)
+					m.Headers = append(m.Headers, mcpHeaderSecret{Host: sec.Delivery.Host, SecretName: sec.SecretName})
 				}
 			}
 			d.MCP = append(d.MCP, m)

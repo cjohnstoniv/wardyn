@@ -240,11 +240,15 @@ type componentMCP struct {
 	EnvNames []string
 	// Headers is a local server's header secrets: each injection of one is its own sandbox's
 	// (takeMCPServerSecrets), never the agent's (sandboxedMCPRule).
-	Headers []types.ComponentSecret
+	Headers []mcpHeaderSecret
 	// GatewayAudience and GatewayUID are an organisation's remote server's: the audience of the
 	// identity token its route sends, and the component and version that route is sealed against.
 	GatewayAudience, GatewayUID string
 }
+
+// mcpHeaderSecret is one header secret of a server that starts from a command: its host and its secret's name,
+// never a value.
+type mcpHeaderSecret struct{ Host, SecretName string }
 
 // mcpDispatch is what dispatch hands on for the run's MCP servers.
 type mcpDispatch struct {
