@@ -748,7 +748,9 @@ func (r *moveRunner) ImportSandbox(_ context.Context, spec runner.SandboxSpec, s
 			return runner.Sandbox{}, runner.CarriedManifest{}, errors.Join(runner.ErrMoveFiles, err)
 		}
 		var b strings.Builder
-		_, _ = io.Copy(&b, content)
+		if content != nil { // a file's content; nil for a folder or a link
+			_, _ = io.Copy(&b, content)
+		}
 		r.mmu.Lock()
 		r.imported = append(r.imported, h.Path)
 		if r.data == nil {
