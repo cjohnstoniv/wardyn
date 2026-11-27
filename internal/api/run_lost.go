@@ -35,7 +35,8 @@ import (
 // that cannot be kept fails closed and is torn down as before: a headless run
 // (the completion watcher that would finish it skips kept runs; an outage pass
 // keeps one on the server's own Docker, run_lapse_class.go), a run past
-// its end and grace, or a substrate that cannot keep a sandbox (Kubernetes).
+// its end and grace, or a substrate that cannot keep a sandbox (Kubernetes,
+// except a server-cluster run on a namespace whose NetworkPolicy check passed).
 // A proxy stop that fails any other way keeps the run with its containment
 // unresolved (containment_error) for the lease sweep to retry (#1060): a
 // teardown on the same failing daemon would lose the files and contain nothing.
@@ -89,8 +90,8 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 				s.endStrictRunnerRun(ctx, run)
 			}
 			if o != loseNotKeepable {
-				// held counts runs kept with the cut confirmed: not a server Kubernetes run (it is ended), nor one
-				// whose cut failed (it stays kept, unresolved, for the lease sweep to retry).
+				// held counts runs kept with the cut confirmed: not a run its substrate cannot keep (it is ended), nor
+				// one whose cut failed (it stays kept, unresolved, for the lease sweep to retry).
 				if o == loseApplied && v.holdsUnattended(run) && (serr == nil || errors.Is(serr, errLostEndUnread)) {
 					held++
 				}
@@ -405,7 +406,9 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun) error 
 	var cutErr error
 	if end != lostEndPast {
 		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
-		if ok {
+		if lp, lost := s.cfg.Runner.(runner.LostProxyStopper); ok && lost {
+			cutErr = runner.CutLostEgressAt(ctx, lp, run.SandboxRef, 0)
+		} else if ok {
 			cutErr = runner.CutEgress(ctx, stopper, run.SandboxRef)
 		}
 		switch end {

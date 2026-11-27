@@ -282,8 +282,9 @@ const (
 
 	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
 	// (#1342): the run's substrate cannot replace a proxy in place
-	// (runner.ErrReviveUnsupported; Kubernetes pins the proxy pod's IP in the
-	// agent pod). Nothing changed; stop the run and start a new one.
+	// (runner.ErrReviveUnsupported; on Kubernetes, only a server-cluster run
+	// lost in an outage and kept with its proxy stopped can be revived).
+	// Nothing changed; stop the run and start a new one.
 	reasonReviveUnsupported = "revive_unsupported"
 
 	// Policy readback (run_proxy_readback.go). POST /runs/{id}/revive: a start that must confirm its

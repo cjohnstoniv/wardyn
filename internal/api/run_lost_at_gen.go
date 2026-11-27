@@ -61,7 +61,9 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 		if !canCut && end == lostEndOpen {
 			return runner.ErrEndUnsupported
 		}
-		if canCut {
+		if lp, lost := s.cfg.Runner.(runner.LostProxyStopper); canCut && lost {
+			cutErr = runner.CutLostEgressAt(ctx, lp, run.SandboxRef, gen)
+		} else if canCut {
 			cutErr = runner.CutEgressAt(ctx, gs, run.SandboxRef, gen)
 		}
 		if newer(cutErr) {
