@@ -112,9 +112,29 @@ func TestManagedFileDirs(t *testing.T) {
 // a host directory the delivery would write into, and one above it lets the
 // agent rename the directory aside.
 func TestManagedFileDirIsNoMountTarget(t *testing.T) {
-	for _, tgt := range []string{"/", "/etc", ManagedFileDir, ManagedFileDir + "/x"} {
+	for _, tgt := range []string{"/", "/etc", ManagedFileDir, ManagedFileDir + "/x", ChromiumPolicyDir, ChromiumPolicyDir + "/x"} {
 		if ValidateTarget(tgt) == nil {
 			t.Errorf("ValidateTarget(%q) accepted a mount target that covers %s", tgt, ManagedFileDir)
+		}
+	}
+}
+
+// The browser lockdown's file is a ceiling like Claude Code's: accepted only directly in
+// ChromiumPolicyDir, root-owned, and writable by nobody but root (#2970).
+func TestValidateManagedFiles_ChromiumPolicyDir(t *testing.T) {
+	if err := ValidateManagedFiles([]ManagedFile{{Path: ChromiumPolicyFile, Mode: 0o644, Content: []byte(`{}`)}}); err != nil {
+		t.Fatalf("the lockdown's file = %v, want accepted", err)
+	}
+	for name, f := range map[string]ManagedFile{
+		"below the directory":       {Path: ChromiumPolicyDir + "/x/wardyn.json", Mode: 0o644},
+		"in /etc/chromium/policies": {Path: "/etc/chromium/policies/wardyn.json", Mode: 0o644},
+		"the directory's parent":    {Path: "/etc/chromium/policies", Mode: 0o644},
+		"agent-owned":               {Path: ChromiumPolicyFile, Mode: ComponentSecretFileMode, AgentOwned: true},
+		"group-writable":            {Path: ChromiumPolicyFile, Mode: 0o664},
+		"other-writable":            {Path: ChromiumPolicyFile, Mode: 0o646},
+	} {
+		if err := ValidateManagedFiles([]ManagedFile{f}); err == nil {
+			t.Errorf("%s (%s, %04o, agent-owned %v) was accepted", name, f.Path, f.Mode, f.AgentOwned)
 		}
 	}
 }

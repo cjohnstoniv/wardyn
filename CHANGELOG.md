@@ -11,6 +11,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Sandbox browser lockdown (#2970): with `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run gets a Chromium
+  policy the agent cannot change, allowing only the extensions you list. `wardyn-signin browser` refuses debugging and
+  extension flags, and `wardyn-signin cdp --agent --session` drives a page without a debugging port.
+
+### Changed
+
+- `wardyn-signin browser` takes only `--headless` and start URLs, and starts Chromium with a fixed environment.
+
+### Security
+
+- A Linux VM guest now refuses a managed file whose directory the agent could replace, as the Docker runner already did.
+
 ## [0.11.0-rc.4] — 2026-11-26
 
 ### Added

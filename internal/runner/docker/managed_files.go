@@ -101,7 +101,13 @@ var managedFileAnchors = map[string]string{
 	runner.ManagedFileDir:      "/etc",
 	runner.CodexManagedFileDir: "/etc",
 	runner.ComponentSecretDir:  "/run",
+	runner.ChromiumPolicyDir:   "/etc/chromium",
 }
+
+// managedFileAnchorParent is the directory an anchor itself sits in, checked as well: an agent that
+// could write /etc could rename /etc/chromium aside and plant its own. An image without Chromium has
+// no /etc/chromium; the delivery then creates it root-owned, and /etc alone is checked.
+var managedFileAnchorParent = map[string]string{"/etc/chromium": "/etc"}
 
 // checkManagedFileImage refuses a container whose image would let the agent
 // replace a root-owned file in runner.ManagedFileDir, or carry a delivered
@@ -143,19 +149,25 @@ func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string, 
 		if !ok {
 			return 0, fmt.Errorf("docker: managed file directory %s has no anchor this driver checks", dir)
 		}
-		ent, _, err := d.firstArchiveEntry(ctx, containerID, anchor, 0)
-		if err != nil {
-			if anchor != "/etc" && isNotFound(err) {
-				continue
-			}
-			return 0, fmt.Errorf("docker: read %s for managed files: %w", anchor, err)
+		chain := []string{anchor}
+		if up, ok := managedFileAnchorParent[anchor]; ok {
+			chain = append(chain, up)
 		}
-		if ent.Typeflag != tar.TypeDir || ent.Uid != 0 || ent.Mode&0o022 != 0 {
-			what := fmt.Sprintf("owned by uid %d with mode %04o", ent.Uid, ent.Mode&0o7777)
-			if ent.Typeflag != tar.TypeDir {
-				what = "not a directory"
+		for _, a := range chain {
+			ent, _, err := d.firstArchiveEntry(ctx, containerID, a, 0)
+			if err != nil {
+				if a != "/etc" && isNotFound(err) {
+					continue
+				}
+				return 0, fmt.Errorf("docker: read %s for managed files: %w", a, err)
 			}
-			return 0, fmt.Errorf("docker: managed files need an image whose %s is a directory owned by root and not writable by group or others; this image's %s is %s, so the workload may rename %s aside and replace the file", anchor, anchor, what, dir)
+			if ent.Typeflag != tar.TypeDir || ent.Uid != 0 || ent.Mode&0o022 != 0 {
+				what := fmt.Sprintf("owned by uid %d with mode %04o", ent.Uid, ent.Mode&0o7777)
+				if ent.Typeflag != tar.TypeDir {
+					what = "not a directory"
+				}
+				return 0, fmt.Errorf("docker: managed files need an image whose %s is a directory owned by root and not writable by group or others; this image's %s is %s, so the workload may rename %s aside and replace the file", a, a, what, dir)
+			}
 		}
 	}
 	return uid, nil
