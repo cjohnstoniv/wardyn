@@ -245,3 +245,27 @@ describe("runs.reviveRun — denied_added", () => {
     expect((await runs.reviveRun("run-1")).denied_added).toEqual([]);
   });
 });
+
+describe("runs.createRunWire — the optional headers", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const stub = () => {
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "run-1" }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", f);
+    return f;
+  };
+  const headersOf = (f: ReturnType<typeof stub>) => new Headers((f.mock.calls[0] as unknown as [string, RequestInit])[1].headers);
+
+  it("sends no assistant header when none is given", async () => {
+    const f = stub();
+    await runs.createRunWire({ title: "x" });
+    expect(headersOf(f).has("X-Wardyn-Assistant-Session")).toBe(false);
+  });
+
+  it("passes a header into the request and still names the person", async () => {
+    const f = stub();
+    await runs.createRunWire({ title: "x" }, { "X-Wardyn-Assistant-Session": "s-1" });
+    const h = headersOf(f);
+    expect(h.get("X-Wardyn-Assistant-Session")).toBe("s-1");
+    expect(h.get("Content-Type")).toBe("application/json");
+  });
+});

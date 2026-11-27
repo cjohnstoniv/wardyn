@@ -350,8 +350,8 @@ export const runs = {
   // still launched, and callers surface warnings without blocking. CreateRunResult is
   // structurally an AgentRun. #125/#121: the default deadline, not LAUNCH_DEADLINE_MS, because
   // POST /runs dispatches asynchronously and no longer blocks through CreateSandbox.
-  async createRunWire(body: object): Promise<CreateRunResult> {
-    const res = await wfetch("/runs", { method: "POST", asPerson: true, body: JSON.stringify(body) });
+  async createRunWire(body: object, headers?: Record<string, string>): Promise<CreateRunResult> {
+    const res = await wfetch("/runs", { method: "POST", asPerson: true, body: JSON.stringify(body), ...(headers ? { headers } : {}) });
     return asJson<CreateRunResult>(res);
   },
   // Preflight (POST /runs/preflight) is a dry run of create's resolution and gating. It keeps

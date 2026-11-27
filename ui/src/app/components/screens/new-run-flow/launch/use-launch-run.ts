@@ -10,6 +10,7 @@
 
 import * as React from "react";
 import { getAuthGeneration, HttpError, isSignedOutHold } from "../../../../lib/api/core";
+import { assistantSessionHeader } from "../../../../lib/api/assistant";
 import { runs } from "../../../../lib/api/runs";
 import { runSchedules, type NewRunSchedule } from "../../../../lib/api/run-schedules";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
@@ -74,9 +75,10 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     }
   };
 
-  const launch = (body: CreateRunWire) =>
+  // `assistantSession` is the assistant session the draft came from; with none, the request carries no header.
+  const launch = (body: CreateRunWire, assistantSession?: string) =>
     send(async (still) => {
-      const created = await runs.createRunWire(body);
+      const created = assistantSession ? await runs.createRunWire(body, assistantSessionHeader(assistantSession)) : await runs.createRunWire(body);
       // A run that was created is shown even when the dialog is gone; one made for another person never is.
       if (still()) latest.current.onCreated(created);
     });

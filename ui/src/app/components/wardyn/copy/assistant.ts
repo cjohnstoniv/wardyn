@@ -139,4 +139,35 @@ export const ASSISTANT = {
   START_AGAIN: "Start again",
   // The relay could not offer the model its tools.
   TOOLS_UNAVAILABLE: "The assistant can't use its tools on this server yet, so it stopped.",
+
+  // ---- the composer editor: parts, checks, left-out hosts and the repository step ----
+  // Each string below is marked PROPOSED until the mock check records its decision.
+  PART_ACCEPT: "Accept", // PROPOSED
+  PART_DISCARD: "Discard", // PROPOSED
+  PART_ACCEPTED: "Accepted", // PROPOSED
+  PART_EDITED: "Edited by you", // PROPOSED
+  PART_FROM_BUILD_FILE: "From a build file (unverified)", // PROPOSED
+  PART_EDIT_DONE: "Done", // PROPOSED: not on the board
+  PART_EDIT_INVALID: "That isn't valid JSON.", // PROPOSED: not on the board
+  CHANGED_SINCE: "Changed since the assistant's proposal", // PROPOSED
+  YOU_CHANGED: (field: string) => `You changed ${field}. Checked again.`, // PROPOSED
+  CHECKS: "Checks", // PROPOSED
+  VALID: "Valid", // PROPOSED
+  WITHIN_CEILING: "Within your ceiling", // PROPOSED
+  WIDENS_DETAIL: (field: string, n: number) => `${field}: ${n} added`, // PROPOSED
+  HELD_FOR: (n: number) => `Saving will be held for ${n} approvals.`, // PROPOSED
+  ASK_ADMIN: "Ask an admin to allow this host", // PROPOSED
+  ADMIN_ONLY: (unit: string, n: number) =>
+    `Only an admin can add a host to a unit's ceiling, and people can't request one yet. Ask an admin of unit ${unit}; their change will be held for ${n} approvals.`, // PROPOSED
+  REPO_WORKSPACE: "Workspace", // PROPOSED: not on the board
+  REPO_SOURCE: "Repository", // PROPOSED: not on the board
+  FETCH_BUILD_FILES: "Fetch build files", // PROPOSED
+  // PROPOSED: the server reads from a repository in the person's workspace.
+  FETCH_EXPLAIN:
+    "Before the assistant starts, the server fetches only build files on a fixed list of names (manifests, lockfiles, Dockerfile) from a repository in your workspace, and checks them for known secret formats. The assistant gets no clone, no git credential and no push. Source files never reach it.",
+  SEND_FILES_TITLE: (n: number, provider: string) => `Send these ${n} files to ${provider}?`, // PROPOSED
+  SEND_FILES: "Send files", // PROPOSED
+  FILES_SKIPPED: "Skipped", // PROPOSED: not on the board
+  FILES_HELD_BACK: "Held back", // PROPOSED: not on the board
+  FILE_BYTES: (n: number) => `${n} bytes`, // PROPOSED: not on the board
 } as const;

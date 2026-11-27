@@ -1,0 +1,229 @@
+/**
+ * Copyright 2026 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// The run editor: the person's own draft of a run, beside the assistant's chat. The assistant proposes parts and a
+// part is in the draft only once it is accepted. Each accept, discard or edit posts the draft and what changed,
+// then asks the server for its checks after a short pause. The draft goes on to New run's review, where the person
+// launches as they do today; nothing is saved from here.
+import * as React from "react";
+import { useNavigate } from "react-router-dom";
+import { assistant, type AssistantChecks, type AssistantDropped, type AssistantTarget } from "../../../../lib/api/assistant";
+import { getErrorMessage } from "../../../../lib/format";
+import { CHANGES } from "../../../../lib/governance-copy";
+import { Button } from "../../../ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../ui/table";
+import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
+import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { NEW_RUN_PATH } from "../../new-run-flow/draft/new-run-url";
+import { ChecksStrip } from "./checks-strip";
+import { DroppedHosts, type DroppedItem } from "./dropped-hosts";
+import { PartCard, sectionLabel, valueLines } from "./part-card";
+
+/** A part as the server proposes it; `from_build_file` is the server's mark, never read from the assistant's text. */
+export interface EditorPart {
+  readonly section: string;
+  readonly value: unknown;
+  readonly from_build_file?: boolean;
+}
+export interface EditorProposal {
+  readonly parts: readonly EditorPart[];
+  readonly dropped: readonly DroppedItem[];
+}
+
+export interface PartState {
+  readonly section: string;
+  readonly value: unknown;
+  /** The assistant's last proposal of this part, which an edit is compared with. */
+  readonly proposed: unknown;
+  readonly status: "proposed" | "accepted";
+  readonly edited: boolean;
+  readonly fromBuildFile: boolean;
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** The draft: the accepted parts only, each with the person's own value. A proposed part is never in it. */
+export function draftOf(parts: readonly PartState[]): Record<string, unknown> {
+  return Object.fromEntries(parts.filter((p) => p.status === "accepted").map((p) => [p.section, p.value]));
+}
+
+/**
+ * Lays a new proposal over what the person has. A part they accepted stays accepted when the proposal still says what
+ * it says; one the proposal now says differently, and any other proposed part, becomes the new proposal.
+ */
+export function mergeProposal(current: readonly PartState[], proposal: EditorProposal | null): PartState[] {
+  if (!proposal) return [...current];
+  const incoming = new Map(proposal.parts.map((p) => [p.section, p]));
+  const kept = current.filter((p) => p.status === "accepted" || incoming.has(p.section));
+  const merged = kept.map((p): PartState => {
+    const next = incoming.get(p.section);
+    if (!next) return p;
+    if (p.status === "accepted" && same(p.value, next.value)) return { ...p, proposed: next.value, edited: false, fromBuildFile: next.from_build_file === true };
+    return { section: p.section, value: next.value, proposed: next.value, status: "proposed", edited: false, fromBuildFile: next.from_build_file === true };
+  });
+  for (const next of proposal.parts) {
+    if (!merged.some((p) => p.section === next.section)) {
+      merged.push({ section: next.section, value: next.value, proposed: next.value, status: "proposed", edited: false, fromBuildFile: next.from_build_file === true });
+    }
+  }
+  return merged;
+}
+
+// What the person has accepted or edited, kept while the session lives, so closing and opening the draft sheet on a
+// phone does not lose it.
+const kept = new Map<string, PartState[]>();
+
+/** The left-out entries of the proposal, each with the count the server's checks gave for that unit when they did. */
+export function mergeDropped(proposed: readonly DroppedItem[], fromChecks: readonly AssistantDropped[] | null | undefined): DroppedItem[] {
+  const checked = fromChecks ?? [];
+  const key = (d: { host?: string; field?: string; unit?: string }) => `${d.host ?? ""}|${d.field ?? ""}|${d.unit ?? ""}`;
+  const seen = new Set<string>();
+  const out: DroppedItem[] = [];
+  for (const d of proposed) {
+    const match = checked.find((c) => key(c) === key(d));
+    seen.add(key(d));
+    out.push(d.admin_change_approvals === undefined && match ? { ...d, admin_change_approvals: match.admin_change_approvals } : d);
+  }
+  for (const c of checked) if (!seen.has(key(c))) out.push(c);
+  return out;
+}
+
+export interface RunEditorProps {
+  proposal: EditorProposal | null;
+  /** The assistant session the draft is for; edits are posted to it and the launch names it. */
+  sessionId?: string;
+  target?: AssistantTarget;
+  /** Milliseconds between the last change and the server's checks. */
+  debounceMs?: number;
+}
+
+export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debounceMs = 400 }: RunEditorProps) {
+  const navigate = useNavigate();
+  const [parts, setParts] = React.useState<PartState[]>(() => mergeProposal((sessionId && kept.get(sessionId)) || [], proposal));
+  const [checks, setChecks] = React.useState<AssistantChecks | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState<string | null>(null);
+  // Bumped by a change the person made: the checks run after it, never for a proposal that only arrived.
+  const [changes, setChanges] = React.useState(0);
+  const latest = React.useRef(parts);
+  latest.current = parts;
+
+  React.useEffect(() => {
+    setParts((cur) => mergeProposal(cur, proposal));
+  }, [proposal]);
+  React.useEffect(() => {
+    if (sessionId) kept.set(sessionId, parts);
+  }, [sessionId, parts]);
+
+  const act = (section: string, change: (p: PartState) => PartState | null) => {
+    const next = latest.current.flatMap((p) => {
+      if (p.section !== section) return [p];
+      const changed = change(p);
+      return changed ? [changed] : [];
+    });
+    latest.current = next;
+    setParts(next);
+    setChanges((n) => n + 1);
+    if (sessionId) {
+      const after = next.find((p) => p.section === section);
+      void assistant.postEdits(sessionId, { draft: draftOf(next), changed: [{ field: section, value: JSON.stringify(after ? after.value : null) }] }).catch((e: unknown) => setFailed(getErrorMessage(e)));
+    }
+  };
+
+  const draft = draftOf(parts);
+  const accepted = Object.keys(draft).length;
+  React.useEffect(() => {
+    if (changes === 0) return;
+    if (accepted === 0) {
+      setChecks(null);
+      setBusy(false);
+      return;
+    }
+    const controller = new AbortController();
+    setBusy(true);
+    const timer = setTimeout(() => {
+      assistant
+        .postChecks({ target_kind: target.kind, ...(target.id ? { target: target.id } : {}), draft: draftOf(latest.current) }, controller.signal)
+        .then((c) => {
+          if (controller.signal.aborted) return;
+          setChecks(c);
+          setFailed(null);
+          setBusy(false);
+        })
+        .catch((e: unknown) => {
+          if (controller.signal.aborted) return;
+          setFailed(getErrorMessage(e));
+          setBusy(false);
+        });
+    }, debounceMs);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // Only a change the person made asks again; the target is fixed for the screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changes]);
+
+  const edited = parts.filter((p) => p.status === "accepted" && p.edited && !same(p.value, p.proposed));
+  const left = mergeDropped(proposal?.dropped ?? [], checks?.dropped);
+
+  const review = () =>
+    navigate(NEW_RUN_PATH, {
+      state: { prefill: { source: "assistant", document: { inline_policy: draft }, ...(sessionId ? { assistantSession: sessionId } : {}) } },
+    });
+
+  return (
+    <div data-testid="composer-run-editor" className="min-w-0 space-y-3">
+      {parts.map((p) => (
+        <PartCard
+          key={p.section}
+          section={p.section}
+          value={p.value}
+          status={p.status}
+          edited={p.edited}
+          fromBuildFile={p.fromBuildFile}
+          onAccept={() => act(p.section, (c) => ({ ...c, status: "accepted" }))}
+          onDiscard={() => act(p.section, () => null)}
+          onEdit={(value) => act(p.section, (c) => ({ ...c, value, status: "accepted", edited: !same(value, c.proposed) }))}
+        />
+      ))}
+      <DroppedHosts items={left} />
+      {edited.length > 0 && (
+        <div data-testid="composer-edit-diff" className="space-y-1.5">
+          <h3 className="text-body font-medium text-foreground">{T.CHANGED_SINCE}</h3>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{CHANGES.DIFF_FIELD}</TableHead>
+                <TableHead>{CHANGES.DIFF_BEFORE}</TableHead>
+                <TableHead>{CHANGES.DIFF_AFTER}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {edited.map((p) => (
+                <TableRow key={p.section}>
+                  <TableCell>{sectionLabel(p.section)}</TableCell>
+                  <TableCell className="mono whitespace-normal break-words">{valueLines(p.proposed).join(", ")}</TableCell>
+                  <TableCell className="mono whitespace-normal break-words">{valueLines(p.value).join(", ")}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {edited.map((p) => (
+            <p key={p.section} role="status" className="text-meta text-muted-foreground">
+              {T.YOU_CHANGED(sectionLabel(p.section))}
+            </p>
+          ))}
+        </div>
+      )}
+      {(accepted > 0 || checks || failed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={failed} />}
+      {accepted > 0 && (
+        <Button type="button" disabled={checks?.valid === false} onClick={review}>
+          {NR_SHARED.REVIEW_RUN}
+        </Button>
+      )}
+    </div>
+  );
+}

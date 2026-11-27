@@ -24,7 +24,15 @@ export interface PrefillState {
   workspaces?: { workspaceId: string }[];
 }
 export interface RouterPrefill {
-  prefill?: { source?: string; inlinePolicy?: boolean; state?: PrefillState };
+  prefill?: {
+    source?: string;
+    inlinePolicy?: boolean;
+    state?: PrefillState;
+    /** A run document the assistant's draft made: the intent the document door parses. Review opens on it. */
+    document?: RunIntent;
+    /** The assistant session the draft came from; the launch names it so the run is marked as drafted with it. */
+    assistantSession?: string;
+  };
 }
 
 const workspacesOf = (s: PrefillState): Pick<RunIntent, "workspaces"> => {
@@ -74,9 +82,13 @@ function cloneIntent(s: PrefillState): RunIntent {
 }
 
 /** The seed a router-state prefill makes, or undefined when the state holds none. */
-export function prefillSeed(state: unknown): { origin: NewRunOrigin; intent: RunIntent } | undefined {
+export function prefillSeed(state: unknown): { origin: NewRunOrigin; intent: RunIntent; assistantSession?: string } | undefined {
   const prefill = (state as RouterPrefill | null)?.prefill;
   if (!prefill) return undefined;
+  if (prefill.document) {
+    // A document the assistant drafted is a whole run document, so it opens Review the way an imported one does.
+    return { origin: { kind: "import" }, intent: prefill.document, ...(prefill.assistantSession ? { assistantSession: prefill.assistantSession } : {}) };
+  }
   const s = prefill.state ?? {};
   return prefill.source === "composer"
     ? { origin: { kind: "composer" }, intent: composerIntent(s) }

@@ -57,3 +57,23 @@ describe("router-state prefill seeds", () => {
       .toEqual([{ id: "claude-code", kind: "harness", default_effect: "hold" }]);
   });
 });
+
+describe("an assistant's run document", () => {
+  const document = { inline_policy: { allowed_domains: ["github.com"] } };
+
+  it("opens Review on the document the way an imported one does, and carries the session", () => {
+    expect(prefillSeed({ prefill: { source: "assistant", document, assistantSession: "s-1" } })).toEqual({
+      origin: { kind: "import" },
+      intent: document,
+      assistantSession: "s-1",
+    });
+  });
+
+  it("leaves the session out when there is none", () => {
+    expect(prefillSeed({ prefill: { source: "assistant", document } })).toEqual({ origin: { kind: "import" }, intent: document });
+  });
+
+  it("changes nothing for the other doors", () => {
+    expect(prefillSeed({ prefill: { source: "composer", state: { task: "x" } } })).not.toHaveProperty("assistantSession");
+  });
+});

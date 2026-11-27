@@ -8,7 +8,7 @@
 // assistant for one purpose. A refusal throws the HttpError of core.ts, so the console shows the server's own
 // sentence and can match on `reason`.
 import { apiURL } from "../base-path";
-import type { GovernanceChange } from "../types";
+import type { ChangeReview, ChangeRiskSide, GovernanceChange } from "../types";
 import type { AssistantSettings } from "../types/site";
 import { asJson, asNoContent, PendingChangeError, wfetch } from "./core";
 
@@ -86,7 +86,54 @@ export interface AssistantSessionRequest {
   readonly purpose: AssistantPurpose;
   readonly target: AssistantTarget;
   readonly preview_digest: string;
+  /** A repository draft: the workspace the person may use and one of its repository sources. Never a URL. */
+  readonly workspace_id?: string;
+  readonly repo?: string;
 }
+
+/** One field the person changed in the draft, with its new value as text (assistant.Edit). */
+export interface AssistantEdit {
+  readonly field: string;
+  readonly value: string;
+}
+
+/** One error of a draft the save route's own validator refused (assistantFieldError). */
+export interface AssistantFieldError {
+  readonly field: string;
+  readonly message: string;
+}
+
+/** What a proposal leaves out, as the server explains it (assistant.Dropped). */
+export interface AssistantDropped {
+  readonly host?: string;
+  readonly field?: string;
+  readonly code: string;
+  readonly unit?: string;
+  /** How many approvals a change to that unit's limits needs. */
+  readonly admin_change_approvals: number;
+}
+
+// POST /assistant/checks answer (assistantChecksAnswer): the checks strip, from the server and never a model.
+export interface AssistantChecks {
+  readonly valid: boolean;
+  readonly errors: readonly AssistantFieldError[] | null;
+  readonly review: ChangeReview | null;
+  readonly risk: { readonly before: ChangeRiskSide | null; readonly after: ChangeRiskSide | null } | null;
+  readonly approvals_needed: number;
+  readonly dropped: readonly AssistantDropped[] | null;
+}
+
+export interface AssistantChecksRequest {
+  readonly target_kind: AssistantTarget["kind"];
+  readonly target?: string;
+  readonly draft: Record<string, unknown>;
+}
+
+/** The session's own answer to "Send files": the session, and the digest of the records now sent. */
+export type AssistantConfirmedView = AssistantSessionView & { readonly preview_digest: string };
+
+/** The header a save carries when its draft came from an assistant session. */
+export const assistantSessionHeader = (id: string): Record<string, string> => ({ "X-Wardyn-Assistant-Session": id });
 
 /** The block with the ETag the response carried, which the next PUT sends back as If-Match. */
 export interface AssistantSettingsSnapshot {
@@ -134,6 +181,26 @@ export const assistant = {
   // POST /api/v1/assistant/sessions: Start. 409 assistant_preview_stale when what is sent changed since the preview.
   createSession: (body: AssistantSessionRequest): Promise<AssistantSessionView> =>
     wfetch("/assistant/sessions", { method: "POST", asPerson: true, body: JSON.stringify(body) }).then((r) => asJson<AssistantSessionView>(r)),
+
+  // POST /api/v1/assistant/sessions/{id}/edits: the person's own change to the draft. The draft is stored and the
+  // fields that changed go to the model with the next message. 202 with the event's seq.
+  postEdits: (id: string, body: { draft: Record<string, unknown>; changed: readonly AssistantEdit[] }): Promise<{ seq: number }> =>
+    wfetch(`/assistant/sessions/${encodeURIComponent(id)}/edits`, { method: "POST", asPerson: true, body: JSON.stringify(body) }).then((r) =>
+      asJson<{ seq: number }>(r),
+    ),
+
+  // POST /api/v1/assistant/checks: the checks strip. No model runs and nothing is written.
+  postChecks: (body: AssistantChecksRequest, signal?: AbortSignal): Promise<AssistantChecks> =>
+    wfetch("/assistant/checks", { method: "POST", asPerson: true, body: JSON.stringify(body), signal }).then((r) => asJson<AssistantChecks>(r)),
+
+  // POST /api/v1/assistant/sessions/{id}/build-files/confirm: "Send files". 409 assistant_preview_stale when what is
+  // sent changed since the preview the digest names.
+  confirmBuildFiles: (id: string, previewDigest: string): Promise<AssistantConfirmedView> =>
+    wfetch(`/assistant/sessions/${encodeURIComponent(id)}/build-files/confirm`, {
+      method: "POST",
+      asPerson: true,
+      body: JSON.stringify({ preview_digest: previewDigest }),
+    }).then((r) => asJson<AssistantConfirmedView>(r)),
 
   // POST /api/v1/assistant/sessions/{id}/messages: the person's turn. The text is sent exactly as typed.
   postMessage: (id: string, text: string): Promise<{ seq: number }> =>
