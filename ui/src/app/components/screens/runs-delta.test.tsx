@@ -47,9 +47,9 @@ const live = (id: string, title: string): AgentRun =>
     spiffe_id: "spiffe://x",
     runner_target: "docker",
     placement: "",
-  }) as AgentRun;
+  });
 const ended = (id: string, title: string, secondsAgo: number): AgentRun =>
-  ({ ...live(id, title), state: "COMPLETED", ended_at: ago(secondsAgo) }) as AgentRun;
+  ({ ...live(id, title), state: "COMPLETED", ended_at: ago(secondsAgo) });
 const answer = (runs: AgentRun[], over: Partial<RunsListFilteredResult> = {}): RunsListFilteredResult => ({
   runs,
   truncated: false,

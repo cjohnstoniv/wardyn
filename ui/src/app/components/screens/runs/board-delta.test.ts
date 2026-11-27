@@ -6,13 +6,14 @@
 import { describe, expect, it } from "vitest";
 import type { RunsListFilteredResult } from "../../../lib/api/runs";
 import type { AgentRun } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { boardCut, DELTA_OVERLAP_MS, mergeBoardDelta, runEndTime } from "./board-delta";
 
 const T0 = Math.floor(Date.now() / 1000) * 1000;
 const at = (secondsBefore: number) => new Date(T0 - secondsBefore * 1000).toISOString();
-const live = (id: string): AgentRun => ({ id, state: "RUNNING" }) as AgentRun;
+const live = (id: string): AgentRun => makeRun({ id, state: "RUNNING" });
 const ended = (id: string, secondsBefore: number): AgentRun =>
-  ({ id, state: "COMPLETED", ended_at: at(secondsBefore) }) as AgentRun;
+  makeRun({ id, state: "COMPLETED", ended_at: at(secondsBefore) });
 const answer = (runs: AgentRun[], over: Partial<RunsListFilteredResult> = {}): RunsListFilteredResult => ({
   runs,
   truncated: false,
@@ -25,7 +26,7 @@ const ids = (r: RunsListFilteredResult) => r.runs.map((x) => x.id);
 
 describe("runEndTime", () => {
   it("gives a lease-ended run's lost_at even when it has ended_at, otherwise ended_at, and undefined for a live run", () => {
-    const lease = { id: "l", state: "RUNNING", lost_reason: "ended", lost_at: at(30), ended_at: at(900) } as AgentRun;
+    const lease = makeRun({ id: "l", state: "RUNNING", lost_reason: "ended", lost_at: at(30), ended_at: at(900) });
     expect(runEndTime(lease)).toBe(at(30));
     expect(runEndTime(ended("e", 60))).toBe(at(60));
     expect(runEndTime(live("r"))).toBeUndefined();
@@ -35,7 +36,7 @@ describe("runEndTime", () => {
 describe("boardCut", () => {
   it("gives the newest end less 120 s, floored to whole seconds, as ISO", () => {
     const newest = new Date(T0 - 5000 + 400).toISOString(); // 11:59:55.400
-    const last = answer([live("a"), ended("b", 600), { id: "c", state: "COMPLETED", ended_at: newest } as AgentRun]);
+    const last = answer([live("a"), ended("b", 600), makeRun({ id: "c", state: "COMPLETED", ended_at: newest })]);
     const cut = boardCut(last);
     expect(cut).toBe(new Date(Math.floor((Date.parse(newest) - DELTA_OVERLAP_MS) / 1000) * 1000).toISOString());
     expect(cut).toBe(new Date(T0 - 5000 - DELTA_OVERLAP_MS).toISOString());
@@ -74,15 +75,15 @@ describe("mergeBoardDelta", () => {
   });
 
   it("takes the answer's copy on a shared id", () => {
-    const last = answer([{ ...ended("x", 900), title: "old" } as AgentRun]);
-    const next = answer([{ ...ended("x", 900), title: "new" } as AgentRun], { endedAfter: cutAt });
+    const last = answer([{ ...ended("x", 900), title: "old" }]);
+    const next = answer([{ ...ended("x", 900), title: "new" }], { endedAfter: cutAt });
     const out = mergeBoardDelta(last, next, 1000);
     expect(out.runs).toHaveLength(1);
     expect(out.runs[0].title).toBe("new");
   });
 
   it("keeps a COMPLETED run with no ended_at", () => {
-    const legacy = { id: "legacy", state: "COMPLETED" } as AgentRun;
+    const legacy = makeRun({ id: "legacy", state: "COMPLETED" });
     const out = mergeBoardDelta(answer([legacy]), answer([live("a")], { endedAfter: cutAt }), 1000);
     expect(ids(out)).toEqual(["a", "legacy"]);
   });
