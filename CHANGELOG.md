@@ -11,10 +11,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
-### Fixed
-
-- Re-checking a federated device's audit claim from its stored row no longer fails with `function audit_row_hash_any(integer, ...) does not exist`: `store.FederatedClaimHashSQL` now passes the claim's hash format as the `smallint` the function takes.
-
 ## [0.11.0-rc.4] — 2026-11-26
 
 ### Added
