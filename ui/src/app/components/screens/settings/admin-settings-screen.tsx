@@ -52,6 +52,7 @@ import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
 import { ModelProvidersList } from "./model-providers-list";
+import { AssistantSettingsCard } from "./assistant-settings-card";
 import { BrandingCard } from "./branding-card";
 import { AdminSshKeysCard } from "./admin-ssh-keys-card";
 import { ApprovalNotifyCard } from "./approval-notify-card";
@@ -59,6 +60,7 @@ import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
 import { MacOSVMSettingsCard } from "./macos-vm-settings-card";
 import { RunnersSettingsCard } from "./runners-settings-card";
+import { DesktopWatermarkCard } from "./desktop-watermark-card";
 import { RoleRefusal } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -455,6 +457,8 @@ export function AdminSettingsScreen() {
               harnesses={status.harnesses}
               subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
             />
+            {/* The assistant's settings: marks rows of the list above per purpose. Super admin, like this whole page. */}
+            <AssistantSettingsCard />
             {/* The Providers card replaces Git host: the git credential
                 lanes moved into a provider row on /providers, and this card is
                 the same shared component the funnel's `providers` step body
@@ -474,6 +478,8 @@ export function AdminSettingsScreen() {
             <MacOSVMSettingsCard />
             {/* The runner placement rule: only a managed device takes a new local run. */}
             <RunnersSettingsCard />
+            {/* Whether every desktop view must show the viewer's name and the run id; reads its own site-config snapshot. */}
+            <DesktopWatermarkCard />
           </SettingsGroup>
           <SettingsGroup title={SETTINGS_GROUPS.PEOPLE}>
             {/* notify-e4 (packet M6 S3): read-only channel health for the approval notifications

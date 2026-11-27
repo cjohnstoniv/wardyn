@@ -153,7 +153,7 @@ func (s *hybridStore) ResetFederation(context.Context) error {
 	return nil
 }
 
-func (s *hybridStore) ListAuditEventsAfterSeq(context.Context, int64, int) ([]types.FederatedAuditEvent, error) {
+func (s *hybridStore) ListFederatedAuditRowsAfterSeq(context.Context, int64, int) ([]types.FederatedAuditRow, error) {
 	return nil, nil
 }
 func (s *hybridStore) AuditHeadSeq(context.Context) (int64, error) {

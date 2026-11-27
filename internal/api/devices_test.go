@@ -166,7 +166,11 @@ func (f *fakeDeviceStore) RevokeDevice(_ context.Context, id uuid.UUID, now time
 // IngestDeviceAudit mirrors the PG store's answers — ErrDeviceRevoked for a
 // revoked device, the peer in place of the claimed source_ip — so the handler
 // is tested against the store's contract.
-func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, peer string, claimed []types.FederatedAuditRow) (store.DeviceIngestResult, error) {
+	rows := make([]types.FederatedAuditEvent, len(claimed))
+	for i, r := range claimed {
+		rows[i] = r.FederatedAuditEvent
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ingestErr != nil {
@@ -219,6 +223,9 @@ func (f *fakeDeviceStore) ingestedFor(id uuid.UUID) int {
 
 // The laptop-side half of the capability; the org routes never call it.
 func (f *fakeDeviceStore) ListAuditEventsAfterSeq(context.Context, int64, int) ([]types.FederatedAuditEvent, error) {
+	return nil, nil
+}
+func (f *fakeDeviceStore) ListFederatedAuditRowsAfterSeq(context.Context, int64, int) ([]types.FederatedAuditRow, error) {
 	return nil, nil
 }
 func (f *fakeDeviceStore) GetFederationCursor(context.Context) (int64, string, error) {

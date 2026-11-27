@@ -32,12 +32,13 @@
 //     console's frozen heading — never re-worded, never joined into a sentence.
 import * as React from "react";
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, type GovernanceChangeList, type GovernanceUnit, type GovernanceSnapshot } from "../../../lib/api/governance";
 import type { GovernanceChange, RunPolicySpec } from "../../../lib/types";
 import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
+import { APPROVALS_NEEDED } from "../../../lib/approvals-needed-copy";
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
@@ -50,7 +51,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
+import { composerHref, useAssistantDoor } from "../../../lib/composer-url";
 import { Button } from "../../ui/button";
+import { AssistantAvailability } from "../../wardyn/assistant-availability";
+import { ASSISTANT as ASSISTANT_COPY } from "../../wardyn/copy/assistant";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
@@ -61,6 +65,7 @@ import { HowItWorks } from "../../wardyn/how-it-works";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
+import { ApprovalsNeededTab } from "./approvals-needed";
 import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
 import { EgressBaselineTab } from "./egress-baseline";
@@ -101,13 +106,15 @@ export function GovernanceScreen() {
   // A profile write the server held for a second person (202): the note stands until the next write.
   const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
-  // Runner credentials and Baseline hosts are the security operators' tabs: anyone else is on Profiles,
-  // whatever the URL says.
+  // The Draft with AI door: a link only when the assistant is ready and the organisation does not keep profiles from it.
+  const door = useAssistantDoor("compose");
+  // Runner credentials, Baseline hosts and Approvals needed are the security operators' tabs: anyone else is on
+  // Profiles, whatever the URL says.
   const asked = searchParams.get("tab");
-  const tab: "profiles" | "runner-credentials" | "egress-baseline" | "changes" =
+  const tab: "profiles" | "runner-credentials" | "egress-baseline" | "approvals-needed" | "changes" =
     asked === "changes"
       ? "changes"
-      : (asked === "runner-credentials" || asked === "egress-baseline") && securityOperator
+      : (asked === "runner-credentials" || asked === "egress-baseline" || asked === "approvals-needed") && securityOperator
         ? asked
         : "profiles";
   // Mounted on first visit and then kept, hidden, so an edit in progress survives a look at another tab.
@@ -115,6 +122,8 @@ export function GovernanceScreen() {
   if (tab === "runner-credentials" && !deliveryVisited) setDeliveryVisited(true);
   const [baselineVisited, setBaselineVisited] = React.useState(false);
   if (tab === "egress-baseline" && !baselineVisited) setBaselineVisited(true);
+  const [approvalsVisited, setApprovalsVisited] = React.useState(false);
+  if (tab === "approvals-needed" && !approvalsVisited) setApprovalsVisited(true);
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -228,6 +237,25 @@ export function GovernanceScreen() {
   // co-occur (CONSOLE-RULES §6, prompt §4).
   const teal: "save" | "new" | "assign" = editorOpen ? "save" : noProfiles ? "new" : "assign";
 
+  // The unit being viewed is the profile in the editor; with none open, the door starts a new profile draft.
+  const unitKind = "governance_unit";
+  const keptAway = door?.state === "ready" && !!door.never_sent_kinds?.includes(unitKind);
+  const doorOpen = door?.state === "ready" && !keptAway;
+  const draftWithAi = doorOpen ? (
+    <Button asChild variant="outline">
+      <Link to={composerHref(editing?.profile ? { kind: "unit", id: editing.profile.id } : { kind: "unit" })}>{ASSISTANT_COPY.DRAFT_WITH_AI}</Link>
+    </Button>
+  ) : (
+    <Button type="button" variant="outline" disabled>
+      {ASSISTANT_COPY.DRAFT_WITH_AI}
+    </Button>
+  );
+  const doorLine = keptAway ? (
+    <AssistantAvailability state="kind_never_sent" kindLabel={CHANGES.KIND[unitKind]} />
+  ) : door && door.state !== "ready" ? (
+    <AssistantAvailability state={door.state} providerId={door.provider_id} providerName={door.provider_name} />
+  ) : null;
+
   const deleteCount = toDelete ? assignedCount(toDelete) : 0;
   // Profiles composed on the one being deleted: the server refuses the delete (it would widen them
   // back to the deployment ceiling), so the dialog opens pre-filled and the confirm is disabled.
@@ -253,6 +281,7 @@ export function GovernanceScreen() {
               ? [
                   { value: "runner-credentials", label: DELIVERY.TAB },
                   { value: "egress-baseline", label: BASELINE.TAB },
+                  { value: "approvals-needed", label: APPROVALS_NEEDED.TITLE },
                 ]
               : []),
             { value: "changes", label: changes.length === 0 ? CHANGES.TAB : changes.truncated ? CHANGES.TAB_COUNT_CUT(changes.length) : CHANGES.TAB_COUNT(changes.length) },
@@ -271,6 +300,12 @@ export function GovernanceScreen() {
       {status !== "forbidden" && status !== "error" && baselineVisited && securityOperator && (
         <div hidden={tab !== "egress-baseline"}>
           <EgressBaselineTab onSubmitted={load} />
+        </div>
+      )}
+
+      {status !== "forbidden" && status !== "error" && approvalsVisited && securityOperator && (
+        <div hidden={tab !== "approvals-needed"}>
+          <ApprovalsNeededTab onSubmitted={load} />
         </div>
       )}
 
@@ -308,15 +343,21 @@ export function GovernanceScreen() {
                   so the screen never offers two New profile buttons — and this
                   one is never the teal, because a list with rows in it always
                   has an Assign or a Save profile that is. */}
-              {!noProfiles && (
-                <Button
-                  variant="outline"
-                  disabled={!securityOperator || editorOpen}
-                  onClick={() => openEditor(null)}
-                >
-                  {GOV.NEW_CTA}
-                </Button>
-              )}
+              <div className="flex flex-col items-end gap-1.5">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {draftWithAi}
+                  {!noProfiles && (
+                    <Button
+                      variant="outline"
+                      disabled={!securityOperator || editorOpen}
+                      onClick={() => openEditor(null)}
+                    >
+                      {GOV.NEW_CTA}
+                    </Button>
+                  )}
+                </div>
+                {doorLine}
+              </div>
             </div>
 
             {/* Q6's adopted variant: the server's omission list, rendered after
@@ -536,7 +577,7 @@ export function GovernanceScreen() {
           <AlertDialogFooter>
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               disabled={deleteCount > 0 || deleteChildren.length > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();

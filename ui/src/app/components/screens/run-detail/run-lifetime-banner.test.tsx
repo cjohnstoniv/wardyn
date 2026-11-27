@@ -15,7 +15,7 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { HttpError, setExpectedPrincipal, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
-import { weekdayClock } from "./run-ends-row";
+import { keptUntilText, weekdayClock } from "./run-ends-row";
 import { shortTime } from "../../../lib/format";
 import { ELEV } from "../../wardyn/copy/elevation";
 
@@ -247,6 +247,36 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     renderBanner(detail({ lost_reason: "ended", interactive: false, kept_until: keptUntil }));
     expect(screen.getByText("It has no network.")).toBeInTheDocument();
     expect(screen.queryByText(/files are kept until/)).not.toBeInTheDocument();
+  });
+
+  it("a kept run past its maximum lifetime shows the retention deadline, no revival, and keeps End run", () => {
+    const keptUntil = new Date(NOW + 3 * 86_400_000).toISOString();
+    renderBanner(
+      detail({
+        lost_reason: "ended",
+        lost_at: new Date(NOW - 3_600_000).toISOString(),
+        interactive: true,
+        kept_until: keptUntil,
+        lifetime_cap_at: new Date(NOW - 60_000).toISOString(),
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Extend and revive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-lifetime-ended")).toHaveTextContent(`Its files are kept until ${keptUntilText(keptUntil)}`);
+    expect(screen.getByTestId("run-lifetime-ended")).toHaveTextContent("cannot be revived");
+  });
+
+  it("a kept run whose cap is still ahead keeps Extend and revive (control)", () => {
+    renderBanner(
+      detail({
+        lost_reason: "ended",
+        lost_at: new Date(NOW - 60_000).toISOString(),
+        interactive: true,
+        kept_until: new Date(NOW + 86_400_000).toISOString(),
+        lifetime_cap_at: new Date(NOW + 86_400_000).toISOString(),
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Extend and revive" })).toBeInTheDocument();
   });
 
   it("Extend and revive sets a fresh future end BEFORE reviving, in order", async () => {
@@ -663,6 +693,42 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
     expect(listAuditMock).toHaveBeenCalledWith(expect.any(String), { action: "run.containment.reassert" });
+  });
+
+  it("a Kubernetes runner run its owner may copy from says so and offers no Revive", async () => {
+    renderBanner(lost({ kept_copy_out: true }));
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("You can copy your work out with the terminal, SSH or the Files panel's download");
+    expect(banner).toHaveTextContent("A run on a Kubernetes runner can't be revived.");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+
+  it("without kept_copy_out the stopped banner keeps Revive", async () => {
+    renderBanner(lost());
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.queryByText(/copy your work out/)).toBeNull();
+  });
+
+  it("kept_copy_out does not override a containment pending run", async () => {
+    render(
+      <OperatorProvider operator principal={OWNER}>
+        <RunLifetimeBanner run={lost({ kept_copy_out: true })} pending={[]} onChanged={() => {}} containmentPending />
+      </OperatorProvider>,
+    );
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).not.toHaveTextContent("copy your work out");
+    expect(banner).not.toHaveTextContent("reports its runner stopped this run's network");
+  });
+
+  it("kept_copy_out with a failed late-stop read still says the run can be copied from", async () => {
+    listAuditMock.mockRejectedValue(new Error("audit down"));
+    renderBanner(lost({ kept_copy_out: true }));
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("You can copy your work out");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
   });
 
   it("RS4d: a late-stop row says Wardyn had the runner stop the network when it came back", async () => {

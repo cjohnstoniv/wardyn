@@ -3,45 +3,35 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Governance screen's Changes tab and its drawer (0.8.6 four-eyes, mock packet M3 S2-S3): the covered
-// governance writes held for a second person, the server's own diff of each, and Approve / Reject.
+// The Governance screen's Changes tab: the covered governance writes held
+// for approval, one row each. A row opens the change on its own page (change-review-page.tsx), where it is
+// read and decided; the helpers that read a request's person, unit and length out of the server's diff are shared
+// with that page from here.
 //
-// Two rules, not styling:
-//
-//  1. THE DIFF IS THE SERVER'S. `diff.before`, `diff.after` and `diff.changed` are rendered as they came;
-//     the console never computes a diff or looks a profile up. An assignment change reads the profile it
-//     assigns from the diff's own embedded summary, as that profile stood at proposal.
-//  2. THE SERVER DECIDES WHO MAY APPROVE. Approve is disabled on the viewer's own proposal as a courtesy
-//     and the server remains the authority: a 403 or 409 is shown as its own sentence, verbatim, under the
-//     frozen heading.
-//
-// Every string is from CHANGES (governance-copy.ts) or CHANGE_NOTE (wardyn/copy/change-note.ts); this file
-// adds none.
+// Every string is from CHANGES (governance-copy.ts), CHANGE_NOTE (wardyn/copy/change-note.ts) or CHANGE_REVIEW
+// (change-review-copy.ts); this file adds none.
 import * as React from "react";
 import { Inbox } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
-import { HttpError } from "../../../lib/api/core";
 import { governance as api, type GovernanceChangeList } from "../../../lib/api/governance";
 import { runnerPools } from "../../../lib/api/runner-pools";
 import { absoluteTime, formatDuration, getErrorMessage, relativeTime } from "../../../lib/format";
 import { goDurationMs } from "../../../lib/go-duration";
-import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
+import { changeTarget } from "../../../lib/change-review";
+import { CHANGE_REVIEW } from "../../../lib/change-review-copy";
+import { CHANGES } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { IMG } from "../../wardyn/copy/image-request";
 import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
-import { Field } from "../../wardyn/form-primitives";
-import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
+import { useRequestIdentity, useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
-import { ChangeNoteForm } from "./change-note-form";
+import { RiskChip, VerdictChip } from "./change-review-sections";
 import { Note } from "./display";
 
 // "Profile · Edit": the kind and the op, each in the table's own vocabulary. One this console predates
@@ -50,19 +40,7 @@ export function changeLabel(c: GovernanceChange): string {
   return `${CHANGES.KIND[c.target_kind] ?? c.target_kind} · ${CHANGES.OP[c.op] ?? c.op}`;
 }
 
-// What a change is about, as the reviewer reads it. A profile's key is its id, which says nothing, so its
-// name is read from the server's own diff (the stored row on an edit or a delete, the proposed one on a
-// create), as is a runner trust change's runner. Every other kind's key is already its natural key.
-export function changeTarget(c: GovernanceChange): string {
-  // A runner's key is its id; the diff carries its name on both sides.
-  if (c.target_kind === "governance_unit" || c.target_kind === "runner_trust") {
-    for (const side of [c.diff.after, c.diff.before]) {
-      const name = (side as { name?: unknown } | undefined)?.name;
-      if (typeof name === "string" && name) return name;
-    }
-  }
-  return c.target_key;
-}
+export { changeTarget };
 
 // The organization runner a held removal takes out of its pool. The payload never reaches the console, so it
 // is the one id the diff's runner_ids lose; null for every other change. A pool's key is its id.
@@ -94,33 +72,9 @@ function useRemovalNames(changes: GovernanceChange[]): Record<string, { pool: st
   return names;
 }
 
-// One value of a diff cell. Strings read as they are, an absent value as DIFF_UNSET, anything else as JSON.
-function cell(v: unknown): React.ReactNode {
-  if (v === undefined || v === null) return <span className="text-muted-foreground">{CHANGES.DIFF_UNSET}</span>;
-  return <Mono className="whitespace-pre-wrap break-words text-foreground">{typeof v === "string" ? v : JSON.stringify(v)}</Mono>;
-}
-
-// The value at a dotted path of `root`. The server's changedPaths names an array as one leaf and a
-// whole-value change "(root)".
-function valueAt(root: unknown, path: string): unknown {
-  if (path === "(root)") return root;
-  let cur: unknown = root;
-  for (const key of path.split(".")) {
-    if (cur === null || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[key];
-  }
-  return cur;
-}
-
-// The profile an assignment change assigns, from the diff's own `after.profile`.
-function assignedProfile(c: GovernanceChange): Record<string, unknown> | null {
-  const p = (c.diff.after as { unit?: unknown } | undefined)?.unit;
-  return p && typeof p === "object" ? (p as Record<string, unknown>) : null;
-}
-
 // An elevation request's person, unit and length, read from the server's diff (`after`). Null when a field is
-// missing or the length is not a Go duration, so the row and drawer fall back to the generic ones.
-function elevationOf(c: GovernanceChange): { person: string; unit: string; length: string } | null {
+// missing or the length is not a Go duration, so the row and the page fall back to the generic ones.
+export function elevationOf(c: GovernanceChange): { person: string; unit: string; length: string } | null {
   if (c.target_kind !== "governance_elevation") return null;
   const a = c.diff.after as { unit_name?: unknown; subject?: unknown; duration?: unknown } | undefined;
   if (typeof a?.unit_name !== "string" || typeof a.subject !== "string" || typeof a.duration !== "string") return null;
@@ -130,8 +84,8 @@ function elevationOf(c: GovernanceChange): { person: string; unit: string; lengt
 }
 
 // An image request's person, the reference and the unit it was asked under, read from the server's diff (`after`).
-// Null when a field is missing or the reference has no digest, so the row and drawer fall back to the generic ones.
-function imageOf(c: GovernanceChange): { person: string; ref: string; unit: string } | null {
+// Null when a field is missing or the reference has no digest, so the row and the page fall back to the generic ones.
+export function imageOf(c: GovernanceChange): { person: string; ref: string; unit: string } | null {
   if (c.target_kind !== "governance_image_request") return null;
   const a = c.diff.after as { image?: unknown; unit_name?: unknown; subject?: unknown } | undefined;
   if (typeof a?.image !== "string" || typeof a.unit_name !== "string" || typeof a.subject !== "string") return null;
@@ -140,9 +94,31 @@ function imageOf(c: GovernanceChange): { person: string; ref: string; unit: stri
 }
 
 // A person asking for something, not proposing a change: the kinds whose proposer's Reject is a withdrawal.
-function isRequest(c: GovernanceChange): boolean {
+export function isRequest(c: GovernanceChange): boolean {
   return c.target_kind === "governance_elevation" || c.target_kind === "governance_image_request";
 }
+
+// Where a row stands for the viewer, the one answer the marker and both filters read. A row with approvals
+// follows the viewer's state in them. A row with none is decided by one person (a request, or no minimum in
+// force): it needs the viewer unless they proposed it. An unknown viewer (no principal) is never told a row
+// needs them while it may be theirs, so such a row with a proposer stands as none.
+export function queueStanding(row: GovernanceChange, principal: string): "needs_you" | "waiting" | "none" {
+  if (row.approvals) {
+    switch (row.approvals.viewer?.state) {
+      case "can_approve":
+        return "needs_you";
+      case "approved":
+      case "proposer":
+        return "waiting";
+      default:
+        return "none";
+    }
+  }
+  if (principal) return row.proposed_by === principal ? "waiting" : "needs_you";
+  return row.proposed_by ? "none" : "needs_you";
+}
+
+type Standing = "all" | "needs_you" | "waiting" | "security";
 
 // The proposer's reason, cut with an ellipsis, then the ticket in mono.
 function NoteLine({ note }: { note: NonNullable<GovernanceChange["note"]> }) {
@@ -159,29 +135,44 @@ function NoteLine({ note }: { note: NonNullable<GovernanceChange["note"]> }) {
   );
 }
 
-// "Who can decide": the all/only-security pill group, the look of the runners screen's filter.
-function DeciderFilter({ onlySecurity, onChange }: { onlySecurity: boolean; onChange: (only: boolean) => void }) {
-  const options = [
-    { only: false, label: CHANGE_NOTE.FILTER_ALL },
-    { only: true, label: CHANGE_NOTE.FILTER_SECURITY },
+// "Who can decide": the pill group over the queue, the look of the runners screen's filter. "Only security can
+// decide" is a security operator's; the other three are every viewer's.
+function DeciderFilter({
+  value,
+  security,
+  onChange,
+}: {
+  value: Standing;
+  security: boolean;
+  onChange: (value: Standing) => void;
+}) {
+  const options: { value: Standing; label: string }[] = [
+    { value: "all", label: CHANGE_NOTE.FILTER_ALL },
+    { value: "needs_you", label: CHANGES.FILTER_NEEDS_YOU },
+    { value: "waiting", label: CHANGES.FILTER_WAITING },
+    ...(security ? [{ value: "security" as const, label: CHANGE_NOTE.FILTER_SECURITY }] : []),
   ];
-  const group = useRovingRadio(options.length, onlySecurity ? 1 : 0, (i) => onChange(options[i].only));
+  const group = useRovingRadio(
+    options.length,
+    Math.max(0, options.findIndex((o) => o.value === value)),
+    (i) => onChange(options[i].value),
+  );
   return (
-    <div role="radiogroup" aria-label={CHANGE_NOTE.FILTER_LABEL} className="flex gap-1.5" {...group.containerProps}>
+    <div role="radiogroup" aria-label={CHANGE_NOTE.FILTER_LABEL} className="flex flex-wrap gap-1.5" {...group.containerProps}>
       {options.map((o, i) => {
         const { tabIndex, radioRef } = group.itemProps(i);
         return (
           <button
-            key={o.label}
+            key={o.value}
             ref={radioRef}
             tabIndex={tabIndex}
             type="button"
             role="radio"
-            aria-checked={onlySecurity === o.only}
-            onClick={() => onChange(o.only)}
+            aria-checked={value === o.value}
+            onClick={() => onChange(o.value)}
             className={cn(
               "rounded-full border px-2.5 py-0.5 text-xs",
-              onlySecurity === o.only ? "border-primary text-foreground" : "border-border text-muted-foreground",
+              value === o.value ? "border-primary text-foreground" : "border-border text-muted-foreground",
             )}
           >
             {o.label}
@@ -192,24 +183,55 @@ function DeciderFilter({ onlySecurity, onChange }: { onlySecurity: boolean; onCh
   );
 }
 
+// The Approvals cell: how many have approved of how many are needed (or that one person decides), then the mark.
+function ApprovalsCell({ change, standing }: { change: GovernanceChange; standing: "needs_you" | "waiting" | "none" }) {
+  const a = change.approvals;
+  const mark =
+    standing === "needs_you"
+      ? CHANGES.NEEDS_YOU
+      : standing === "waiting"
+        ? a?.viewer?.state === "approved"
+          ? CHANGES.YOU_APPROVED
+          : CHANGES.YOU_PROPOSED
+        : null;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-foreground">
+        {a ? CHANGES.APPROVED(a.have, a.required) : CHANGES.ONE_PERSON_DECIDES}
+      </span>
+      {mark && (
+        <span data-testid="changes-mark" className={cn("text-xs", standing === "needs_you" ? "font-medium text-primary" : "text-muted-foreground")}>
+          {mark}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const NONE: GovernanceChange[] = [];
 
 export function ChangesTab({
   changes,
   loadError,
-  onChanged,
 }: {
   changes: GovernanceChangeList;
   /** The server's message when the list could not be read; null when it was. */
   loadError: string | null;
-  onChanged: () => void;
+  /** The screen still passes it; a change is decided on its own page now, so nothing here reloads the list. */
+  onChanged?: () => void;
 }) {
-  const [open, setOpen] = React.useState<GovernanceChange | null>(null);
   const navigate = useNavigate();
+  const open = (c: GovernanceChange) => navigate(`/admin/governance/changes/${encodeURIComponent(c.id)}`);
   const securityOperator = useSecurityOperator();
+  // Until /me has answered, or after it fails, the shell hands over a placeholder as the principal: it names no one,
+  // so the viewer is unknown and no row is told it needs them.
+  const identity = useRequestIdentity();
+  const principal = identity.operatorResolved ? identity.principal : "";
   // "Only security can decide" is a request of its own: the list rows do not say who could decide them, so the
-  // server answers which ones are security's alone. It is read again whenever the parent reloads the list.
-  const [onlySecurity, setOnlySecurity] = React.useState(false);
+  // server answers which ones are security's alone. It is read again whenever the parent reloads the list. "Needs
+  // you" and "Waiting on others" read the rows already loaded.
+  const [standing, setStanding] = React.useState<Standing>("all");
+  const onlySecurity = standing === "security";
   const [filtered, setFiltered] = React.useState<GovernanceChangeList | null>(null);
   const [filterError, setFilterError] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -227,12 +249,19 @@ export function ChangesTab({
       live = false;
     };
   }, [onlySecurity, changes]);
-  const chooseFilter = (only: boolean) => {
-    setOnlySecurity(only);
+  const chooseFilter = (next: Standing) => {
+    setStanding(next);
     setFiltered(null);
     setFilterError(null);
   };
-  const shown = onlySecurity ? filtered : changes;
+  const base = onlySecurity ? filtered : changes;
+  const shown =
+    base && (standing === "needs_you" || standing === "waiting")
+      ? Object.assign(
+          base.filter((c) => queueStanding(c, principal) === standing),
+          { truncated: base.truncated },
+        )
+      : base;
   const shownError = onlySecurity ? filterError : loadError;
   const removalNames = useRemovalNames(shown ?? NONE);
   const hasList = changes.length > 0 || (filtered?.length ?? 0) > 0;
@@ -240,10 +269,10 @@ export function ChangesTab({
     <section className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
       {/* The lead describes the list, so it rides with the list; with nothing waiting the empty block
           below says the same thing once (#2907). */}
-      {(hasList || (securityOperator && onlySecurity)) && (
+      {(hasList || onlySecurity) && (
         <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
           {hasList && <p className="max-w-[82ch] text-body text-muted-foreground">{CHANGES.LEAD}</p>}
-          {securityOperator && <DeciderFilter onlySecurity={onlySecurity} onChange={chooseFilter} />}
+          <DeciderFilter value={standing} security={securityOperator} onChange={chooseFilter} />
         </div>
       )}
       {shownError && (
@@ -270,7 +299,20 @@ export function ChangesTab({
               title={CHANGE_NOTE.FILTERED_EMPTY_TITLE}
               description={CHANGE_NOTE.FILTERED_EMPTY_BODY}
               action={
-                <Button variant="outline" size="sm" onClick={() => chooseFilter(false)}>
+                <Button variant="outline" size="sm" onClick={() => chooseFilter("all")}>
+                  {CHANGE_NOTE.FILTERED_EMPTY_ACTION}
+                </Button>
+              }
+            />
+          </div>
+        ) : shown.length === 0 && standing !== "all" ? (
+          <div data-testid="changes-empty-filtered">
+            <EmptyState
+              size="compact"
+              icon={Inbox}
+              title={standing === "needs_you" ? CHANGES.FILTER_EMPTY_NEEDS_YOU : CHANGES.FILTER_EMPTY_WAITING}
+              action={
+                <Button variant="outline" size="sm" onClick={() => chooseFilter("all")}>
                   {CHANGE_NOTE.FILTERED_EMPTY_ACTION}
                 </Button>
               }
@@ -302,8 +344,10 @@ export function ChangesTab({
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>{CHANGES.COL_CHANGE}</TableHead>
+                <TableHead>{CHANGE_REVIEW.COL_EFFECT}</TableHead>
                 <TableHead>{CHANGES.COL_TARGET}</TableHead>
                 <TableHead>{CHANGES.COL_BY}</TableHead>
+                <TableHead>{CHANGES.COL_APPROVALS}</TableHead>
                 <TableHead>{CHANGES.COL_PROPOSED}</TableHead>
                 <TableHead>{CHANGES.COL_EXPIRES}</TableHead>
               </TableRow>
@@ -314,9 +358,15 @@ export function ChangesTab({
                 const elevation = elevationOf(c);
                 const img = imageOf(c);
                 return (
-                  <TableRow key={c.id} className="cursor-pointer" onClick={() => setOpen(c)}>
+                  <TableRow
+                    key={c.id}
+                    className="cursor-pointer"
+                    tabIndex={0}
+                    onClick={() => open(c)}
+                    onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && open(c)}
+                  >
                     <TableCell className="font-medium">
-                      <button type="button" className="text-left hover:underline" onClick={() => setOpen(c)}>
+                      <button type="button" className="text-left hover:underline">
                         {gone
                           ? CHANGES.ORG_RUNNER_REMOVE(removalNames[c.id]?.runner ?? gone, removalNames[c.id]?.pool ?? c.target_key)
                           : changeLabel(c)}
@@ -335,6 +385,14 @@ export function ChangesTab({
                       )}
                     </TableCell>
                     <TableCell>
+                      {!isRequest(c) && (
+                        <div className="flex flex-wrap gap-1">
+                          <VerdictChip review={c.diff.review} />
+                          {c.diff.review?.risk && <RiskChip risk={c.diff.review.risk} />}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       {elevation ? (
                         CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
                       ) : img ? (
@@ -344,6 +402,9 @@ export function ChangesTab({
                       )}
                     </TableCell>
                     <TableCell>{c.proposed_by}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <ApprovalsCell change={c} standing={queueStanding(c, principal)} />
+                    </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
                       {relativeTime(c.proposed_at)}
                     </TableCell>
@@ -357,293 +418,6 @@ export function ChangesTab({
           </Table>
         )}
       </div>
-      <ChangeDrawer
-        // Keyed by change so a reason typed for one never carries to the next.
-        key={open?.id ?? ""}
-        change={open}
-        // Closes only the change this drawer was opened for: a note save or decision that answers after its
-        // drawer was closed must not close the one opened since.
-        onClose={() => setOpen((cur) => (cur?.id === open?.id ? null : cur))}
-        onChanged={onChanged}
-      />
     </section>
-  );
-}
-
-export function ChangeDrawer({
-  change,
-  onClose,
-  onChanged,
-}: {
-  change: GovernanceChange | null;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const principal = usePrincipal();
-  const [reason, setReason] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  const [refused, setRefused] = React.useState<string | null>(null);
-  // The change as the note form last saved it: the list behind the drawer reloads, this drawer keeps its own copy.
-  const [noted, setNoted] = React.useState<GovernanceChange | null>(null);
-  const [editing, setEditing] = React.useState(false);
-  // Whether only security can decide this change, read from the change itself: the list does not carry approvers.
-  const [securityOnly, setSecurityOnly] = React.useState(false);
-
-  const own = !!change && !!principal && change.proposed_by === principal;
-  const shown = noted ?? change;
-  const profile = shown ? assignedProfile(shown) : null;
-  const elevation = shown ? elevationOf(shown) : null;
-  const img = shown ? imageOf(shown) : null;
-  const withdrawal = own && !!shown && isRequest(shown);
-  const hasNote = !!(shown?.note?.reason || shown?.note?.ticket);
-  const id = change?.id;
-
-  React.useEffect(() => {
-    if (!own || !id) return;
-    let live = true;
-    api
-      .getChange(id)
-      .then((c) => live && setSecurityOnly(!!c.approvers?.length && c.approvers.every((a) => a.kind === "security")))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [own, id]);
-
-  const decide = async (approve: boolean) => {
-    if (!change) return;
-    setBusy(true);
-    setRefused(null);
-    try {
-      if (approve) {
-        const out = await api.approveChange(change.id);
-        // Applied, but a token may still hold the role it took away, or a suspended service identity may keep a
-        // live run: say so until dismissed.
-        if ((out.tokens_revocation_failed || out.runs_end_failed) && out.detail) toast.warning(out.detail, { duration: Infinity });
-        else toast.success(CHANGES.TOAST_APPROVED);
-      } else {
-        await api.rejectChange(change.id, reason.trim());
-        toast.success(CHANGES.TOAST_REJECTED);
-      }
-      onChanged();
-      onClose();
-    } catch (e) {
-      setRefused(e instanceof HttpError ? e.message : getErrorMessage(e));
-      // A 409 means the change is no longer what was reviewed (stale, expired, or decided already): the
-      // list behind the drawer is out of date.
-      if (e instanceof HttpError && e.status === 409) onChanged();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // While a decision is out the drawer stays: its answer closes the drawer, which would otherwise be the next one opened.
-  return (
-    <Sheet open={!!change} onOpenChange={(o) => !o && !busy && onClose()}>
-      <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]">
-        {change && (
-          <>
-            <SheetHeader className="border-b border-border p-5 pr-10">
-              <SheetTitle className="flex min-w-0 flex-wrap items-baseline gap-x-2 break-words">
-                <span className="min-w-0 [overflow-wrap:anywhere]">{changeLabel(change)}</span>
-                <Mono className="min-w-0 text-foreground [overflow-wrap:anywhere]">
-                  {elevation
-                    ? CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
-                    : img
-                      ? IMG.CHANGE_TARGET(img.person, changeTargetRef(img.ref))
-                      : changeTarget(change)}
-                </Mono>
-              </SheetTitle>
-              <SheetDescription>
-                {CHANGES.META(change.proposed_by, relativeTime(change.proposed_at), relativeTime(change.expires_at))}
-              </SheetDescription>
-            </SheetHeader>
-
-            <div className="space-y-4 p-5">
-              {elevation ? (
-                // A request reads as three plain rows; the full before and after stays below.
-                <Table>
-                  <TableBody>
-                    {[
-                      [CHANGE_NOTE.ELEV_PERSON, elevation.person],
-                      [CHANGE_NOTE.ELEV_UNIT, elevation.unit],
-                      [CHANGE_NOTE.ELEV_LENGTH, CHANGE_NOTE.ELEV_LENGTH_VALUE(elevation.length)],
-                    ].map(([label, value]) => (
-                      <TableRow key={label}>
-                        <TableCell className="text-muted-foreground">{label}</TableCell>
-                        <TableCell>{value}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : img ? (
-                <Table>
-                  <TableBody>
-                    {[
-                      [IMG.ROW_PERSON, img.person],
-                      [IMG.ROW_IMAGE, <Mono key="n" className="text-foreground">{splitImageRef(img.ref).name}</Mono>],
-                      [IMG.ROW_DIGEST, <Mono key="d" className="break-all text-foreground">{splitImageRef(img.ref).digest}</Mono>],
-                      [IMG.ROW_ASKED_UNDER, IMG.ASKED_UNDER(img.unit)],
-                      [IMG.ROW_WRITES, IMG.WRITES],
-                    ].map(([label, value]) => (
-                      <TableRow key={String(label)}>
-                        <TableCell className="align-top text-muted-foreground">{label}</TableCell>
-                        <TableCell>{value}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>{CHANGES.DIFF_FIELD}</TableHead>
-                      <TableHead>{CHANGES.DIFF_BEFORE}</TableHead>
-                      <TableHead>{CHANGES.DIFF_AFTER}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {change.diff.changed.map((path) => (
-                      <TableRow key={path}>
-                        <TableCell className="align-top">
-                          <Mono className="text-foreground">{path}</Mono>
-                        </TableCell>
-                        <TableCell className="align-top">{cell(valueAt(change.diff.before, path))}</TableCell>
-                        <TableCell className="align-top">{cell(valueAt(change.diff.after, path))}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-
-              <details>
-                <summary className="cursor-pointer text-body text-muted-foreground">{CHANGES.DIFF_FULL}</summary>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {[change.diff.before, change.diff.after].map((side, i) => (
-                    <pre
-                      key={i}
-                      className="scroll-thin max-h-72 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs"
-                    >
-                      {side === undefined ? CHANGES.DIFF_UNSET : JSON.stringify(side, null, 2)}
-                    </pre>
-                  ))}
-                </div>
-              </details>
-
-              {profile && (
-                <section data-testid="change-assigned-profile">
-                  <h4 className="text-body font-medium text-foreground">
-                    {CHANGES.ASSIGNED_PROFILE}
-                    {typeof profile.name === "string" && <span className="ml-2 font-normal">{profile.name}</span>}
-                  </h4>
-                  <pre className="scroll-thin mt-1 max-h-72 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs">
-                    {JSON.stringify({ ceiling: profile.ceiling, limits: profile.limits, error: profile.error }, null, 2)}
-                  </pre>
-                </section>
-              )}
-
-              {/* R1-0098: the notes a direct save would have shown, for the person approving, between the diff and the
-                  reason (after the profile an assignment points at). Same amber note and heading the profile screen puts them
-                  under after a save. */}
-              {change.diff.notes && change.diff.notes.length > 0 && (
-                <Note tone="amber">
-                  <b className="font-semibold">{GOVERNANCE.OMISSION_TITLE}</b>
-                  {change.diff.notes.map((n) => (
-                    <Mono key={n} className="text-inherit">
-                      {n}
-                    </Mono>
-                  ))}
-                </Note>
-              )}
-
-              {/* The proposer's note, between the diff (and its notes) and the decider's own reason. */}
-              {editing ? (
-                <section className="space-y-2">
-                  <h4 className="text-body font-medium text-foreground">{CHANGE_NOTE.WHY_TITLE}</h4>
-                  <ChangeNoteForm
-                    change={shown!}
-                    onSaved={(c) => {
-                      setNoted(c);
-                      setEditing(false);
-                      onChanged();
-                    }}
-                    onCancel={() => setEditing(false)}
-                    onGone={(status) => {
-                      onChanged();
-                      if (status === 404) onClose();
-                    }}
-                  />
-                </section>
-              ) : (
-                <>
-                  {hasNote && (
-                    <section data-testid="change-note" className="space-y-1">
-                      <h4 className="text-body font-medium text-foreground">{CHANGE_NOTE.WHY_TITLE}</h4>
-                      {shown?.note?.reason && (
-                        <p className="whitespace-pre-wrap break-words text-body text-foreground">{shown.note.reason}</p>
-                      )}
-                      {shown?.note?.ticket && (
-                        <p className="text-xs text-muted-foreground">
-                          {CHANGE_NOTE.TICKET(shown.note.ticket).label} <Mono className="break-all">{shown.note.ticket}</Mono>
-                        </p>
-                      )}
-                    </section>
-                  )}
-                  {own && (
-                    <div className="flex flex-wrap items-center gap-3">
-                      <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-                        {hasNote ? CHANGE_NOTE.EDIT : CHANGE_NOTE.ADD}
-                      </Button>
-                      {!hasNote && <span className="text-xs text-muted-foreground">{CHANGE_NOTE.NO_NOTE_HINT}</span>}
-                    </div>
-                  )}
-                </>
-              )}
-              {!editing && !withdrawal && (
-                <Field label={CHANGES.REASON_LABEL} htmlFor="governance-change-reason" hint={CHANGES.REASON_HINT}>
-                  <Input
-                    id="governance-change-reason"
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    disabled={busy}
-                    maxLength={512}
-                    autoComplete="off"
-                  />
-                </Field>
-              )}
-
-              {own &&
-                (withdrawal ? (
-                  <Note>{CHANGE_NOTE.OWN_REQUEST}</Note>
-                ) : securityOnly ? (
-                  <Note>
-                    <b className="font-semibold">{CHANGE_NOTE.OWN_SECURITY_TITLE}</b>
-                    <span>{CHANGE_NOTE.OWN_SECURITY_BODY}</span>
-                  </Note>
-                ) : (
-                  <Note>{CHANGES.OWN_NOTE}</Note>
-                ))}
-              {refused && (
-                <Note tone="red" role="alert">
-                  <b className="font-semibold">{CHANGES.DECIDE_REFUSED_TITLE}</b>
-                  <Mono className="text-inherit">{refused}</Mono>
-                </Note>
-              )}
-
-              {!editing && (
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" disabled={busy} onClick={() => void decide(false)}>
-                    {withdrawal ? CHANGE_NOTE.WITHDRAW_REQUEST : CHANGES.REJECT}
-                  </Button>
-                  <Button disabled={busy || own} onClick={() => void decide(true)}>
-                    {CHANGES.APPROVE}
-                  </Button>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </SheetContent>
-    </Sheet>
   );
 }

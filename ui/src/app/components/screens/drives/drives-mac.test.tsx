@@ -88,7 +88,8 @@ describe("people's drives", () => {
     const docker = s.getByText("Notes").closest("tr")!;
     expect(within(docker).getByText(NR_FILES.FAMILY_DOCKER_VOLUME)).toBeInTheDocument();
     expect(within(docker).getByTestId("member-drive-mac")).toHaveTextContent(T.NONE);
-    expect(within(docker).getAllByText(T.NONE)).toHaveLength(2);
+    // The Size cell, found by its column: the row's other dashes (unit, write switch) are not this test's.
+    expect(within(docker).getAllByRole("cell")[heads.indexOf(DRIVES.COL_SIZE)]).toHaveTextContent(T.NONE);
   });
 
   it("reads no runners while no drive is kept on a Mac", async () => {

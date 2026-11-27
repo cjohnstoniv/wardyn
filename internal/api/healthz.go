@@ -88,28 +88,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Identity != nil {
 		idp = s.cfg.Identity.Name()
 	}
-	runnerName := ""
-	caps := []types.ConfinementClass(nil)
-	var substrates map[types.ConfinementClass]string
-	var own runner.NetPolCheck
-	ownUnread := false // a Kubernetes daemon whose own verdict could not be read
-	if s.cfg.Runner != nil {
-		runnerName = s.cfg.Runner.Name()
-		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
-			caps = c.ConfinementClasses
-			substrates = c.Resolved
-			own.Verdict = k8sNetpolVerdict(runnerName, c)
-			if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
-				own.At = c.NetworkPolicyCheck.At
-			}
-		} else {
-			ownUnread = runnerName == "k8s"
-		}
-	}
+	probe := s.healthzProbeFor(r.Context())
+	runnerName, caps, substrates, own, ownUnread := probe.runnerName, probe.caps, probe.substrates, probe.own, probe.ownUnread
 	// The worst of this daemon's verdict and its connected Kubernetes runners', with that one's time.
 	// When the daemon could not read its own, a runner's verdict shows only if it is at least as bad
 	// as not_proven: a better one must not hide that the daemon's own cluster cannot be confirmed.
-	runners := s.runnersNetPolCheck(r.Context())
+	runners := probe.runners
 	if ownUnread && !runner.NetPolAtLeast(runners.Verdict, runner.NetPolNotProven) {
 		runners = runner.NetPolCheck{}
 	}
@@ -121,7 +105,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		netpol, netpolFromRunner = runners, true
 	}
 	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
-	gtStatus := s.ebpfGroundtruthStatus(r.Context())
+	gtStatus := probe.gtStatus
 	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{
 		"status": "ok",
@@ -232,6 +216,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// whose answer it lost. One bit; false only on a store that keeps no keys.
 		"idempotent_run_create": s.keepsRunCreateKeys(),
 	}
+	if s.cfg.OIDC != nil && s.cfg.OIDC.Pending() {
+		// sso_pending: the provider has not been reached since this server started, so sign-in is closed. Present
+		// only then, so the body of every other install is unchanged.
+		body["sso_pending"] = true
+	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"acknowledged"/"unenforced"/
 	// "refused"/"not_proven" grade, present ONLY on a k8s substrate — omitted from the map entirely
 	// (not even a JSON null) on Docker and every other driver, so a Docker
@@ -285,9 +274,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// next" for the four sign-in refusals a person cannot clear alone. PUBLIC
 	// by design — the reader has, by definition, not signed in — and written
 	// as such (validateSignInHelp). Each value is re-checked here and dropped
-	// if it no longer passes; an unreadable store omits both, like a store
-	// with none set.
-	if sc, ok := s.siteConfigSnapshot(r.Context()); ok {
+	// if it no longer passes; an unreadable store, or one that does not answer
+	// within healthzStoreReadTimeout, omits both, like a store with none set.
+	sctx, cancel := context.WithTimeout(r.Context(), healthzStoreReadTimeout)
+	sc, ok := s.siteConfigSnapshot(sctx)
+	cancel()
+	if ok {
 		text, link := signInHelpPublic(sc)
 		if text != "" {
 			body["sign_in_help_text"] = text
@@ -348,6 +340,13 @@ func (healthzGateWriter) WriteHeader(int)             {}
 // so the stalled-store test need not wait it out;
 // TestSensorBeatReadTimeoutStaysInsideTheProbes pins the production value.
 var sensorBeatReadTimeout = 500 * time.Millisecond
+
+// healthzStoreReadTimeout bounds each of /healthz's other store reads: the site settings (the sign-in help) and
+// the node sensors. Like sensorBeatReadTimeout it gives way inside the liveness probe's 3s: a read that ran to a
+// probe's own timeout would restart the daemon over a database that only stopped answering. A read cut off here
+// reads as a failed one: the help is left out, and the sensor's verdict says it could not be read. A var so the
+// stalled-store test need not wait it out; TestHealthzStoreReadTimeoutStaysInsideTheProbes pins the production value.
+var healthzStoreReadTimeout = 500 * time.Millisecond
 
 // groundtruthBeatReadFailed is the reason /healthz gives when that read fails
 // or runs out of time (it is made only when no node row holds the sensor's
@@ -534,7 +533,8 @@ const groundtruthSensorListed = 7 * 24 * time.Hour
 // last groundtruthSensorListed, and how many of them beat within
 // groundtruthSensorGone. A store without per-node rows returns none, which
 // leaves the latest-beat reading in charge. A failed read returns its error
-// (logged here): callers must not read it as "one node".
+// (logged here): callers must not read it as "one node". The read gives way at
+// healthzStoreReadTimeout, and a read cut off there is a failed one.
 //
 // groundtruthNodeReadFailed is the reason /healthz gives for it, anonymous
 // view included: it names no node and no error text.
@@ -546,6 +546,8 @@ func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.Groundtrut
 		return nil, 0, nil
 	}
 	now := s.cfg.Now()
+	ctx, cancel := context.WithTimeout(ctx, healthzStoreReadTimeout)
+	defer cancel()
 	rows, err := gs.ListGroundtruthSensors(ctx, now.Add(-groundtruthSensorListed))
 	if err != nil {
 		slog.WarnContext(ctx, "api: read ground-truth node sensors", slog.Any("err", err))

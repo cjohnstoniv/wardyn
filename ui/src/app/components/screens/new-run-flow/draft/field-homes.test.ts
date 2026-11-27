@@ -6,7 +6,7 @@
 import { KEPT_MACHINE_REASON } from "../../../../lib/kept-machine-refusals";
 import { SCHEDULE_REASONS } from "../../../../lib/schedule-refusals";
 import { describe, expect, it } from "vitest";
-import { IMAGE_ADMISSION_REASONS, NEW_RUN_REASON, PLACEMENT_REASONS, WORKSPACE_DOOR_REASONS } from "../../../../lib/new-run-refusals";
+import { COMPONENT_GATE_REASONS, IMAGE_ADMISSION_REASONS, NEW_RUN_REASON, PLACEMENT_REASONS, WORKSPACE_DOOR_REASONS } from "../../../../lib/new-run-refusals";
 import { RUN_MODE_REASON } from "../../../../lib/run-mode-refusals";
 import { RUNNER_POOL_REASONS } from "../../../../lib/runner-pool-refusals";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS } from "../../../../lib/template-fields";
@@ -80,12 +80,14 @@ describe("field homes (U7)", () => {
   it("give every reason the console names a step, and send an unknown one to Review", () => {
     const known = [
       ...Object.values(KEPT_MACHINE_REASON), ...Object.values(NEW_RUN_REASON), ...IMAGE_ADMISSION_REASONS, ...PLACEMENT_REASONS, ...Object.values(RUN_MODE_REASON),
-      ...RUNNER_POOL_REASONS, ...SCHEDULE_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS,
+      ...RUNNER_POOL_REASONS, ...SCHEDULE_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS, ...COMPONENT_GATE_REASONS,
     ];
     expect(sortedKeys(HOME_OF_REASON)).toEqual([...new Set(known)].sort());
     expect(homeOfReason("runner_pool_stale")).toBe("run");
     expect(homeOfReason("placement_credential")).toBe("run"); // fixed by choosing another runner or pool, not a tool
     expect(homeOfReason("run_shape_conflict")).toBe("shape");
+    // A component whose image the run does not use is fixed on the Tools step, where the component is removed.
+    expect(homeOfReason("component_image_unmet")).toBe("tools");
     expect(homeOfReason("something_new")).toBe("review");
     // A refusal of the run's kept machine is fixed on the Run step, where the machine is chosen.
     for (const reason of Object.values(KEPT_MACHINE_REASON)) expect(homeOfReason(reason), reason).toBe("run");

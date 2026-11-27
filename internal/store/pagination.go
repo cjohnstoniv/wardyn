@@ -93,7 +93,7 @@ var _ Pager = PG{}
 // unlike Pager, an absent implementation must fail closed (500), not fall
 // back to the unscoped list — an unscoped list IS the vulnerability here.
 type RunsByCreatorPager interface {
-	ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error)
+	ListRunsPageByCreator(ctx context.Context, createdBy string, p Page, scope *RunUnitScope) ([]types.AgentRun, error)
 }
 
 var _ RunsByCreatorPager = PG{}
@@ -246,14 +246,20 @@ func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string)
 	return collect(ctx, s.Pool, "list", "active runs at workspace path", q, []any{workspacePath, states}, scanRun)
 }
 
-// ListRunsPageByCreator is ListRunsPage narrowed to one creator, same order.
+// ListRunsPageByCreator is ListRunsPage narrowed to one creator, same order. A non-nil scope also keeps
+// only the runs in that unit set, in the query itself so a page is never short and a cursor never skips.
 // ponytail: no dedicated (created_by, created_at) index yet — agent_runs is
 // small enough per-operator that the existing created_at index plus a
 // filter scan is fine; add one if a member's run list ever gets slow.
-func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
+func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page, scope *RunUnitScope) ([]types.AgentRun, error) {
+	args := []any{createdBy}
+	where := `created_by = $1`
+	if scope != nil {
+		where += ` AND ` + scope.sql(&args)
+	}
 	q, args := p.appendTo(`
 		SELECT `+runCols+`
-		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
+		FROM agent_runs WHERE `+where+` ORDER BY created_at DESC, id DESC`, args)
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
 
@@ -375,6 +381,34 @@ func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) 
 		SELECT `+runCols+`
 		FROM agent_runs ORDER BY created_at DESC`, nil)
 	return collect(ctx, s.Pool, "list", "runs", q, args, scanRun)
+}
+
+// RunCursor is a place in ListRunsKeyset's order: the run read last. The zero value starts at the newest run.
+type RunCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// RunsKeysetPager reads runs newest first from a cursor, for a sweep that must reach every run however many are
+// created meanwhile: an OFFSET page moves by every new run, so a busy deployment re-reads its newest page. Kept out
+// of Pager for the reason Pager is kept out of Store.
+type RunsKeysetPager interface {
+	ListRunsKeyset(ctx context.Context, after RunCursor, limit int) ([]types.AgentRun, error)
+}
+
+var _ RunsKeysetPager = PG{}
+
+// ListRunsKeyset — see RunsKeysetPager. agent_runs_created_at_idx serves the order and the bound; id breaks a
+// created_at tie, so no run is read twice or skipped at a page boundary.
+func (s PG) ListRunsKeyset(ctx context.Context, after RunCursor, limit int) ([]types.AgentRun, error) {
+	q := `SELECT ` + runCols + ` FROM agent_runs`
+	var args []any
+	if after.ID != uuid.Nil {
+		args = append(args, after.CreatedAt, after.ID)
+		q += ` WHERE (created_at, id) < ($1, $2)`
+	}
+	q, args = Page{Limit: limit}.appendTo(q+` ORDER BY created_at DESC, id DESC`, args)
+	return collect(ctx, s.Pool, "list", "runs by keyset", q, args, scanRun)
 }
 
 // ListPoliciesPage returns policies in reverse creation order, bounded by p
@@ -522,10 +556,11 @@ func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalSta
 // BY seq an indexed range scan with no sort; OFFSET pages forward without
 // flipping to DESC, so the per-run trail stays ASC (docs/sdk.md's exit-code
 // contract) and a caller reads the newest events with ?offset= or with Page.Newest.
+// runAuditFromSQL skips the partitions from before the run.
 func (s PG) QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.AuditEvent, error) {
 	q, args := p.appendTo(`
 		SELECT `+auditCols+`
-		FROM audit_events WHERE run_id=$1 ORDER BY seq `+auditRunOrder(p), []any{runID})
+		FROM audit_events WHERE run_id=$1 AND `+fmt.Sprintf(runAuditFromSQL, "$1")+` ORDER BY seq `+auditRunOrder(p), []any{runID})
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
 

@@ -56,6 +56,9 @@ describe("runPrefill: the clone carries both sources, and says what it cannot", 
   it("carries no title, description, image or credential field", () => {
     const keys = Object.keys(runPrefill(row, created).state);
     for (const k of ["title", "description", "image", "seedAutoTools", "llmSecretName"]) expect(keys).not.toContain(k);
+    // The run.create row keeps an extra container without its command, so a clone could not be the same run.
+    const withContainers = { ...created, containers: [{ name: "kernel", image: "registry.example.com/team/kernel@sha256:" + "0".repeat(64) }] };
+    expect(Object.keys(runPrefill(row, withContainers).state)).not.toContain("containers");
   });
 
   it("survives structured clone, as router history state does", () => {

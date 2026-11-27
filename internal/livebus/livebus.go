@@ -56,6 +56,10 @@ const (
 	// KindSupportGrant: a run's support grant was accepted or ended; every replica re-reads the run's
 	// grant to keep its audit window (the support_grant stamp on the run's rows) current.
 	KindSupportGrant = "support_grant"
+	// KindAssistantEvent: an assistant session stored an event, was replaced or ended; every replica wakes
+	// its readers of the session and of its run, which then read the store. The Run field carries the
+	// session's run (uuid.Nil before it has one), and the data the session's id.
+	KindAssistantEvent = "assistant_event"
 )
 
 // Message is one notice.

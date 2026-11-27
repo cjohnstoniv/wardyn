@@ -32,8 +32,8 @@ import (
 // consumed early return — so there are four ways to leak a `once` grant, and a
 // test per way.
 
-// decidedCP serves a control plane that answers every GET with one decided
-// approval, and every raise with a fresh PENDING one. gets counts GETs so a test
+// decidedCP serves a control plane that answers a GET of apID with one decided
+// approval, a GET of any other id as pending, and every raise with a fresh PENDING one. gets counts GETs so a test
 // can assert an expiry was honored from memory with NO network call.
 func decidedCP(t *testing.T, apID uuid.UUID, state types.ApprovalState, scope types.ApprovalScope, expires *time.Time) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
@@ -42,6 +42,11 @@ func decidedCP(t *testing.T, apID uuid.UUID, state types.ApprovalState, scope ty
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/internal/approvals/"):
 			gets.Add(1)
+			if !strings.HasSuffix(r.URL.Path, "/"+apID.String()) {
+				// A row the raise path made since: undecided, as the real control plane answers.
+				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{State: types.ApprovalPending})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{
 				ID: apID, State: state, DecisionScope: scope, DecisionExpiresAt: expires,
 			})
@@ -109,7 +114,7 @@ func TestOnceConsumedOnFirstObservation(t *testing.T) {
 	cp, _ := decidedCP(t, apID, types.ApprovalApproved, types.ScopeOnce, nil)
 	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	seed(ap, "egress.test", hostApproval{
-		state: apPending, approvalID: apID, lastPoll: time.Now().Add(-2 * pollInterval),
+		state: apPending, approvalID: apID, lastPoll: time.Now().Add(-2 * pendingPollFloor),
 	})
 
 	if got := ap.Resolve(context.Background(), "egress.test").State; got != apApproved {
@@ -156,7 +161,7 @@ func TestConsumedOnceDoesNotReapproveViaStaleID(t *testing.T) {
 
 // TestStalePollerCannotResurrectConsumedEntry covers the fifth leak, reachable
 // only because consume introduces apNone resets: two callers can both pass
-// needPoll whenever a round trip outlives pollInterval, and the slow one must not
+// needPoll whenever a round trip outlives pendingPollFloor, and the slow one must not
 // relock and write its result onto an entry a sibling has already spent. The id
 // discriminator is what stops it.
 func TestStalePollerCannotResurrectConsumedEntry(t *testing.T) {
@@ -180,7 +185,7 @@ func TestStalePollerCannotResurrectConsumedEntry(t *testing.T) {
 
 	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	seed(ap, "egress.test", hostApproval{
-		state: apPending, approvalID: apID, lastPoll: time.Now().Add(-2 * pollInterval),
+		state: apPending, approvalID: apID, lastPoll: time.Now().Add(-2 * pendingPollFloor),
 	})
 
 	done := make(chan resolveResult, 1)

@@ -205,6 +205,9 @@ type AgentRun struct {
 	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
 	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
+	// SiteID is the organisation site of the run's pool when it was placed, written once at create while
+	// sites are on; nil otherwise. A deleted site keeps its row, so the run keeps its record.
+	SiteID *uuid.UUID `json:"site_id,omitempty"`
 	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
 	Reserved RunnerAmounts `json:"-"`
@@ -220,6 +223,9 @@ type AgentRun struct {
 	// ImageAdmission is the image admission verdict for the member's image (ImageAdmissionVerdict); nil when
 	// admission was off, the run named no member image, an operator started it, or the run predates it.
 	ImageAdmission *ImageAdmissionVerdict `json:"image_admission,omitempty"`
+	// Containers are the run's extra containers (run_containers). Set on the row create returns and on the
+	// 201; a read of the run does not load them (store.RunContainers does).
+	Containers []RunExtraContainer `json:"containers,omitempty"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -309,6 +315,9 @@ type AgentRun struct {
 	// CreatedViaActor is the agent that portal named when it launched the run (the subject and issuer of the
 	// identity provider token the portal held for it); nil when it named none. It is recorded, never authorised.
 	CreatedViaActor *DelegationActor `json:"created_via_actor,omitempty"`
+	// PortalDrives marks a run that mounted a drive allocated to the portal in CreatedVia. Set at create, never
+	// changed, and not part of the wire: a run that carries it is reachable only through that portal.
+	PortalDrives bool `json:"-"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
 	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
 	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
@@ -613,6 +622,9 @@ type ApprovalDecision struct {
 	// the decision is recorded as it is without deciders.
 	Basis string
 	Rule  *DeciderRuleRef
+	// DecidersUnreadable: the unit deciders, the unit tree or the run could not be read, and a security caller
+	// decided under the narrowest rule. Basis and Rule are then empty.
+	DecidersUnreadable bool
 }
 
 // DeciderRuleRef names the unit deciders rule a decision was made under: the unit that holds it and the kind.
@@ -764,6 +776,11 @@ type PersonSummary struct {
 	SSHKeys         int        `json:"ssh_keys"`
 	Credentials     int        `json:"credentials"`
 	ActiveRuns      int        `json:"active_runs"`
+	// Issuer and InternalAddress are set for a portal person only: the issuer the person's portal
+	// registered, and the internal address its binding fetches keys from ("" when the issuer's own
+	// address is used).
+	Issuer          string `json:"issuer,omitempty"`
+	InternalAddress string `json:"internal_address,omitempty"`
 }
 
 // PersonList is one page of GET /people. NextCursor is empty on the last page.

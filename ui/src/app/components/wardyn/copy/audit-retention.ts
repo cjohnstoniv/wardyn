@@ -57,7 +57,8 @@ export const RETENTION = {
 
 export const DROP = {
   TITLE: (month: string) => `Drop the ${month} partition?`,
-  TITLE_LEGACY: (date: string) => `Drop every event before ${date}?`,
+  /** The cutoff is exclusive and in recorded (UTC) time, so an event recorded earlier that day goes too. */
+  TITLE_LEGACY: (cutoff: string) => `Drop every event recorded before ${cutoff}?`,
   BODY: (n: string) =>
     `This deletes its ${n} events for good. Export it first and keep the archive: after the drop, it is the only copy.`,
   READABLE: "Readable export",

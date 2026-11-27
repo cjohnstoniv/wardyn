@@ -34,6 +34,14 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: () => Promise.resolve(null) } };
 });
 vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () => Promise.resolve([]) } }));
+// The assistant's settings and availability answer off, with the stored defaults.
+vi.mock("../../../lib/api/assistant", () => ({
+  assistant: {
+    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
+    getMyAssistant: () => Promise.resolve({ state: "off" }),
+  },
+}));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";

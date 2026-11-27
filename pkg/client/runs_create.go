@@ -175,7 +175,9 @@ type CreateRunRequest struct {
 	// catalogue shows; the person's legacy drive keeps /home/agent/drive. Each
 	// is authorised through the caller's own grants. Sending both Drive and
 	// Drives is 400 drive_selection_conflict. One drive that cannot be mounted
-	// refuses the run; none is dropped.
+	// refuses the run; none is dropped. A run started through an issuer portal
+	// names only drives a super admin allocated to that portal: any other id,
+	// and the Drive flag, answer 403 drive_not_allocated_to_portal.
 	Drives []DriveAttachment `json:"drives,omitempty"`
 	// KeepWorkFolder keeps the run's work folder (/home/agent/work, and nothing
 	// else: not home, agent settings or /tmp) as the caller's own drive, which
@@ -308,6 +310,10 @@ type CreateRunRequest struct {
 	// wardynd check the port itself too, through the sandbox's exec path; any other value is 400
 	// run_mode_invalid with field service.health.probe.
 	Service *types.RunService `json:"service,omitempty"`
+	// Containers run beside the agent in the same sandbox, sharing its network, work folder and drives,
+	// each confined as the agent is. Each image is pinned by digest and needs what `image` needs. Each
+	// container's cpu_millis and memory_mib come out of the run's own size. At most 4; Kubernetes only.
+	Containers []RunContainer `json:"containers,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title, CorrelationID,
@@ -499,6 +505,8 @@ type PreflightItem struct {
 type PreflightResult struct {
 	SetupItems               []PreflightItem        `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+	// ConfinementRaiseCause is "blast_radius_floor" when that floor raised the class to CC3; absent otherwise.
+	ConfinementRaiseCause string `json:"confinement_raise_cause,omitempty"`
 	// Warnings carries resolveRunPolicy's clamp notes — a member's silently
 	// narrowed inline policy, a filtered grant. The same list rides
 	// CreateRunResult.Warnings at launch, so a preview and the real thing say
@@ -557,4 +565,19 @@ func (c *Client) Preflight(ctx context.Context, req CreateRunRequest) (Preflight
 	var out PreflightResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/runs/preflight", req, &out)
 	return out, err
+}
+
+// RunContainer is one extra container of a run (CreateRunRequest.Containers).
+type RunContainer struct {
+	Name      string                `json:"name"`
+	Image     string                `json:"image"`
+	Command   []string              `json:"command,omitempty"`
+	Ports     []int                 `json:"ports,omitempty"`
+	Resources RunContainerResources `json:"resources"`
+}
+
+// RunContainerResources is an extra container's share of the run's size; both are required.
+type RunContainerResources struct {
+	CPUMillis int `json:"cpu_millis"`
+	MemoryMiB int `json:"memory_mib"`
 }

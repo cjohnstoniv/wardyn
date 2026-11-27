@@ -11,6 +11,7 @@ package store_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -254,6 +255,91 @@ func TestPG_ListRunsFiltered_Workspace(t *testing.T) {
 	}
 }
 
+// TestPG_ListRunsFiltered_ServiceOnlyBeforePaging pins that ServiceOnly narrows the rows before LIMIT: one old
+// service behind more than a full page of newer ordinary runs is on page 1 with it, and absent without it.
+func TestPG_ListRunsFiltered_ServiceOnlyBeforePaging(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "service-only-" + uuid.NewString()
+
+	svc := newFilterRun(owner, types.RunRunning)
+	svc.CreatedAt = svc.CreatedAt.Add(-2 * time.Hour)
+	svc.UpdatedAt = svc.CreatedAt
+	svc.Repo = "acme/widgets"
+	svc.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
+	svc = persistRun(t, ctx, pool, svc)
+	for i := 0; i < 1001; i++ {
+		r := newFilterRun(owner, types.RunRunning)
+		r.Repo = "acme/widgets"
+		persistRun(t, ctx, pool, r)
+	}
+
+	f := store.RunFilter{Owner: owner, Workspace: "acme/widgets"}
+	page := store.Page{Limit: 1000}
+	got, err := pg.ListRunsFiltered(ctx, f, page)
+	if err != nil {
+		t.Fatalf("ListRunsFiltered: %v", err)
+	}
+	for _, r := range got {
+		if r.ID == svc.ID {
+			t.Fatalf("without ServiceOnly the old service is on page 1: the fixture does not crowd it out")
+		}
+	}
+
+	f.ServiceOnly = true
+	got, err = pg.ListRunsFiltered(ctx, f, page)
+	if err != nil {
+		t.Fatalf("ListRunsFiltered ServiceOnly: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != svc.ID {
+		t.Fatalf("ServiceOnly page 1 = %d rows, want exactly the old service", len(got))
+	}
+}
+
+// TestPG_CountHiddenRuns_ServiceOnly pins that the hidden counts follow the same service filter as the list:
+// ordinary rows hidden by the window or the killed default are not counted when only services are asked for.
+func TestPG_CountHiddenRuns_ServiceOnly(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "hidden-service-" + uuid.NewString()
+	ended := func(state types.RunState, ago time.Duration, service bool) {
+		r := newFilterRun(owner, state)
+		if service {
+			r.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
+		}
+		r = persistRun(t, ctx, pool, r)
+		stampEnded(t, ctx, pool, r.ID, state, timePtr(time.Now().UTC().Add(-ago)), nil, "")
+	}
+	const day = 24 * time.Hour
+	// Outside the 7-day window: two ordinary, one service.
+	ended(types.RunCompleted, 30*day, false)
+	ended(types.RunCompleted, 30*day, false)
+	ended(types.RunCompleted, 30*day, true)
+	// Inside the window but a KILLED run older than a day: two ordinary, one service.
+	ended(types.RunKilled, 3*day, false)
+	ended(types.RunKilled, 3*day, false)
+	ended(types.RunKilled, 3*day, true)
+
+	f := store.RunFilter{Owner: owner, EndedWithin: 7 * day}
+	older, killed, err := pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("CountHiddenRuns: %v", err)
+	}
+	if older != 3 || killed != 3 {
+		t.Fatalf("all runs: hidden older/killed = %d/%d, want 3/3", older, killed)
+	}
+	f.ServiceOnly = true
+	older, killed, err = pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("CountHiddenRuns ServiceOnly: %v", err)
+	}
+	if older != 1 || killed != 1 {
+		t.Fatalf("service only: hidden older/killed = %d/%d, want 1/1", older, killed)
+	}
+}
+
 // TestPG_ListRunsFiltered_QueryEscaping pins that a literal '%'/'_' in ?q=
 // matches literally rather than as a LIKE wildcard, and that the match is a
 // case-insensitive substring over title/task/repo/created_by.
@@ -345,4 +431,66 @@ func idList(runs []types.AgentRun) []uuid.UUID {
 		out[i] = r.ID
 	}
 	return out
+}
+
+// TestPG_ListRunsFiltered_EndedAfterReadsOnlyLaterEnds pins ended_after: the ended arm keeps only the rows whose end
+// time (a lease-ended run's lost_at) is after it, live rows are listed as always, and the hidden counts never read it.
+func TestPG_ListRunsFiltered_EndedAfterReadsOnlyLaterEnds(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "ended-after-" + uuid.NewString()
+	now := time.Now().UTC()
+
+	older := newFilterRun(owner, types.RunRunning)
+	older.CreatedAt = now.Add(-2 * time.Hour)
+	older = persistRun(t, ctx, pool, older)
+	newer := newFilterRun(owner, types.RunRunning)
+	newer.CreatedAt = now.Add(-time.Hour)
+	newer = persistRun(t, ctx, pool, newer)
+
+	completed := func(ago time.Duration) types.AgentRun {
+		r := persistRun(t, ctx, pool, newFilterRun(owner, types.RunCompleted))
+		stampEnded(t, ctx, pool, r.ID, types.RunCompleted, timePtr(now.Add(-ago)), nil, "")
+		return r
+	}
+	completed(10 * time.Minute)
+	completed(3 * time.Minute)
+	recent := completed(30 * time.Second)
+	lease := persistRun(t, ctx, pool, newFilterRun(owner, types.RunRunning))
+	stampEnded(t, ctx, pool, lease.ID, types.RunRunning, nil, timePtr(now.Add(-20*time.Second)), types.LostEnded)
+	killed := persistRun(t, ctx, pool, newFilterRun(owner, types.RunKilled))
+	stampEnded(t, ctx, pool, killed.ID, types.RunKilled, timePtr(now.Add(-time.Minute)), nil, "")
+
+	cut := now.Add(-2 * time.Minute)
+	got, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, EndedAfter: cut}, store.Page{Limit: 50})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	want := []uuid.UUID{newer.ID, older.ID, lease.ID, recent.ID, killed.ID}
+	if gotIDs := idsOfRuns(got); !slices.Equal(gotIDs, want) {
+		t.Errorf("with EndedAfter: got %v, want %v", gotIDs, want)
+	}
+
+	got, err = pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, EndedAfter: cut, Statuses: []string{"ended"}}, store.Page{Limit: 50})
+	if err != nil {
+		t.Fatalf("list ended: %v", err)
+	}
+	if gotIDs, wantEnded := idsOfRuns(got), []uuid.UUID{lease.ID, recent.ID, killed.ID}; !slices.Equal(gotIDs, wantEnded) {
+		t.Errorf("status ended with EndedAfter: got %v, want %v", gotIDs, wantEnded)
+	}
+
+	f := store.RunFilter{Owner: owner, EndedWithin: 24 * time.Hour}
+	olderWithout, killedWithout, err := pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	f.EndedAfter = cut
+	olderWith, killedWith, err := pg.CountHiddenRuns(ctx, f)
+	if err != nil {
+		t.Fatalf("count with cut: %v", err)
+	}
+	if olderWith != olderWithout || killedWith != killedWithout {
+		t.Errorf("CountHiddenRuns read the cut: with (%d, %d), without (%d, %d)", olderWith, killedWith, olderWithout, killedWithout)
+	}
 }

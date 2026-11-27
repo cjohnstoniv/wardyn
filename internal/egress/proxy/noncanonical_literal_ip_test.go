@@ -29,7 +29,7 @@ func upstreamAllowAllProxy(t *testing.T) *Proxy {
 	return newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Upstream: up,
 	})

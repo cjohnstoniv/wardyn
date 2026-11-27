@@ -152,8 +152,9 @@ const refreshUnitDepths = `
 	UPDATE governance_units u SET depth = tree.d FROM tree WHERE u.id = tree.id AND u.depth <> tree.d`
 
 // LockGovernanceGraph takes the transaction-scoped lock every write to the governance profile graph
-// holds, so one write at a time sees and changes it. Every assignment write takes it too, so a profile
-// write reads the assignments no other write is changing. q must be a pgx.Tx.
+// holds, so one write at a time sees and changes it. Every assignment write takes it too (a direct write
+// shared, LockGovernanceMembershipWrite), so a profile write reads the assignments no other write is changing.
+// q must be a pgx.Tx.
 func LockGovernanceGraph(ctx context.Context, q Querier) error {
 	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.GovernanceGraphLockClass); err != nil {
 		return fmt.Errorf("store: lock the governance profile graph: %w", err)
@@ -191,6 +192,11 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 		if err != nil {
 			return types.GovernanceUnit{}, err
 		}
+		overlayDoc, _ := overlayJSON.([]byte)
+		limitsDoc, _ := overlayLimitsJSON.([]byte)
+		if err := ruleUIAppCallersQ(ctx, tx, overlayDoc, limitsDoc); err != nil {
+			return types.GovernanceUnit{}, err
+		}
 		const composed = `
 		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, parent_id, overlay, overlay_limits, mode, locked_knobs)
 		VALUES ($1,$2,'{}'::jsonb,'{}'::jsonb,$3,$4,$5,$6,$7,$9,$10)
@@ -216,6 +222,9 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 		limitsJSON, err := json.Marshal(p.Limits)
 		if err != nil {
 			return types.GovernanceUnit{}, fmt.Errorf("store: marshal governance limits: %w", err)
+		}
+		if err := ruleUIAppCallersQ(ctx, tx, ceilingJSON, limitsJSON); err != nil {
+			return types.GovernanceUnit{}, err
 		}
 		// ceiling and limits each keep the keys this binary's types don't
 		// declare, so a field a newer wardynd set survives this binary's edit.
@@ -428,12 +437,7 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 		return types.GovernanceMembership{}, err
 	}
 	defer db.Rollback(ctx, tx) // a no-op after Commit
-	// The locks a held change's approval takes too, in its order: the upsert and that approval never
-	// interleave, and neither does a profile write.
-	if err := LockGovernanceGraph(ctx, tx); err != nil {
-		return types.GovernanceMembership{}, err
-	}
-	if err := LockGovernanceMembershipKey(ctx, tx, string(a.SubjectType), a.Subject); err != nil {
+	if err := LockGovernanceMembershipWrite(ctx, tx, a.UnitID, string(a.SubjectType), a.Subject); err != nil {
 		return types.GovernanceMembership{}, err
 	}
 	out, err := UpsertGovernanceMembershipQ(ctx, tx, a)
@@ -444,6 +448,23 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 		return types.GovernanceMembership{}, err
 	}
 	return out, nil
+}
+
+// LockGovernanceMembershipWrite takes the locks a direct assignment write holds (UpsertGovernanceMembership). The
+// profile graph lock is taken shared: a profile write and a held change's approval take it exclusive, so neither
+// interleaves with this write, while direct writes to other units or other subjects go ahead together (#3478).
+// The lock keyed to this unit and subject then serializes two writes of one assignment. The write reads and
+// changes no other unit's row, so no subject-wide lock is needed here; the held and envelope paths, which read
+// across units, keep LockGovernanceGraph and LockGovernanceMembershipKey. q must be a pgx.Tx.
+func LockGovernanceMembershipWrite(ctx context.Context, q Querier, unitID uuid.UUID, subjectType, subject string) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.GovernanceGraphLockClass); err != nil {
+		return fmt.Errorf("store: lock the governance profile graph: %w", err)
+	}
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		db.GovernanceMembershipUnitLockClass, unitID.String()+"\x1f"+subjectType+"\x1f"+subject); err != nil {
+		return fmt.Errorf("store: lock the governance assignment: %w", err)
+	}
+	return nil
 }
 
 // LockGovernanceMembershipKey takes the transaction-scoped lock keyed to one assignment's natural
@@ -459,6 +480,11 @@ func LockGovernanceMembershipKey(ctx context.Context, q Querier, subjectType, su
 // UpsertGovernanceMembershipQ is UpsertGovernanceMembership's statement on q. A write over an elevation
 // makes it permanent: an admin who writes the membership means it to stay.
 func UpsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) (types.GovernanceMembership, error) {
+	if a.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "governance_memberships.subject", a.Subject); err != nil {
+			return types.GovernanceMembership{}, err
+		}
+	}
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
 	}
@@ -503,6 +529,11 @@ func (s PG) DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types
 // included: how a rolled-back read puts back a row a committed delete removed, to read the precedence
 // as it stood before, and how an approved elevation is written.
 func InsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) error {
+	if a.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "governance_memberships.subject", a.Subject); err != nil {
+			return err
+		}
+	}
 	if _, err := q.Exec(ctx, `INSERT INTO governance_memberships (`+governanceMembershipCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedAt, a.CreatedBy, a.Home, a.Legacy, a.ExpiresAt); err != nil {
 		return fmt.Errorf("store: put back governance assignment: %w", err)

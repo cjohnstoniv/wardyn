@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 )
 
 // Bounds keep detection fast and safe on large/hostile trees (mirrors
@@ -189,7 +190,7 @@ func CollectFactsIn(dir *os.Root) ScanFacts {
 			if _, skip := skipDirNames[d.Name()]; skip && rel != "." {
 				return fs.SkipDir
 			}
-			if depthUnder(rel) > maxDepth {
+			if pathutil.DepthUnder(rel) > maxDepth {
 				return fs.SkipDir
 			}
 			return nil
@@ -295,16 +296,6 @@ func lookupMarker(rel, name string) (marker, bool) {
 		return m, true
 	}
 	return marker{}, false
-}
-
-// depthUnder returns how many path segments the slash-separated rel is below
-// the walk's root (see gitremote.depthUnder — duplicated rather than exported,
-// it's three lines).
-func depthUnder(rel string) int {
-	if rel == "." {
-		return 0
-	}
-	return strings.Count(rel, "/") + 1
 }
 
 // scanFile is one walked file: its slash-separated path inside the scan's

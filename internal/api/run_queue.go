@@ -120,6 +120,11 @@ type queuedLaunch struct {
 	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
 	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
 	NoLocal bool `json:"no_local,omitempty"`
+	// DriveModes is the effective mode each portal drive of the run was admitted with, by drive id: true is
+	// read-only. The start holds the fresh resolution to it (portalDriveModeCap), so an allocation that became
+	// writable while the run waited never widens it. A launch with no entry for one of its portal drives
+	// starts that drive read-only.
+	DriveModes map[string]bool `json:"drive_modes,omitempty"`
 }
 
 // queueWaitSec is the wait a launch gets: max_wait_sec when given, cut at seven days with a warning,
@@ -267,6 +272,10 @@ type queuedCreate struct {
 // promotion attempt, and answers 201: QUEUED with the wait sentence, or PENDING if a slot was free.
 func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if name, ok := driveFillLaunchFrom(ctx); ok { // a drive fill never waits in a queue
+		driveFillNoCapacity(q.f.place, name).write(s, w, r)
+		return
+	}
 	qs, ok := s.queueStore()
 	if !ok {
 		writeServerError(w, r, "queue run", errors.New("this store cannot hold a queue"))
@@ -280,6 +289,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	q.run.State = types.RunQueued
+	// The waiting row carries the unit the launch resolved to, as the queue row does, so a portal pin and a
+	// unit scope read the waiting run in its own unit; the start stamps it again.
+	if u := q.f.ceiling.Unit; u != nil {
+		id := u.ID
+		q.run.UnitID = &id
+	}
 	// The snapshots revive, extend and the run.create row read commit with the queue row: a creator
 	// that dies after the commit leaves no promotable run without its authority.
 	entry.Components, entry.Harnesses = q.f.comps.snapshotRows(), q.f.harnesses
@@ -303,6 +318,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
+		return
+	case errors.Is(err, store.ErrPortalRevoked):
+		writePortalRevoked(w)
 		return
 	case errors.Is(err, store.ErrRunCreateKeySuperseded):
 		writeRunCreateKeyInFlight(w)
@@ -501,6 +519,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
 	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
+	launch.DriveModes = portalDriveModes(q.f.drives)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID
 		launch.UnitID = &id
@@ -549,6 +568,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
 	stampImageAdmission(createData, q.f.admission)
+	s.stampRunContainers(ctx, createData, q.f.containers)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
@@ -621,7 +641,7 @@ func (s *Server) exitQueued(ctx context.Context, runID uuid.UUID, to types.RunSt
 	if applied {
 		s.metrics.runTerminal(to)
 		s.runEvents.moved(runID, types.RunQueued, to)
-		s.dropUnstartedKeptDrive(ctx, runID)
+		s.finishQueuedKeptDrive(ctx, runID)
 	}
 	return applied, nil
 }
@@ -633,8 +653,9 @@ func (s *Server) killQueuedTail(ctx context.Context, run types.AgentRun, killerT
 	data := map[string]any{"queued": true}
 	maps.Copy(data, extra)
 	s.metrics.queueWait(queueOutcomeCancelled, s.cfg.Now().Sub(run.CreatedAt))
-	s.recordAudit(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
-	s.dropUnstartedKeptDrive(ctx, run.ID)
+	rctx, kev := killReceiptOf(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
+	s.recordAudit(rctx, kev)
+	s.finishQueuedKeptDrive(ctx, run.ID)
 	return map[string]any{}
 }
 
@@ -646,7 +667,7 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 		s.runEvents.moved(id, types.RunQueued, types.RunKilled)
 		s.recordAudit(ctx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.kill", id.String(), "success",
 			mustJSON(map[string]any{"queued": true, "reason": string(types.RunEndRunnerPoolRemoved)})))
-		s.dropUnstartedKeptDrive(ctx, id)
+		s.finishQueuedKeptDrive(ctx, id)
 	}
 }
 
@@ -691,6 +712,12 @@ func (s *Server) cancelQueuedRunsOf(ctx context.Context, owner, reason string) (
 		run, err := s.cfg.Store.GetRun(ctx, e.RunID)
 		if err != nil {
 			return n, err
+		}
+		// Only a run still waiting is this batch's to cancel. One that timed out, started or was cancelled since the
+		// listing keeps its own end: the kill's claim below is QUEUED to KILLED and nothing else, so a run that
+		// leaves QUEUED between this read and the claim is lost to it and counts zero.
+		if run.State != types.RunQueued {
+			continue
 		}
 		applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": reason})
 		if err != nil {

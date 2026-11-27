@@ -75,6 +75,7 @@ func (d *Driver) notedNamespace(runID uuid.UUID) string {
 // runNamespace is the namespace run runID's objects live in: the noted one, else the one its record
 // names (runner mode), else the first namespace holding a pod of the run. A run found nowhere
 // answers the default namespace, where every read then finds nothing, as with one namespace.
+// A one-time lookup, memoized per run (noteNamespace), not a wait, so the pod watch has nothing to replace here.
 func (d *Driver) runNamespace(ctx context.Context, runID uuid.UUID) (string, error) {
 	if len(d.cfg.Namespaces) <= 1 {
 		return d.defaultNamespace(), nil

@@ -122,7 +122,7 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 		access = append(slices.Clone(access), named)
 	}
 	if cfg.AgentSandboxKeep {
-		access = append(slices.Clone(access), keepAddressAccess...)
+		access = append(slices.Clone(access), runAddressAccess...)
 	}
 	served, err := cs.Discovery().ServerResourcesForGroupVersion(agentSandboxAPIVersion)
 	if err != nil {
@@ -364,7 +364,9 @@ func (d *Driver) awaitAgentSandboxPod(ctx context.Context, clock *startClock, ns
 	deadline := time.Now().Add(agentSandboxPodAppearWithin)
 	var pod *corev1.Pod
 	var lastGetErr error
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, name)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		p, gerr := d.readPod(pollCtx, ns, name)
 		switch {
 		case gerr == nil:

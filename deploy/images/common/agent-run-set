@@ -17,6 +17,9 @@
 #   --tasks <id> <task> [...]       several agents side by side, each on its own
 #                                   task (run_tasks below)
 set -euo pipefail
+# The server's seed release looks for this exact line; the start harness's own agent-run adopts the held seed.
+held_seed_adopt() { :; }
+held_seed_adopt
 
 harness_dir=/usr/local/lib/wardyn/harness
 : "${HOME:=/home/agent}"; export HOME

@@ -94,23 +94,31 @@ var backgroundDoors = []backgroundDoor{
 	// sftp, wardyn-sync, direct-tcpip) makes before it execs. POST /runs/{id}/exec is
 	// the exec channel over HTTP (run_exec.go) and the contract's third exception: its
 	// read is execFreshRun, which takes a background run (TestBackgroundExecIsTheDoorsThirdException).
-	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"},
-		Routes: []string{"POST /runs/{id}/exec"}, Enforced: true},
+	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun", "sshRunEntryRefusal"},
+		Routes: []string{"POST /runs/{id}/exec", "GET /runs/{id}/ssh"}, Enforced: true},
+	// Port forwarding over the organisation (#3281): an SSH -L channel's reach over the attach family, for a deployment
+	// whose gateway is off. handleAttachForward asks the predicate itself, after the entry rule.
+	{Door: "port forwarding", Owner: "#3281", Symbols: []string{"handleAttachForward"},
+		Routes: []string{"GET /runs/{id}/attach/forward"}, Enforced: true},
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	// An app's ticket (handleAppTicket) is minted only for an inbound app, the door's
 	// one exception, so the predicate is asked where its ticket is spent: uiEnterCommon.
-	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"},
-		Routes: []string{"POST /runs/{id}/apps/{app}/ticket"}, Enforced: true},
+	// The open session's re-check is uiSessionArms, not uiSessionStillAuthorized: the re-check asks the
+	// portal's arm first (uiSessionAuthority), then every other arm, this predicate among them, in uiSessionArms.
+	// A preview's PUT and ticket ask the predicate in runPreviewCheck, and its ticket is spent in uiEnterCommon.
+	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionArms", "runPreviewCheck"},
+		Routes: []string{"POST /runs/{id}/apps/{app}/ticket", "PUT /runs/{id}/previews/{port}", "POST /runs/{id}/previews/{port}/ticket"}, Enforced: true},
 	// The desktop's own display is the novnc app, behind the web application
 	// gateway above. Its routes here are the Files panel, which moves files in and
 	// out of the graphical desktop (desktopRun), and the person's sign-in inside it
 	// (#2972): signinRun is the one read every sign-in route makes before it acts.
 	// A VM desktop's pause and resume (#2972) refuse in mayPauseDesktopAgent.
-	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent"},
+	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins), local window", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent", "localWindowCheck"},
 		// POST .../desktop/watch-ticket is the contract's first exception, asked in uiEnterCommon and uiSessionStillAuthorized.
 		// POST .../desktop/window is the contract's second exception, asked in macWindowRefusal.
-		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+		// POST .../desktop/local-window is no exception: localWindowCheck refuses a background run.
+		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "POST /runs/{id}/desktop/local-window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
 			"POST /runs/{id}/desktop/files/{name}/review", "POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }
@@ -148,12 +156,20 @@ var passiveRunRoutes = map[string]string{
 
 	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
 
+	// A preview's list and its revoke (run_previews.go) open nothing; its PUT and ticket are the web application
+	// gateway's routes, above.
+	"GET /runs/{id}/previews":           "read the run's preview URLs; opens nothing",
+	"DELETE /runs/{id}/previews/{port}": "revoke a preview URL; opens nothing",
+
 	// A support helper's doors are the entry points supportMayEnter names (support_entry.go); these five open none.
 	"POST /runs/{id}/support":                 "a super admin asks to help; opens nothing until the owner accepts",
 	"GET /runs/{id}/support":                  "read the run's help request or session; opens nothing",
 	"POST /runs/{id}/support/{grant}/accept":  "the owner's answer to a help request; opens nothing itself",
 	"POST /runs/{id}/support/{grant}/decline": "the owner's refusal of a help request; opens nothing",
 	"POST /runs/{id}/support/{grant}/end":     "ends a help request or session; opens nothing",
+	// The Walls view's routes.
+	"GET /runs/{id}/walls":        "read",
+	"GET /runs/{id}/walls/stream": "read",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

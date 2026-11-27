@@ -75,7 +75,7 @@ func (d *Driver) warmPlaceholderPod(ctx context.Context, p WarmPool, ns string, 
 			Containers: []corev1.Container{{
 				Name:            "warm",
 				Image:           p.Image,
-				Command:         []string{"sh", "-c", "while :; do sleep 3600; done"},
+				Command:         []string{"sh", "-c", "while :; do sleep 3600 || exit; done"},
 				SecurityContext: agentSecurityContext(),
 				Resources:       r,
 			}},

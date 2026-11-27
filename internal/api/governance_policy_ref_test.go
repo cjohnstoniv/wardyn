@@ -88,6 +88,10 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 	hold := taggedProfile(name, tag, types.GovernanceLimits{})
 	hold.Ceiling.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}
 	ladder := taggedProfile(name, tag, types.GovernanceLimits{AutonomyRubric: autonomyRubric(types.AutonomyL0)})
+	// The image grants a row's member holds, by row name: an extra container's image is granted before the posture check.
+	grants := map[string][]types.CapabilityGrant{
+		"extra containers": {grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)},
+	}
 
 	for _, tc := range []struct {
 		name       string
@@ -102,6 +106,9 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			`{"agent":"claude-code","task":"echo hi","task_mode":"exec"}`, 0, 403, "governance_unit", "runs.task_mode"},
 		{"shell boot seed", taggedProfile(name, tag, types.GovernanceLimits{DenyTaskModeExec: true}),
 			`{"agent":"claude-code","task":"t","interactive":true}`, 0, 403, "governance_unit", "runs.interactive_start"},
+		{"extra containers", taggedProfile(name, tag, types.GovernanceLimits{DenyTaskModeExec: true}),
+			`{"agent":"claude-code","task":"t","containers":[{"name":"kernel","image":"` + kernelImage + `","resources":{"cpu_millis":250,"memory_mib":256}}]}`,
+			0, 403, "governance_unit", "runs.containers"},
 		{"interactive", taggedProfile(name, tag, types.GovernanceLimits{DenyInteractive: true}),
 			`{"agent":"claude-code"}`, 0, 403, "governance_unit", "runs.interactive"},
 		{"run quota", taggedProfile(name, tag, types.GovernanceLimits{MaxConcurrentRuns: 2}),
@@ -114,7 +121,9 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			`{"agent":"claude-code","task":"t"}`, 0, 403, "governance_unit", "runs.interactive"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, st, audit := govEscapeFixture(t, assignedStore(tc.profile))
+			cs := assignedStore(tc.profile)
+			cs.enf, cs.grants = map[string]bool{capImage: true}, grants[tc.name]
+			srv, st, audit := govEscapeFixture(t, cs)
 			srv.cfg.Store = &activeRunsStore{govEscapeStore: st, active: tc.active}
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-walled", []string{"eng"}, false), tc.body)
 			if w.Code != tc.wantStatus {

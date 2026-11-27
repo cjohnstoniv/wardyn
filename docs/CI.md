@@ -281,6 +281,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - and the pooled-exec baseline.
   - It brings up its own uniquely-named compose stack on its own ports and tears it down on every exit path, and it builds `wardyn/agent-vscode:local` (`make agent-image-vscode`, +~228 MiB) if that image is not already local —
   - too heavy for every PR, so it runs in `nightly.yml`'s `ui-sandbox-e2e-live` job rather than `ci.yml`, and remains runnable by hand.
+  - `nightly.yml`'s `released-agent-base-run` job runs it again with the background command run started from the newest release's `agent-base`, pulled by digest (`WARDYN_E2E_UISBX_BASE_IMAGE`), so a released image is shown to start a run serving an inbound app.
   - Needs Docker; self-skips unless `WARDYN_TEST_DOCKER=1`.
 - **[`WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh)** ([`scripts/lib/ kind-sso-walk-ado.sh`](../scripts/lib/kind-sso-walk-ado.sh)) — live Azure DevOps SSO walk on kind:
   - the console signs in against a fake Entra tenant instead of Dex,
@@ -308,6 +309,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - Those two principals go in through `kubectl exec deploy/postgres`, because the API only ever stamps the *caller's* key and this install has one credential.
   - It does **not** create or delete a cluster — it runs against the one `make kind-quickstart` leaves behind, and cleans up only its own run and the keys it registered.
   - Needs `kubectl` and a real `ssh` client; self-skips unless `WARDYN_TEST_K8S=1`.
+  - Runs in `nightly.yml`'s `kind-survival-walk` job, on that job's fresh quickstart cluster before its survival walk, so a release waits for it.
 - **[`deploy/kind/quickstart.sh`](../deploy/kind/quickstart.sh)** (`make kind-quickstart`, `make kind-down`) — not a test at all: it builds `wardynd`, creates a `kind` cluster with a pinned Calico CNI and the k8s runner substrate on,
   - `helm install`s the chart, waits for a healthy control plane,
   - and prints the URL and admin token it minted.
@@ -334,7 +336,7 @@ wardyn run grants <id>         # what the run was ELIGIBLE for (not a service to
 wardyn audit <id> --json       # a service token reads only its own runs' rows
 ```
 
-- `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced.
+- `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced. A class raised to CC3 by the blast-radius floor also carries `confinement_raise_cause: blast_radius_floor` and a warning.
 - `--placement remote|local` chooses where the sandbox lives. A local run goes to your own runners through `--pool <id>` or your default pool, else is refused `runner_pool_required`. `--runner <id>` pins one of your runners in that pool; unset, the pool picks an online one with room. Other refusals include `runner_offline` and `runner_at_capacity`.
 - `ci-run.sh` calls the same endpoint before launching.
 - A command that must stay up is a [service](SERVICES.md).
@@ -374,7 +376,7 @@ wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
 A pipeline can keep a [workload](operations/workloads.md) declared with `wardyn apply`. Use a service identity's token as `WARDYN_TOKEN`, as above, with `WARDYN_URL`.
 
 - A service identity's token may `apply`, `diff`, `apply --dry-run`, `workload list|get|delete|restart` and read runs.
-- `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored and the old run keeps running). [Exit codes](operations/workloads.md#apply)
+- `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored, and the old run, if there is one, keeps running). [Exit codes](operations/workloads.md#apply)
 - Before the approval gate, run `wardyn apply --dry-run`, as both examples do. It exits `1` when the apply would be refused and stores nothing. It calls `POST /api/v1/workloads/{name}/preview`, which answers created, updated or unchanged, each changed field, whether a run starts, and any refusal. [Preview an apply](operations/workloads.md#preview-an-apply)
 - Put the step behind your platform's approval gate: a GitHub environment with required reviewers, or an Azure DevOps environment with approvals.
 - The workload runs under the service identity's walls and grants, like any run it launches.

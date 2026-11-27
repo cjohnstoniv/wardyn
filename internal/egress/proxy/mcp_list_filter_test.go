@@ -65,7 +65,7 @@ func newListFixture(t *testing.T, spec types.RunPolicySpec, h http.HandlerFunc) 
 	t.Cleanup(srv.Close)
 	spec.AllowedDomains = append(spec.AllowedDomains, "mcp.linear.test")
 	f := &mcpFixture{buf: &bytes.Buffer{}}
-	sink := &decisionSink{out: f.buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: f.buf, ch: make(chan queuedDecision, 64)}
 	addr := upstreamAddr(srv)
 	f.p = newProxy(Options{
 		RunID: uuid.New(), Policy: CompilePolicy(spec), Sink: sink, Resolver: publicResolver{},

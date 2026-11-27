@@ -203,8 +203,11 @@ type sigv4Harness struct {
 	cpStatus    atomic.Int32 // the control plane's answer; 0 is 200
 	portalCode  atomic.Int32 // the portal's answer; 0 is 200
 	lifetime    atomic.Int64 // role credential lifetime; 0 is an hour
+	portalDelay atomic.Int64 // how long the portal takes to answer; 0 is at once
 	respond     func(w http.ResponseWriter, r *http.Request)
 	log         func() string
+	// portalHold, when set, holds the portal's answer until it is closed.
+	portalHold atomic.Pointer[chan struct{}]
 	// mint answers the run's gateway identity mint (nil: 404); mints counts the asks.
 	mint  func(w http.ResponseWriter, r *http.Request)
 	mints atomic.Int32
@@ -222,6 +225,10 @@ func newSigV4HarnessWith(t *testing.T, mut func(*Options), allowed ...string) *s
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == awsSSOFederationPath {
 			h.portalCalls.Add(1)
+			time.Sleep(time.Duration(h.portalDelay.Load()))
+			if hold := h.portalHold.Load(); hold != nil {
+				<-*hold
+			}
 			q := r.URL.Query()
 			if r.Host != sigv4Portal || r.Header.Get("x-amz-sso_bearer_token") != sigv4Bearer ||
 				q.Get("account_id") != sigv4Account || q.Get("role_name") != sigv4Role {
@@ -281,7 +288,7 @@ func newSigV4HarnessWith(t *testing.T, mut func(*Options), allowed ...string) *s
 	opts := Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append(sigv4HostPorts(), allowed...)}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Injector:        &injector{byHost: map[string]*injEntry{}, base: cp.URL, token: newTokenSource("RUNTOK"), client: cp.Client()},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(upstream)),
@@ -520,6 +527,8 @@ func TestAWSSigV4_RoleCredentialsCachedAndRenewed(t *testing.T) {
 	if rec := h.send(t, req(), sigv4Bedrock); rec.Code != http.StatusOK {
 		t.Fatalf("status %d %s", rec.Code, rec.Body)
 	}
+	// The renewal runs beside the request, so wait for its portal call before counting.
+	waitUntil(t, "the renewal's portal call", func() bool { return h.portalCalls.Load() >= 2 })
 	if r, p := h.redeemed.Load(), h.portalCalls.Load(); r != 2 || p != 2 {
 		t.Fatalf("credentials inside the renewal margin were not renewed: %d resolves, %d portal calls", r, p)
 	}

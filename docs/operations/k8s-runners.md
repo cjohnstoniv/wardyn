@@ -88,7 +88,8 @@
 
 7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
 8. An admin adds the runner to an organisation pool with `wardyn runner pool add <pool> <runner>` (`PUT /api/v1/runner-pools/{pool}/runners/{runner}`). `wardyn runner pool remove`, or `DELETE` on the same path, takes it out. An organisation runner goes only into an organisation pool. It serves each runs namespace for one pool only: see [Several runs namespaces](#several-runs-namespaces).
-9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
+9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd connects only after its boot checks, the network-policy canary among them, pass.
+   - The chart sets no readiness probe: a `Running` pod or a finished `kubectl rollout status` can still be waiting on the canary.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
 - The chart is not published to a registry. A checkout's default `image.tag` is its own release.
@@ -146,7 +147,7 @@
 | Object | Rule |
 |---|---|
 | Deployment | One replica, `Recreate`. Never raise the replicas: `serve.lock` keeps one writer |
-| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). No `services`, no `watch` |
+| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). `watch` on pods only, for the pod waits. No `services` or `endpointslices`: runner mode makes no per-run Service. |
 | RBAC, each workload namespace | `wardynworkloads` `get`, `list` and `watch`, and `wardynworkloads/status` `patch`. No Secret, nothing cluster-wide |
 | RBAC, runner namespace | `secrets: create, get, delete, deletecollection` |
 | RBAC, cluster | `runtimeclasses: get` and `nodes: list` only |
@@ -166,7 +167,7 @@
 1. Helm applies RBAC kinds before the Deployment on install and upgrade, so a default install needs nothing.
 2. With `rbac.create=false`, apply the ClusterRole, ClusterRoleBinding and every Role and RoleBinding before the image starts, and again before any upgrade that adds a verb. The Roles are one per runs namespace, one in runnerd's own namespace and one per `workloads.namespaces` entry.
 3. Render what the chart would apply: `helm template wardyn-runner deploy/helm/wardyn-runnerd -n wardyn-runner -f values.yaml --set rbac.create=true --show-only templates/rbac.yaml`.
-4. Runnerd's boot access review refuses to start while any verb is missing, and names the missing verbs.
+4. Runnerd's boot access review refuses to start while any verb is missing, and names the missing verbs. `pods: watch` is not asked: without it the pod waits poll.
 
 ## Mixed architectures
 
@@ -174,6 +175,16 @@
 - A mixed cluster installs two releases. Each takes its own release name, registration Secret (a fresh token) and runs namespace.
 - A runs namespace cannot be shared: the foreign-object check refuses one holding another runner's objects.
 - A `kubernetes.io/arch` in `k8s.sandbox.nodeSelector` of another architecture refuses boot. A node affinity that excludes the architecture is not checked: the pods stay `Pending` instead.
+
+## An isolated pool for barrier runs
+
+- Taint and label the pool's nodes, for example `isolated=true:NoSchedule` and `pool=isolated`. Put the matching toleration and node selector in the RuntimeClass's `scheduling`, and pin it with `k8s.runtimeClasses.CC3` (or `CC2`). Kubernetes adds both to pods of that class (agent and warm pool pods) only.
+- The taint is what keeps other pods off the pool. Wardyn cannot add it, so setup status warns when a pool node has none. Leave the pool's toleration and selector out of `k8s.sandbox.*`: the proxy, the canary and CC1 runs use that placement.
+- Runnerd refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. A class with no `scheduling` boots with a setup warning.
+- A class meant for every node needs no `scheduling`, or a selector every node carries, such as `kubernetes.io/os: linux`. Wardyn reads the RuntimeClasses when the runner starts: restart it after you create or change one.
+- `sandbox.arch` adds `kubernetes.io/arch` to every pod. A RuntimeClass that selects another architecture is refused at boot. Runner affinity and a run's own architecture are not judged at boot; a pod they exclude fails at the start-time limit.
+- The fit warning and the start-time limit judge the agent pod with the RuntimeClass's selector, tolerations and overhead. A CC3 pod that no pool node can take fails at the start limit. It is never placed elsewhere. A queued run is judged on the general nodes when it is promoted.
+- The NetworkPolicy canary runs on the general nodes. It does not prove enforcement inside a Kata guest, so check egress from a CC3 run on the pool yourself.
 
 ## Several runs namespaces
 
@@ -204,6 +215,7 @@
 2. Run `helm upgrade` with the new `image.tag`. The chart pins runnerd and the proxy to one tag.
 3. `Recreate` stops the old pod before the new one starts. The organisation supports runnerd N and N-1.
 4. Runs survive the restart only if runnerd is READY again and each proxy renews before its deadline: see [Self-lapse](#self-lapse-and-outages).
+5. Confirm in *Admin → Runners* that the runner is Online again, with its architecture and trust class, as in install step 9. A `Running` pod does not show that the canary passed.
 
 - The state volume holds the runner's identity. If it is lost, mint a new token, use a fresh volume and revoke the old runner. There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.
@@ -236,8 +248,9 @@
 | Proxy cannot renew its run token at start | It exits about a minute after it starts; the run fails with "the run's proxy could not renew its run token with the organisation:" and its last renew error | Let the cluster reach the host and port the error names |
 | Proxy crashes, runs out of memory or lapses | Terminal: the pod stays `Failed`, runnerd contains the run and settles its decisions | Start a new run |
 | Relay lost | First-use approvals are denied; decisions buffer | Restore the relay Service |
-| New proxy pod's IP still fenced for an earlier run | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed: see [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) |
+| New proxy pod's IP still fenced for an earlier run | The runner stops that pod, proves it stopped and starts another, preferring another node, up to twice. The run fails with `relay_ip_fenced` only if every try is given a held address or a pod can't be proven stopped | Start the run again. The address frees when the earlier run's stop is confirmed: see [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) |
 | Revoked while online | The org ends the runner's runs `runner_revoked`; runnerd stops every proxy, tears down every sandbox and deletes the per-run and keystore Secrets | Reinstall with a fresh token if wanted |
+| An extra container never starts: an image it cannot pull, a platform it lacks, or an image that needs root | The run's start fails with the container's name and its waiting reason | Fix the image or its platform, then start a new run |
 | Revoked while offline and never returning | Nothing releases the stop-proof finalizer or the policies | Follow [Revoked and gone](#revoked-and-gone) |
 | A stop an earlier release held | Its proxy pod stays `Failed` and deleting with the proxy never started; its policies and its Secret, with the run's secret values and managed files, stay | Upgrade the runner: it retries the stop when it reconnects. A run still held after that keeps its fence: see [A stop still held after the upgrade](#a-stop-still-held-after-the-upgrade) |
 | runnerd's node lost | The old pod stays Terminating and the volume stays attached | Force-delete the pod, or taint the node `node.kubernetes.io/out-of-service`; proxy deadlines bound egress meanwhile |
@@ -323,6 +336,8 @@ An upgraded runner retries a held stop when it reconnects, from its own reads of
 
 `scripts/k6-kind-conformance.sh` (`WARDYN_TEST_K8S=1`) is the proof.
 
+A separate run, `scripts/test-kind-kata-place.sh` (`WARDYN_TEST_K8S=1`), taints and labels one worker as an isolated pool and shows a CC3 agent pod lands there while its proxy and a CC1 run do not. It is run by hand, not in the nightly workflow.
+
 - It builds a kind cluster of one control plane and two workers on Calico, and installs this chart with its rendered Role against a fake organisation.
 - It runs [`test/k6`](../../test/k6/k6_test.go) under runnerd's own ServiceAccount token, never cluster-admin.
 - It runs on the 1.31 floor (`kindest/node:v1.31.4`) and on `kindest/node:v1.35.0`, in the nightly workflow. The table groups the cases with an operator-visible result.
@@ -367,6 +382,6 @@ The run did not cover:
 | R12 | Clusters that rewrite pod-to-ClusterIP source addresses are unsupported |
 | R14 | The ServiceAccount lists every Node and patches pods in its runs namespace |
 | R16 | Reusing a Node name for another machine while a run's pods remain is unsupported |
-| R17 | A run given an address still fenced for an earlier run fails at start; the address can be given again until that run's stop is confirmed |
+| R17 | A proxy pod given an address still fenced for an earlier run is replaced up to twice; the run fails only if every try gets one. Until that stop is confirmed, the cluster may hand the address out again. |
 
 - All residuals, with the rejected alternatives: [the design note](../design/0.9/k8s-runnerd.md#residuals).

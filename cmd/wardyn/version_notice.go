@@ -77,17 +77,20 @@ func versionNotice(ctx context.Context, w io.Writer, origin, server string) {
 	}
 }
 
-// noticeLine is the notice for a CLI at cli and an organisation at server, "" when they are the same
-// release. The server's own +commit suffix is not part of its release.
+// noticeLine is the notice for a CLI at cli and an organisation at server, "" when they are the same release or
+// when their order cannot be read (a development or candidate version): advice for one direction is wrong for the
+// other. The server's own +commit suffix is not part of its release.
 func noticeLine(cli, origin, server string) string {
 	release, _, _ := strings.Cut(server, "+")
-	if release == cli {
+	switch {
+	case release == cli:
 		return ""
-	}
-	if older(release, cli) {
+	case older(release, cli):
 		return fmt.Sprintf(copyNoticeServerOlder, cli, origin, server)
+	case older(cli, release):
+		return fmt.Sprintf(copyNoticeServerNewer, cli, origin, server)
 	}
-	return fmt.Sprintf(copyNoticeServerNewer, cli, origin, server)
+	return ""
 }
 
 // older reports whether release a sorts before b as major.minor.patch; anything unreadable is not older.

@@ -232,6 +232,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
 	"POST /api/v1/devices/enrol":         {class: classAnonymous},
 	"POST /api/v1/runners/register":      {class: classAnonymous},
+	"POST /api/v1/inbound/exchange":      {class: classAnonymous}, // a provider token is the credential, read from the body; rate-limited per address
 	"POST /api/v1/runners/tokens":        {class: classAdmin},
 	"POST /api/v1/me/runners/tokens":     {class: classMember},
 	"POST /api/v1/me/runners/{id}/claim": {class: classMember},
@@ -299,6 +300,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/me/runner-pool-defaults":                  {class: classMember},
 	"PUT /api/v1/me/runner-pool-defaults":                  {class: classMember},
 	"DELETE /api/v1/me/runner-pool-defaults":               {class: classMember},
+	// Organisation sites (0.11): members read them; the writes are SUPER, beside the runner-pool writes; the
+	// drives-at-a-site list is the security tier, as GET /drives is.
+	"GET /api/v1/org-sites":                 {class: classMember},
+	"GET /api/v1/org-sites/{id}":            {class: classMember},
+	"GET /api/v1/org-sites/drives":          {class: classSecurity},
+	"POST /api/v1/org-sites":                {class: classAdmin},
+	"PUT /api/v1/org-sites/{id}":            {class: classAdmin},
+	"DELETE /api/v1/org-sites/{id}":         {class: classAdmin},
+	"PUT /api/v1/runner-pools/{id}/site":    {class: classAdmin},
+	"DELETE /api/v1/runner-pools/{id}/site": {class: classAdmin},
+	"PUT /api/v1/drives/{id}/site":          {class: classAdmin},
+	"DELETE /api/v1/drives/{id}/site":       {class: classAdmin},
 	// Workloads (0.10): each route acts on the caller's own workloads (?owner= for a sponsor or the
 	// security tier); a binding is standing authority over a service identity, the security tier's.
 	"PUT /api/v1/workloads/{name}":          {class: classMember},
@@ -421,6 +434,24 @@ var routeMatrix = map[string]classifiedRoute{
 	// which carries no start URL.
 	"GET /api/v1/agent-providers": {class: classAdmin},
 	"PUT /api/v1/agent-providers": {class: classAdmin},
+	// The assistant's settings (0.11.0): which model providers may serve the Compose and Review purposes,
+	// SUPER for the model providers' reason. The availability read is any signed-in person's.
+	"GET /api/v1/assistant/settings": {class: classAdmin},
+	"PUT /api/v1/assistant/settings": {class: classAdmin},
+	"GET /api/v1/me/assistant":       {class: classMember},
+	// The assistant's sessions: each is the signed-in person's own, and anyone else's {id} answers 404, as a
+	// missing one does, so a member reaches only their own.
+	"POST /api/v1/assistant/preview":                {class: classMember},
+	"POST /api/v1/assistant/sessions":               {class: classMember},
+	"POST /api/v1/assistant/sessions/{id}/messages": {class: classMember},
+	"POST /api/v1/assistant/sessions/{id}/edits":    {class: classMember},
+	// The person's last confirmation of a repository draft's files: the session's owner's own, another's {id} is 404.
+	"POST /api/v1/assistant/sessions/{id}/build-files/confirm": {class: classMember},
+	"GET /api/v1/assistant/sessions/{id}/events":               {class: classMember},
+	"DELETE /api/v1/assistant/sessions/{id}":                   {class: classMember},
+	// The checks strip and the replay: the signed-in person's own checks, with no session and no model.
+	"POST /api/v1/assistant/checks": {class: classMember},
+	"POST /api/v1/assistant/replay": {class: classMember},
 	// Model providers (0.8): gateway addresses, the AWS access portal and
 	// account pins. SUPER for the agent roster's reason; the member tier is
 	// served SetupStatus.model_providers instead, which carries none of them.
@@ -428,6 +459,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/model-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
+
+	// The service grant's secret and removal routes, and the clean-up retry: operatorOnly beside the provider
+	// routes (provider_service_grant_routes.go).
+	"PUT /api/v1/model-providers/{id}/service-grant/secret":    {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant/secret": {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant":        {class: classAdmin},
+	"POST /api/v1/service-grant-cleanups/{uid}/retry":          {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
 	// Getting Started -> People editor over the store half of
 	// internal/auth/oidc's RoleMappingSource. SUPER-only, including BOTH reads,
@@ -449,9 +487,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// security tier can stop a foreign run, on purpose — ownsRunOrAdmin is
 	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
-	"POST /api/v1/admin/sandboxes/sweep":  {class: classAdmin},
-	"GET /api/v1/admin/runs/proxy-window": {class: classAdmin},
-	"POST /api/v1/admin/runs/restart":     {class: classAdmin},
+	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+	// Releasing the person's Docker volumes held since the 0.10.2 upgrade: SUPER, it answers for every person's
+	// drives and states that every older server is stopped.
+	"POST /api/v1/admin/drives/legacy-docker/release": {class: classAdmin},
+	"GET /api/v1/admin/runs/proxy-window":             {class: classAdmin},
+	"POST /api/v1/admin/runs/restart":                 {class: classAdmin},
 	// Re-opening a person's identity row to another sign-in principal (the Entra
 	// app re-registration remedy): it decides who a sign-in becomes, the same
 	// reach the role mappings above are SUPER for.
@@ -507,6 +548,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// 0.8.6: the SCIM card's read (scim-a7): who is deactivated, which leaver steps are stuck on what
 	// error, and which purged people's drives are still to reclaim. Names, steps and errors, read-only.
 	"GET /api/v1/scim/status": {class: classSecurity},
+	// The portal's own lifecycle (person_suspend.go, person_purge.go, portal_lifecycle.go): suspending a person
+	// issuer portals introduced, the reads that find one and the portal's status view are the security tier; the
+	// undo of a cut and the permanent purge are the super admin's alone.
+	"GET /api/v1/people/portal-person":           {class: classSecurity},
+	"GET /api/v1/people/{principal}/portals":     {class: classSecurity},
+	"POST /api/v1/people/{principal}/suspend":    {class: classSecurity},
+	"POST /api/v1/people/{principal}/reactivate": {class: classAdmin},
+	"POST /api/v1/people/{principal}/purge":      {class: classAdmin},
+	"GET /api/v1/admin/portal-lifecycle/status":  {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},
@@ -539,6 +589,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/governance/egress-baseline": {class: classSecurity},
 	"GET /api/v1/governance/boundary":        {class: classSecurity},
 	"PUT /api/v1/governance/boundary":        {class: classSecurity},
+	"GET /api/v1/governance/approval-counts": {class: classSecurity},
+	"PUT /api/v1/governance/approval-counts": {class: classSecurity},
 	"GET /api/v1/governance/recording":       {class: classSecurity},
 	"PUT /api/v1/governance/recording":       {class: classSecurity},
 	// A platform envelope names the groups a unit admin's group adds may apply for without a second
@@ -556,6 +608,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/restrictions":            {class: classSecurity},
 	"PUT /api/v1/governance/restrictions/{id}":        {class: classSecurity},
 	"DELETE /api/v1/governance/restrictions/{id}":     {class: classSecurity},
+	"GET /api/v1/agent-rules":                         {class: classSecurity},
+	"PUT /api/v1/agent-rules/{harness}":               {class: classSecurity},
+	"DELETE /api/v1/agent-rules/{harness}":            {class: classSecurity},
 
 	"GET /api/v1/governance/credential-delivery": {class: classSecurity},
 	"PUT /api/v1/governance/credential-delivery": {class: classSecurity},
@@ -625,11 +680,16 @@ var routeMatrix = map[string]classifiedRoute{
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. On the unit-admin
 	// tier at the door; which changes a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
-	"GET /api/v1/governance/changes":               {class: classUnit},
-	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
-	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
-	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
-	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
+	"GET /api/v1/governance/changes":                  {class: classUnit},
+	"GET /api/v1/governance/changes/{id}":             {class: classUnit},
+	"GET /api/v1/governance/changes/{id}/impact":      {class: classUnit},
+	"POST /api/v1/governance/changes/{id}/approve":    {class: classUnit},
+	"POST /api/v1/governance/changes/{id}/reject":     {class: classUnit},
+	"PUT /api/v1/governance/changes/{id}/note":        {class: classUnit},
+	"DELETE /api/v1/governance/changes/{id}/approval": {class: classUnit},
+	// The Walls view's routes.
+	"GET /api/v1/walls/topology": {class: classUnit},
+	"GET /api/v1/walls/stream":   {class: classUnit},
 	// Requests (elevation, image): the member router, so a group decider reaches them; who may see or decide a request is the approver table's, inside the handler.
 	"GET /api/v1/governance/requests":               {class: classMember},
 	"POST /api/v1/governance/requests":              {class: classMember},
@@ -676,8 +736,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/drives/{id}/reclaim": {class: classAdmin},
 	// People's own drives (member_drives_admin.go): the super admin's list and
 	// delete, SUPER like reclaim because the delete destroys a person's bytes.
-	"GET /api/v1/drives/member":         {class: classAdmin},
-	"DELETE /api/v1/drives/member/{id}": {class: classAdmin},
+	"GET /api/v1/drives/member":           {class: classAdmin},
+	"DELETE /api/v1/drives/member/{id}":   {class: classAdmin},
+	"PUT /api/v1/drives/member/{id}/team": {class: classAdmin},
 	// People's kept machines (kept_machines.go): the super admin's list and delete, SUPER like the
 	// member drives' because the delete destroys a person's files on their Mac.
 	"GET /api/v1/machines/kept":         {class: classAdmin},
@@ -709,8 +770,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// A person creates and deletes their own drive (member_drives.go). The
 	// handler refuses every caller that is not a person, and the delete's
 	// owner predicate answers another person's id with the uniform 404.
-	"POST /api/v1/me/drives":        {class: classMember},
-	"DELETE /api/v1/me/drives/{id}": {class: classMember},
+	"POST /api/v1/me/drives":           {class: classMember},
+	"DELETE /api/v1/me/drives/{id}":    {class: classMember},
+	"POST /api/v1/me/drives/{id}/seed": {class: classMember},
 	// A person lists and deletes their own kept machines (kept_machines.go). The handler refuses every
 	// caller that is not a person, and the owner predicate answers another person's id with the uniform 404.
 	"GET /api/v1/me/machines":         {class: classMember},
@@ -777,10 +839,20 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/service-identities/{name}":                   {class: classSecurity},
 	"PATCH /api/v1/service-identities/{name}":                 {class: classSecurity},
 	"DELETE /api/v1/service-identities/{name}":                {class: classSecurity},
+	"GET /api/v1/inbound-federation":                          {class: classSecurity},
+	"PUT /api/v1/inbound-federation":                          {class: classSecurity},
+	"POST /api/v1/inbound-trusts":                             {class: classSecurity},
+	"GET /api/v1/inbound-trusts":                              {class: classSecurity},
+	"GET /api/v1/inbound-trusts/{id}":                         {class: classSecurity},
+	"DELETE /api/v1/inbound-trusts/{id}":                      {class: classSecurity},
 	"GET /api/v1/me/service-identities":                       {class: classMember},
 	"POST /api/v1/me/service-identities/{name}/tokens":        {class: classMember},
 	"GET /api/v1/me/service-identities/{name}/tokens":         {class: classMember},
 	"DELETE /api/v1/me/service-identities/{name}/tokens/{id}": {class: classMember},
+	// Inbound federation: the sponsor's view, veto and confirm of an identity's trusts (#3787).
+	"GET /api/v1/me/service-identities/{name}/inbound-trusts":               {class: classMember},
+	"DELETE /api/v1/me/service-identities/{name}/inbound-trusts/{id}":       {class: classMember},
+	"POST /api/v1/me/service-identities/{name}/inbound-trusts/{id}/confirm": {class: classMember},
 	// /me/capabilities is the member-safe twin of GET /permissions above: it
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
@@ -921,6 +993,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// The Walls view's routes.
+	"GET /api/v1/runs/{id}/walls":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/walls/stream": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// A waiting sign-in's device code: approving it binds the approver's
 	// cloud identity to the owner's stored session, so the owner only.
 	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
@@ -938,6 +1013,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// The ticket to watch a background macOS run's desktop, view only (run_background_watch.go).
 	"POST /api/v1/runs/{id}/desktop/watch-ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/desktop/window":       {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop/local-window": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -966,6 +1042,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// list names reaches it without owning the run, and no role does. The handler is the gate: anyone it
 	// does not admit gets the foreign-run 404, which the member probe's random id meets too.
 	"POST /api/v1/runs/{id}/apps/{app}/ticket": {class: classMember},
+
+	// A run's preview URLs (run_previews.go). Listing and revoking are inspect-or-stop, as kill is; creating one is
+	// entry, as the attach ticket is. A preview's ticket is classMember, as an app's ticket is: a console person
+	// opens an org preview without owning the run, and the handler answers anyone it does not admit with the
+	// foreign-run 404.
+	"GET /api/v1/runs/{id}/previews":                {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"PUT /api/v1/runs/{id}/previews/{port}":         {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"DELETE /api/v1/runs/{id}/previews/{port}":      {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/previews/{port}/ticket": {class: classMember},
 
 	// Support sessions (support_grant.go): classMember, NOT classOwner — the helper is a super admin the owner
 	// rule would refuse, and each handler is its own gate (supportCaller, the run's owner, the grant's helper
@@ -1034,9 +1119,21 @@ var routeMatrix = map[string]classifiedRoute{
 	// SUPER classification is load-bearing here, not incidental, which is why
 	// TestSecurityAdminRouteTier 403s a security_admin on this route.
 	"GET /api/v1/runs/{id}/attach": {class: classAdmin},
+	// The ticket-less lane is admin only (requireOperator) and is then refused 400 run_forward_ticket_required in the
+	// handler; the ticket lane's owner rule is pinned by TestAttachForward_TicketLaneOwnerRule.
+	"GET /api/v1/runs/{id}/attach/forward": {class: classAdmin},
+	// GET /runs/{id}/ssh (sshgateway_ticket.go) is ticket-only: no session, bearer or key is consulted, the
+	// single-use SSH ticket in the Wardyn-Ticket header is the credential, and a missing header answers the bad-ticket
+	// 403 (a path id that does not parse, as this matrix sends, the 400). Its owner rule and run checks are pinned by
+	// the TestSSHTicketDoor tests.
+	"GET /api/v1/runs/{id}/ssh": {class: classAnonymous},
 
 	// internal (run-token / ground-truth-token bearer only)
 	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},
+	"GET /api/v1/internal/assistant/turns":                 {class: classInternal},
+	"POST /api/v1/internal/assistant/events":               {class: classInternal},
+	"GET /api/v1/internal/assistant/tools":                 {class: classInternal},
+	"POST /api/v1/internal/assistant/tools/{name}":         {class: classInternal},
 	"GET /api/v1/internal/injection/{grantID}":             {class: classInternal},
 	"GET /api/v1/internal/via-org/{grantID}/*":             {class: classInternal},
 	"HEAD /api/v1/internal/via-org/{grantID}/*":            {class: classInternal},
@@ -1080,6 +1177,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/admin/delegates":        {class: classAdmin},
 	"GET /api/v1/admin/delegates":         {class: classSecurity},
 	"DELETE /api/v1/admin/delegates/{id}": {class: classSecurity},
+	// The issuer-portal registry: the switch-on, a binding's retirement and a portal's admission rule are
+	// the super admin's alone (portal_issuer_activate.go, portal_issuer_governance.go).
+	"POST /api/v1/admin/portal-issuers/activate": {class: classAdmin},
+	"DELETE /api/v1/admin/portal-issuers/{k}":    {class: classAdmin},
+	"PUT /api/v1/admin/delegates/{id}/admission": {class: classAdmin},
 
 	// device (a `wdd_` device bearer on its own {id} only)
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
@@ -1198,7 +1300,8 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
 // row for claude-code. The attended macOS window's site switch is on, so the
 // owner of a run reaches POST /runs/{id}/desktop/window's handler; the switch
-// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer.
+// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer. Preview URLs are on, up to org, so
+// the owner of a run reaches the preview routes' own rows (authzMatrixFeatureHooks makes the key available).
 func authzMatrixSiteConfig() types.SiteConfig {
 	on := true
 	return types.SiteConfig{
@@ -1206,7 +1309,32 @@ func authzMatrixSiteConfig() types.SiteConfig {
 			ID: "claude-code",
 		}}},
 		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+		FeatureSwitches: &types.SiteFeatureSwitches{
+			PreviewURLs: &types.PreviewURLsFeature{Enabled: &on, MaxVisibility: "org"},
+			LocalWindow: &types.LocalWindowFeature{Enabled: &on},
+		},
 	}
+}
+
+// authzMatrixFeatureHooks installs the registered site feature hooks with the keys below available, so the
+// matrix's owner probe reaches a route's own answer while its key is still unavailable to the release. Each
+// feature's last commit, which makes its key available, deletes its line. Callers never run in parallel
+// (withSiteFeatureHooks).
+func authzMatrixFeatureHooks(t *testing.T) {
+	t.Helper()
+	hooks := map[siteFeatureKey]siteFeatureHook{}
+	for k, h := range siteFeatureHooks {
+		hooks[k] = h
+	}
+	for _, k := range []siteFeatureKey{
+		featurePreviewURLs,
+		featureLocalWindow,
+	} {
+		h := hooks[k]
+		h.available = func() bool { return true }
+		hooks[k] = h
+	}
+	withSiteFeatureHooks(t, hooks)
 }
 
 // TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
@@ -1276,6 +1404,7 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	// On, so a folder-only runner's folders answer on ownership rather than on the deployment's gate.
 	cfg.ComputerFolders = true
 	ast.siteCfg = authzMatrixSiteConfig()
+	authzMatrixFeatureHooks(t)
 	for _, f := range shape {
 		f(&cfg)
 	}
@@ -1321,6 +1450,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
+	authzMatrixFeatureHooks(t)
 	cfg.UIDir = dir
 	return matrixServer(cfg)
 }
@@ -1911,16 +2041,21 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
-		// /runs/{id}/egress (tierSuper, as revive).
-		if probed != 55 {
-			t.Errorf("probed %d classOwner routes, want 55 — a route that left classOwner takes its tier "+
+		// /runs/{id}/egress (tierSuper, as revive); 57 since the Walls view added
+		// GET /runs/{id}/walls and its stream; 60 since 0.11 added GET
+		// /runs/{id}/previews and DELETE .../previews/{port} (tierSecurity) and
+		// PUT .../previews/{port} (tierEntry); 61 since 0.11 added POST
+		// /runs/{id}/desktop/local-window (tierEntry).
+		if probed != 61 {
+			t.Errorf("probed %d classOwner routes, want 61 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 18 routes: GET /governance, the three unit writes, the two
-	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the five change routes.
+	// and refuses a member at the door. 22 routes: GET /governance, the three unit writes, the two
+	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run, the seven change routes,
+	// and the Walls topology and stream.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -1939,8 +2074,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 18 {
-		t.Errorf("probed %d classUnit routes, want 18", unit)
+	if unit != 22 {
+		t.Errorf("probed %d classUnit routes, want 22", unit)
 	}
 
 	var sec, super int
@@ -2085,8 +2220,25 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.10 platform envelopes add PUT and DELETE /governance/units/{id}/envelope on the security tier: an
 	// envelope names the groups a unit admin's group adds may apply for without a second person (= 104 SEC).
 	// An organisation component's unit pin joins the workspace's on the security tier (= 105 SEC).
-	if sec != 105 || super != 71 {
-		t.Errorf("tier split = %d security / %d admin, want 105 / 71 (PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final §3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.10.2 adds seven SUPER routes: the issuer-portal switch-on (POST /admin/portal-issuers/activate), a binding's
+	// retirement (DELETE /admin/portal-issuers/{k}) and a portal's admission rule (PUT /admin/delegates/{id}/admission),
+	// and the service grant's secret write and delete (PUT and DELETE /model-providers/{id}/service-grant/secret), its
+	// removal (DELETE /model-providers/{id}/service-grant) and the clean-up retry (POST
+	// /service-grant-cleanups/{uid}/retry) (= 78 SUPER).
+	// 0.10.2 adds the release of the Docker volume drives held since the upgrade, POST
+	// /admin/drives/legacy-docker/release, on the SUPER tier beside POST /admin/sandboxes/sweep: it answers for every
+	// person's drives (= 79 SUPER).
+	// 0.10.2 portal people add the portal-person lookup, a person's portal list, the suspension and the portal
+	// lifecycle status on the security tier: a suspension is the fast cut the security admin owns (= 109 SEC). The
+	// reactivation and the purge, which undo or end a person for good, are SUPER (= 81 SUPER).
+	// 0.11 adds port forwarding over the organisation, GET /runs/{id}/attach/forward, on the SUPER tier beside the terminal's ticket-less lane (= 82 SUPER).
+	// The assistant's settings add their read and write on the SUPER tier (= 84 SUPER, with the attach forward route above).
+	// The approval counts add their read and write on the security tier (= 111 SEC).
+	// Agent rules add GET /agent-rules and PUT and DELETE /agent-rules/{harness} on the security tier (= 114 SEC).
+	// Inbound federation (#3787) adds its switch read and write and the four trust routes on the security tier (= 120 SEC, with the approval counts and agent rules above).
+	// The org sites add GET /org-sites/drives on the security tier and 8 admin-tier writes (= 121 SEC / 92 SUPER).
+	if sec != 121 || super != 92 {
+		t.Errorf("tier split = %d security / %d admin, want 121 / 92 (PLUS inbound federation's 6 switch and trust routes, PLUS GET /org-sites/drives, PLUS the 3 /agent-rules routes, PLUS the 2 /governance/approval-counts routes, PLUS the 2 /assistant/settings routes, PLUS the attach forward route, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename, PLUS the member team drive write bit, PLUS the 7 site writes)", sec, super)
 	}
 }
 
@@ -2294,7 +2446,7 @@ func (s *authzStore) CountActiveRunsBy(_ context.Context, createdBy string) (int
 	return n, nil
 }
 
-func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page) ([]types.AgentRun, error) {
+func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page, _ *store.RunUnitScope) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []types.AgentRun{}
@@ -3245,7 +3397,6 @@ func (authzCLIStore) EndCLISession(context.Context, uuid.UUID, string, string, t
 func (authzCLIStore) ListCLISessions(context.Context, string, time.Time) ([]store.CLISessionRow, error) {
 	return nil, nil
 }
-func (authzCLIStore) CountLiveCLISessions(context.Context, string) (int, error) { return 0, nil }
 
 // authzCLIAuthenticator is a real authenticator with both logout routes on, over a throwaway
 // discovery server. Its sessions are signed with accessTestHMACKey (accessSession), not the empty key

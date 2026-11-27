@@ -109,3 +109,17 @@ const (
 	// reasonImageAlreadyGranted: the caller already holds the image exactly (409).
 	reasonImageAlreadyGranted = "image_already_granted"
 )
+
+// The issuer-portal authority reasons (portal_issuer_activate.go, portal_issuer_governance.go, policy_ui_callers.go), here to keep
+// reasons_routes.go under the 1000-line gate.
+const (
+	reasonPortalIssuersStatementRequired  = "portal_issuers_statement_required"   // the activation needs old_servers_stopped: true
+	reasonPortalIssuersOldServerSuspected = "portal_issuers_old_server_suspected" // another client of the database is not a 0.10.2 wardynd; the answer lists it
+	reasonPortalIssuersSampleWarming      = "portal_issuers_sample_warming"       // this replica has not sampled the database for two minutes yet
+	reasonPortalIssuerInUse               = "portal_issuer_in_use"                // a binding that a portal, a person, a grant or a stored rule names cannot be retired
+	reasonPortalIssuerNotFound            = "portal_issuer_not_found"             // no binding has that key
+	reasonDelegateAdmissionStale          = "delegate_admission_stale"            // the portal's admission rule is no longer the one the change expected
+)
+
+// delegatePersonUnknownPortalMsg is the sentence of reasonDelegatePersonUnknownPortal.
+const delegatePersonUnknownPortalMsg = "A portal person is named whose issuer no portal is registered for."

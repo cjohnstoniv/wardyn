@@ -50,7 +50,7 @@ func scanTestProxy(t *testing.T) *Proxy {
 	return newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Scanner:  forwardScanEngine(t, "alert"),
 		Resolver: publicResolver{},
 	})
@@ -104,22 +104,22 @@ func TestScanBufferedBodyReadsBeforeTheSlot(t *testing.T) {
 // agent inside the sandbox chooses both the sizes and the concurrency.
 //
 // Asserted structurally rather than by sampling the heap, so it cannot flake:
-// while the engine's one slot is held, a read body must not be scanned, and
-// it is once the slot frees.
+// scans together extract at most one largest body, and while that much is
+// being extracted a read body must not be scanned, and it is once it frees.
 func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 	p := scanTestProxy(t)
-	if cap(p.scan.init().slots) != maxConcurrentScans || maxConcurrentScans != 1 {
-		t.Fatalf("an engine admits %d scans at once, want 1", cap(p.scan.slots))
+	if p.scan.init().scanLimit != int64(maxLLMScanBody) {
+		t.Fatalf("an engine extracts %d bytes at once, want one largest body (%d)", p.scan.scanLimit, maxLLMScanBody)
 	}
-	p.scan.slots <- struct{}{} // another scan of this engine is in progress
+	free := holdScans(t, p, p.scan.scanLimit) // a scan of one largest body is in progress
 	done := scanAsync(p, "http://connector.test/b", strings.NewReader(`{"payload":"small"}`))
 	select {
 	case <-done:
-		<-p.scan.slots
-		t.Fatal("a body was scanned while the engine's one scan slot was held")
+		free()
+		t.Fatal("a body was scanned while the engine's whole scan budget was held")
 	case <-time.After(300 * time.Millisecond):
 	}
-	<-p.scan.slots
+	free()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -132,8 +132,7 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 // engine's request is scanned at once.
 func TestScanBudgetIsPerEngine(t *testing.T) {
 	busy, other := scanTestProxy(t), scanTestProxy(t)
-	busy.scan.init().slots <- struct{}{}
-	defer func() { <-busy.scan.slots }()
+	defer holdScans(t, busy, busy.scan.init().scanLimit)()
 	select {
 	case <-scanAsync(other, "http://connector.test/b", strings.NewReader(`{"payload":"small"}`)):
 	case <-time.After(5 * time.Second):
@@ -142,7 +141,7 @@ func TestScanBudgetIsPerEngine(t *testing.T) {
 }
 
 // TestScanSlotWaitIsContextBoundAndFailsClosed pins the OTHER half of the
-// bound: the slot maxConcurrentScans hands out has to be taken through a wait
+// bound: the scan budget scanOverhead describes has to be taken through a wait
 // that ENDS, and ending has to mean Deny. The agent-facing listener sets
 // ReadTimeout 0 (streaming bodies and CONNECT tunnels need it), so nothing
 // above this call bounds how long a scan holding the slot takes.
@@ -153,8 +152,7 @@ func TestScanBudgetIsPerEngine(t *testing.T) {
 // is the client-went-away half of the same arm and needs no wall-clock sleep.
 func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	p := scanTestProxy(t)
-	p.scan.init().slots <- struct{}{}
-	defer func() { <-p.scan.slots }()
+	defer holdScans(t, p, p.scan.init().scanLimit)()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -254,6 +252,16 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 		t.Fatal("a body must be admitted once the previous one released its bytes — the budget bounds " +
 			"memory, it must not become a one-shot")
 	}
+}
+
+// holdScans takes n bytes of p's scan budget, as a scan of a body that size does, and
+// returns their release.
+func holdScans(t *testing.T, p *Proxy, n int64) func() {
+	t.Helper()
+	if !p.scan.init().scanning.TryAcquire(n) {
+		t.Fatalf("%d bytes of the scan budget are not free", n)
+	}
+	return func() { p.scan.scanning.Release(n) }
 }
 
 // shrinkRetainedBudget gives p's engine a budget of n bytes, so the lifetime

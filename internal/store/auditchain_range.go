@@ -104,7 +104,7 @@ func (s PG) VerifyRecordingAuditRange(ctx context.Context, runID uuid.UUID, key 
 		       prev_hash IS NULL,
 		       COALESCE(prev_hash,''),
 		       COALESCE(row_hash,''),
-		       COALESCE(audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
+		       COALESCE(audit_row_hash_any(hash_format, hash_salt, prev_hash, id, time, run_id, actor_type, actor,
 		                               action, target, outcome, source_ip, data), ''),
 		       id,
 		       run_id IS NOT DISTINCT FROM $4 AND action LIKE 'desktop.recording.%'

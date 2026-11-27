@@ -112,6 +112,9 @@ func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + p
 func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
 	enforced = spec.ConfinementClass
 	if spec.MachineKind.Normalize() != "" {
+		if len(spec.Containers) > 0 {
+			return "", "", "", fmt.Errorf("k8s: a VM sandbox: %w", runner.ErrExtraContainersUnsupported)
+		}
 		if err := d.refuseVMSpec(spec); err != nil {
 			return "", "", "", err
 		}
@@ -128,6 +131,12 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 		return "", "", "", fmt.Errorf("k8s: %w", err)
 	}
 	if err := validateDriveSet(spec.Drives); err != nil {
+		return "", "", "", err
+	}
+	if err := extraContainerNames(spec.Containers); err != nil {
+		return "", "", "", err
+	}
+	if _, err := agentResources(spec); err != nil {
 		return "", "", "", err
 	}
 	if n := len(mitmCAPEMEnv) + 1 + len(d.withRunnerTrustedCA(spec.Env)[mitmCAPEMEnv]); n >= maxEnvString {
@@ -164,9 +173,13 @@ func (d *Driver) placeAgentPod(pod *corev1.Pod, spec runner.SandboxSpec) error {
 	return nil
 }
 
-// CreateSandbox provisions the run's Secret, NetworkPolicies, proxy pod, and
-// agent pod, in that order, fail-closed with full rollback on any error
-// (mirrors the docker driver's LIFO teardown-closure shape). Kept as one
+// CreateSandbox provisions, in this order: both NetworkPolicies, the run's
+// Secret, in server mode the run's Service and its empty EndpointSlice, the
+// proxy pod and, in server mode with no wait between them, the agent pod;
+// the slice is pointed at the proxy pod once it has its IP, and it returns
+// once the proxy is Ready and the agent is Running. A runner creates the
+// agent pod only once its proxy is Ready. Fail-closed with full rollback on
+// any error (mirrors the docker driver's LIFO teardown-closure shape). Kept as one
 // linear ordered sequence in one scope so the rollback compensations stay
 // verifiably complete — hence the funlen nolint below.
 //
@@ -174,6 +187,9 @@ func (d *Driver) placeAgentPod(pod *corev1.Pod, spec runner.SandboxSpec) error {
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	ns, err := d.createNamespace(spec)
 	if err != nil {
+		return runner.Sandbox{}, err
+	}
+	if err := d.refuseRunnerDrives(spec, ns); err != nil { // a drive kept on a runner mounts there alone
 		return runner.Sandbox{}, err
 	}
 	if err := d.netPolRefusal(ns); err != nil { // the canary's live verdict; running sandboxes are untouched
@@ -305,12 +321,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy config secret: %w", err))
 	}
-	keepSvc, err := d.keepService(ctx, ns, spec, objLabels(componentProxy))
+	// The run's Service, with no selector, and its EndpointSlice, empty (server mode; runner mode makes neither).
+	runSvc, err := d.runService(ctx, ns, spec.RunID, objLabels(componentProxy))
 	if err != nil {
 		return fail(err)
 	}
 
-	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
+	// (4) Proxy pod. A runner then polls until it is ready and has its CNI-assigned IP, which its agent pins, before
+	// the agent pod exists (startProxyPod: a runner redraws a fenced IP). Server mode creates the agent pod next and
+	// waits at (5b).
 	proxyPod, err := d.buildProxyPod(proxyPodInputs{
 		RunID: spec.RunID, Namespace: ns, SecretName: secretName(spec.RunID),
 		Deadline: d.podDeadline(spec.Resources.LifetimeCap), ControlPlaneURL: spec.ProxyConfig.ControlPlaneURL,
@@ -320,28 +339,24 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(err)
 	}
 	preferNode(proxyPod, warmNode)
-	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
-	if err != nil {
-		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
-	}
-
 	clock := d.newStartClock()
-	proxyIP, err := d.waitPodIP(ctx, clock, ns, proxyPodName(spec.RunID), spec.NotifyWaiting)
-	if err != nil {
-		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
-	}
-	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
-		// Contained before it ever opens, rather than running to its deadline.
-		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
-	}
-	proxyAddr, err := d.keepAddress(ctx, ns, spec.RunID, keepSvc, proxyIP)
-	if err != nil {
-		return fail(err)
+	var createdProxy *corev1.Pod
+	var proxyIP, proxyAddr string
+	if runSvc == nil {
+		if createdProxy, proxyIP, err = d.startProxyPod(ctx, clock, spec, proxyPod); err != nil {
+			return fail(err)
+		}
+		proxyAddr = proxyIP
+	} else {
+		if createdProxy, err = d.createPod(ctx, spec.RunID, componentProxy, proxyPod); err != nil {
+			return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
+		}
+		proxyAddr = runSvc.Spec.ClusterIP
 	}
 
-	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" (and the
-	// sandbox proxy URL's own name, runner.ProxyHostnames) to the resolved IP (its only
-	// route there, since the agent NetworkPolicy allows no DNS at all).
+	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" (and the sandbox proxy URL's own
+	// name, runner.ProxyHostnames) to proxyAddr: the run's Service in server mode, the proxy pod's IP in runner
+	// mode. That is its only route there, since the agent NetworkPolicy allows no DNS at all.
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
 		idleCmd = d.interactiveIdleCmd(spec)
@@ -349,6 +364,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.Resources.PidsLimit > 0 {
 		slog.Warn("wardynd: k8s substrate: PidsLimit requested but not enforced (Kubernetes has no per-container pids ResourceName; the fork-bomb guard is a node-level kubelet setting, not a per-pod one); running WITHOUT a pids cap",
 			slog.Int64("pids_limit", spec.Resources.PidsLimit), slog.String("run_id", spec.RunID.String()))
+	}
+	agentRes, err := agentResources(spec) // createPreflight refused a split that fails
+	if err != nil {
+		return fail(err)
 	}
 	agentPod := &corev1.Pod{
 		// The agent is owned by the proxy pod, so deleting the proxy by any route (Destroy, the
@@ -363,7 +382,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod's (buildProxyPod).
 			HostAliases:                  []corev1.HostAlias{{IP: proxyAddr, Hostnames: runner.ProxyHostnames(spec.Env)}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
-			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
+			// NetworkPolicy denies. Its one nameserver is its proxy at proxyAddr, whose
 			// listener answers every query REFUSED and records it, except AAAA
 			// for its own name: a proxy-unaware lookup fails at once and leaves a run.dns.query row.
 			DNSPolicy: corev1.DNSNone,
@@ -375,9 +394,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				// SECURITY: credential-bearing env is a secretKeyRef into the run
 				// Secret, never inlined; Exec copies this whole slice onto the
 				// ephemeral container it adds.
-				Env:             append(envVars(d.withRunnerTrustedCA(spec.Env)), secretEnvVars(spec.RunID, spec.SecretEnv)...),
+				Env:             append(envVars(d.withRunnerTrustedCA(d.proxyWaitEnv(spec))), secretEnvVars(spec.RunID, spec.SecretEnv)...),
 				SecurityContext: agentSecurityContext(),
-				Resources:       resourceRequirements(spec.Resources),
+				Resources:       resourceRequirements(agentRes),
 			}},
 		},
 	}
@@ -404,6 +423,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	for i := range spec.Drives {
 		applyDriveToPod(agentPod, &spec.Drives[i], i, runtimeHandler)
 	}
+	shareWorkFolder(agentPod, spec, keptWork)
+	addExtraContainers(agentPod, spec, d.withRunnerTrustedCA(spec.Env))
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
 	}
@@ -418,7 +439,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := recheckDriveClaims(ctx, d.clientset, ns, spec.Drives, claims); err != nil {
 		return fail(err)
 	}
-	keepAgent(agentPod, keepSvc)
+	if d.keepRun(spec) {
+		keepAgent(agentPod, runSvc)
+	}
 	if d.cfg.AgentSandbox {
 		if err := d.createAgentSandbox(ctx, clock, agentPod); err != nil {
 			return fail(err)
@@ -427,12 +450,25 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
 
+	// (5b) Server mode: the run's EndpointSlice names the proxy pod once it has its IP; then the proxy must be Ready.
+	// Until then the agent's one address leads nowhere.
+	if runSvc != nil {
+		if proxyIP, err = d.pointRunService(ctx, clock, ns, spec, runSvc); err != nil {
+			return fail(err)
+		}
+	}
+
 	// (6) Wait for the main container to actually be Running before handing
 	// the sandbox out: a k8s Pod Create is purely declarative, unlike
 	// docker's ContainerStart, so a caller racing straight into
 	// Attach/ExecStream would hit "container not found" against a pod still Pending.
 	if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
+	}
+	for _, c := range spec.Containers {
+		if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), c.Name, spec.NotifyWaiting); err != nil {
+			return fail(fmt.Errorf("k8s: extra container %q never started: %w", c.Name, err))
+		}
 	}
 	if err := recheckDriveClaims(ctx, d.clientset, ns, spec.Drives, claims); err != nil {
 		return fail(err)
@@ -445,6 +481,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ProxyConfig.NoNetwork {
 		sb.NoNetworkProxyOnly = cmp.Or(proxyOnly, noNetworkPodEnforced)
 	}
+	sb.Where = d.agentPodWhere(ctx, ns, spec.RunID, runtimeClassName, runtimeHandler)
 	return sb, nil
 }
 
@@ -488,7 +525,9 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
@@ -529,8 +568,8 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns
 	})
 	// Only a TIMEOUT is enriched: the poll's own errors already name their
 	// cause, and a Get failure is about the apiserver, not the pod.
-	if errors.Is(err, context.DeadlineExceeded) {
-		if why := podStuckReason(lastPod); why != "" {
+	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil { // a container's own Waiting reason first, as the proxy's wait reads it
+		if why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod)); why != "" {
 			return fmt.Errorf("%w (%s)", err, why)
 		}
 	}
@@ -610,7 +649,12 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 	}
 }
 
-// waitPodIP polls the proxy pod until it is READY — its init container done
+// waitPodIP is waitPodIPThen with no onIP.
+func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName string, onWaiting func(string)) (string, error) {
+	return d.waitPodIPThen(ctx, clock, ns, podName, onWaiting, nil)
+}
+
+// waitPodIPThen polls the proxy pod until it is READY — its init container done
 // and its main container Ready — and returns its CNI-assigned PodIP. An IP
 // alone proves nothing: the CNI assigns it before any image pull, so a proxy
 // stuck in ImagePullBackOff or still staging its config already has one.
@@ -621,12 +665,17 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 // One bound, clock's: absolute across the proxy and the agent, so an
 // unplaceable proxy waits for room under the same deadlines the agent does
 // rather than failing on a deadline of its own.
-func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName string, onWaiting func(string)) (string, error) {
+//
+// onIP, when non-nil, is called with the pod on every read that shows an IP, from the first, before Ready; an error
+// from it ends the wait with that error.
+func (d *Driver) waitPodIPThen(ctx context.Context, clock *startClock, ns, podName string, onWaiting func(string), onIP func(*corev1.Pod) error) (string, error) {
 	var ip string
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	var lastReason string
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
@@ -642,11 +691,22 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName s
 				onWaiting(reason)
 			}
 		}
+		if clock.fenced != nil && pod.Status.PodIP != "" && clock.fenced(pod.Status.PodIP) {
+			// On every read, not after Ready: a runner's proxy on a fenced IP never listens (the relay
+			// refuses its first renew), so it would lapse a minute later as a renew failure.
+			ip = pod.Status.PodIP
+			return false, room, errFencedDraw
+		}
 		if err := proxyStartFailure(pod); err != nil {
 			return false, room, err
 		}
 		if pod.Status.PodIP == "" {
 			return false, room, nil
+		}
+		if onIP != nil {
+			if err := onIP(pod); err != nil {
+				return false, room, err
+			}
 		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name == proxyContainerName && cs.Ready {

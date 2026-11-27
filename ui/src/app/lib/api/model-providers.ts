@@ -12,7 +12,7 @@
 // client, over a different singleton document. The wire types are
 // lib/types/site.ts's ModelProviders/ModelProvider (shared with
 // SiteConfig.model_providers) — imported, not re-declared here.
-import type { ModelProvider, ModelProviders, ModelProvidersRead } from "../types/site";
+import type { ModelProvider, ModelProviderKind, ModelProviders, ModelProvidersRead } from "../types/site";
 import { asJson, wfetch } from "./core";
 
 export type { ModelProvider, ModelProviders };
@@ -24,6 +24,8 @@ export type { ModelProvider, ModelProviders };
 export interface ModelProvidersSnapshot {
   providers: ModelProviders;
   etag: string | null;
+  // A PUT's advisories: the write landed, and each sentence is something to check before people use it.
+  model_provider_warnings?: string[];
 }
 
 // GET's snapshot adds `connected`: per provider id, how many people hold a
@@ -38,6 +40,10 @@ export interface ModelProvidersList extends ModelProvidersSnapshot {
   gatewayJwksPath?: string;
   // Whether a bedrock_sso provider can send run identity here. Absent (an older server) reads as no.
   gatewayIdentityBedrockSso?: boolean;
+  // The kinds this server accepts, and whether the console's Microsoft Entra sign-in is set up. Display only.
+  // An older server sends no list; the editor then offers no Azure Foundry.
+  kindsAvailable?: ModelProviderKind[];
+  entraLoginConfigured?: boolean;
 }
 
 export const modelProviders = {
@@ -48,8 +54,8 @@ export const modelProviders = {
     // key set path) never ride back on a PUT, whose strict decode refuses them.
     const {
       connected_people,
-      entra_login_configured: _entra,
-      kinds_available: _kinds,
+      entra_login_configured,
+      kinds_available,
       gateway_identity_issuer,
       gateway_jwks_path,
       gateway_identity_bedrock_sso,
@@ -61,6 +67,8 @@ export const modelProviders = {
       gatewayIssuer: gateway_identity_issuer,
       gatewayJwksPath: gateway_jwks_path,
       gatewayIdentityBedrockSso: gateway_identity_bedrock_sso,
+      kindsAvailable: kinds_available,
+      entraLoginConfigured: entra_login_configured,
       etag: res.headers.get("ETag"),
     };
   },
@@ -73,15 +81,16 @@ export const modelProviders = {
   // A save may also be refused (400) for reasons the body's `error` names
   // verbatim: a still-default provider being removed, a Claude subscription
   // whose sign-in image hasn't resolved yet, or a plain validation failure.
-  async putModelProviders(next: ModelProviders, etag: string | null): Promise<ModelProvidersSnapshot> {
+  // restricted: every provider this save adds is restricted before the block is written.
+  async putModelProviders(next: ModelProviders, etag: string | null, opts: { restricted?: boolean } = {}): Promise<ModelProvidersSnapshot> {
     const headers: Record<string, string> = {};
     if (etag) headers["If-Match"] = etag;
-    const res = await wfetch("/model-providers", {
+    const res = await wfetch(opts.restricted ? "/model-providers?restricted=true" : "/model-providers", {
       method: "PUT", asPerson: true,
       headers,
       body: JSON.stringify(next),
     });
-    const body = await asJson<ModelProviders>(res);
-    return { providers: body, etag: res.headers.get("ETag") };
+    const { model_provider_warnings, ...body } = await asJson<ModelProviders & { model_provider_warnings?: string[] }>(res);
+    return { providers: body, etag: res.headers.get("ETag"), ...(model_provider_warnings?.length ? { model_provider_warnings } : {}) };
   },
 };

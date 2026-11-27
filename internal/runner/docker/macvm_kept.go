@@ -294,7 +294,7 @@ func (c *MacVMConfig) keptCheckResume(spec runner.SandboxSpec, dir string) error
 // keptExpired reports whether rec is past its expiry with no session holding it: a machine a run holds
 // never expires under it.
 func keptExpired(rec macvm.KeptRecord, now time.Time) bool {
-	return rec.ActiveRun == "" && !rec.ExpiresAt.IsZero() && now.After(rec.ExpiresAt)
+	return macvm.KeptExpired(rec, now)
 }
 
 // keptHeldBy is the run a record's ActiveRun names while that run's folder is still on the Mac: a session
@@ -546,6 +546,95 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	return runnerwire.KeptMachineDeleted, nil
 }
 
+// errKeptNotExpired is an expiry-driven delete of a machine whose own record, read under its lock, does not
+// say it has expired: it was used or stopped after the organisation last heard.
+var errKeptNotExpired = errors.New("docker: the kept machine's record has not expired")
+
+// keptLstat is os.Lstat for the expiry delete's look at a folder whose record is missing; a test injects an error.
+var keptLstat = os.Lstat
+
+// errKeptRecordMissing is an expiry-driven delete of a folder whose record is gone while the folder is not: the
+// state a failed tools update can leave, which is the sweep's to recover, never a deadline's to remove.
+var errKeptRecordMissing = errors.New("docker: the kept machine folder has no record")
+
+// removeKeptIfExpired is removeKept for a delete the organisation started because the machine expired: under
+// the machine's lock it reads the record's own deadline and removes the folder only if that has passed with
+// no session holding the machine. The organisation's view of the deadline may be older than a stop the Mac
+// has written since. No folder is false with no error, as removeKept; a folder whose record is gone or
+// belongs to another machine is left to the sweep, which reads the same record.
+func (c *MacVMConfig) removeKeptIfExpired(dir string, id uuid.UUID) (bool, error) {
+	unlock, err := macvm.LockKeptWait(dir, c.lockWaitOr())
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	rec, err := macvm.ReadKept(dir, id.String())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// A missing record is not a missing folder: a failed tools update leaves a folder with no record beside
+		// the person's old disk moved aside, which nothing here may remove.
+		if _, serr := keptLstat(dir); errors.Is(serr, fs.ErrNotExist) {
+			if rerr := os.Remove(dir + ".lock"); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				return false, rerr
+			}
+			return false, nil // the sweep removed it first; only the lock file the wait made goes
+		} else if serr != nil {
+			return false, serr
+		}
+		return false, errKeptRecordMissing
+	case err != nil:
+		return false, err
+	case c.keptHeldBy(rec) != "" || !keptExpired(rec, c.keptClock()):
+		return false, errKeptNotExpired
+	}
+	return removeKeptHeld(dir)
+}
+
+// DeleteExpiredKeptMachine is DeleteKeptMachine for the organisation's expiry-driven delete (kept_machine's
+// delete_expired): it removes the machine only if its own record, read under the lock, has expired. A machine
+// whose record holds a later deadline, or that a session holds, is refused and left whole. by is who asked, for
+// the log.
+func (d *Driver) DeleteExpiredKeptMachine(_ context.Context, id uuid.UUID, by string) (string, error) {
+	c := d.macVMConfig()
+	if c == nil {
+		return "", errors.New("docker: this runner keeps no machines")
+	}
+	dir := c.keptDir(id)
+	_, err := macvm.ReadKept(dir, id.String())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Only a directory that is not there is absent; any other stat error says nothing about it, and the
+		// organisation keeps its row on an error.
+		switch _, serr := keptLstat(dir); {
+		case serr == nil:
+			return "", runnerwire.Refuse("docker: kept machine %s has a folder but no record on this Mac, which an expiry does not remove", id) // nothing was removed
+		case !errors.Is(serr, fs.ErrNotExist):
+			return "", fmt.Errorf("docker: kept machine %s: %w", id, serr)
+		}
+		return runnerwire.KeptMachineAlreadyAbsent, nil
+	case errors.Is(err, macvm.ErrKeptIDMismatch):
+		return runnerwire.KeptMachineAlreadyAbsent, nil
+	case err != nil:
+		return "", fmt.Errorf("docker: kept machine %s: %w", id, err)
+	}
+	gone, err := c.removeKeptIfExpired(dir, id)
+	switch {
+	case errors.Is(err, macvm.ErrKeptLocked):
+		return "", runnerwire.Refuse("docker: kept machine %s is running on this Mac", id) // nothing was removed
+	case errors.Is(err, errKeptRecordMissing):
+		return "", runnerwire.Refuse("docker: kept machine %s has a folder but no record on this Mac, which an expiry does not remove", id) // nothing was removed
+	case errors.Is(err, errKeptNotExpired):
+		return "", runnerwire.Refuse("docker: kept machine %s has not expired on this Mac: its record holds a later deadline", id) // nothing was removed
+	case err != nil:
+		return "", fmt.Errorf("docker: delete expired kept machine %s: %w", id, err)
+	case !gone:
+		return runnerwire.KeptMachineAlreadyAbsent, nil
+	}
+	slog.Info("docker: deleted an expired kept machine", slog.String("machine_id", id.String()), slog.String("by", by))
+	c.changed()
+	return runnerwire.KeptMachineDeleted, nil
+}
+
 // keptFolder is one kept machine folder on this Mac, with its record.
 type keptFolder struct {
 	dir string
@@ -710,7 +799,7 @@ func (d *Driver) KeptMachines() (*runnerwire.MacVMKept, error) {
 		// use even once its run folder is gone: until recoverKept clears it and writes the new deadline, its
 		// expiry is the boot's, and the organisation must not keep or expire the machine by it.
 		run := cmp.Or(runs[f.rec.ID], f.rec.ActiveRun)
-		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt}
+		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt, StopRunID: f.rec.LastStopRun}
 		out.WorstBytes += keptWorstOf(f.dir)
 		out.AllocatedBytes += n
 		out.Machines = append(out.Machines, m)

@@ -202,3 +202,51 @@ func TestPG_AuditFilterDataContainsAgreesWithGo(t *testing.T) {
 		}
 	}
 }
+
+// DataContainsAny is an OR of `data @> $n::jsonb` on the server and dataContainsAny in Go; both pick the same
+// rows. The read is newest first by seq, so of two rows written in the same instant the one written last
+// comes first, whichever way round they were written.
+func TestPG_AuditFilterDataContainsAnyAgreesWithGoAndFollowsSeq(t *testing.T) {
+	pool := throwawayDatabase(t)
+	ctx := context.Background()
+	testutil.MarkSchemaUpgraded(t, pool)
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pg := store.NewPG(pool)
+	at := time.Now().UTC().Truncate(time.Second)
+	insert := func(slot string) uuid.UUID {
+		ev := types.AuditEvent{
+			ID: uuid.New(), Time: at, ActorType: types.ActorSystem, Actor: "scim", Action: "scim.user.write",
+			Outcome: "success", Data: []byte(`{"slot":"` + slot + `"}`),
+		}
+		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
+			t.Fatalf("seed %s: %v", slot, err)
+		}
+		return ev.ID
+	}
+	bearer := store.AuditFilter{ActionPrefix: "scim.", DataContainsAny: `[{"slot":"primary"},{"slot":"next"}]`}
+	for _, order := range [][]string{{"primary", "next"}, {"next", "primary"}} {
+		first, second := insert(order[0]), insert(order[1])
+		insert("sweeper")
+		recent, err := pg.QueryRecentAuditEvents(ctx, 0)
+		if err != nil {
+			t.Fatalf("unfiltered feed: %v", err)
+		}
+		sqlIDs, goIDs := pagedIDs(t, pg, nil, bearer), eventIDs(bearer.Keep(recent))
+		if !slices.Equal(sqlIDs, goIDs) {
+			t.Fatalf("order %v: SQL %v, Go %v, want equal", order, sqlIDs, goIDs)
+		}
+		// Every row of the two orders so far is a bearer row but the sweeper's; the newest is the one written last.
+		if len(sqlIDs) == 0 || sqlIDs[0] != second.String() {
+			t.Errorf("order %v: newest bearer row %v, want the one written last %s (first written %s)", order, sqlIDs, second, first)
+		}
+	}
+	for filter, n := range map[string]int{`[{"slot":"sweeper"}]`: 2, `[{"slot":"primary"},{"slot":"sweeper"}]`: 4, `[]`: 0, `{"slot":"primary"}`: 0, `[1,"x"]`: 0} {
+		f := store.AuditFilter{DataContainsAny: filter}
+		sqlIDs := pagedIDs(t, pg, nil, f)
+		if len(sqlIDs) != n {
+			t.Errorf("DataContainsAny %s: %d rows, want %d", filter, len(sqlIDs), n)
+		}
+	}
+}

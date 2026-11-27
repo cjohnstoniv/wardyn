@@ -9,6 +9,8 @@ package auditreceipt
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"regexp"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -34,6 +36,28 @@ type Row struct {
 	// PrevHash is nil for the chain's first row; RowHash is the stored hash.
 	PrevHash *string `json:"prev_hash"`
 	RowHash  *string `json:"row_hash"`
+	// HashFormat is the formula the row was hashed with: absent or 1 is the original, 2 is salted. HashSalt is
+	// a format 2 row's per-row secret salt; an export or receipt line of a row whose content was withheld
+	// carries none, and a row without one cannot be re-hashed.
+	HashFormat int     `json:"hash_format,omitempty"`
+	HashSalt   *string `json:"hash_salt,omitempty"`
+}
+
+var saltPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// RowHashOf is the row's hash under its own format. It errors on a format other than absent, 1 or 2, and on
+// a format 2 row whose salt is missing or is not 64 lowercase hex. The error never carries the salt.
+func RowHashOf(r Row) (string, error) {
+	switch r.HashFormat {
+	case 0, 1:
+		return RowHash(r), nil
+	case 2:
+		if r.HashSalt == nil || !saltPattern.MatchString(*r.HashSalt) {
+			return "", errors.New("a format 2 row needs a hash_salt of 64 lowercase hex characters")
+		}
+		return RowHash(r), nil
+	}
+	return "", errors.New("hash_format must be 1 or 2")
 }
 
 // HashInput is the exact byte string audit_row_hash (migration 0047) feeds to sha256:
@@ -43,7 +67,14 @@ type Row struct {
 //
 // jsonb prints an array as its elements joined by ", " inside brackets, a text element as a JSON string, a
 // NULL element as null, and a jsonb element as its own text.
+//
+// A format 2 row (audit_row_hash_v2) puts the two strings "v2" and its salt first in the array. A format
+// outside absent, 1 and 2, or a format 2 row without a usable salt, has no hash input: HashInput returns nil
+// and RowHash returns "" (RowHashOf says why).
 func HashInput(r Row) []byte {
+	if r.HashFormat > 2 || r.HashFormat < 0 {
+		return nil
+	}
 	b := make([]byte, 0, 256)
 	if r.PrevHash != nil {
 		b = append(b, *r.PrevHash...)
@@ -53,8 +84,15 @@ func HashInput(r Row) []byte {
 		runID = r.RunID.String()
 	}
 	b = append(b, '[')
-	for i, s := range []*string{ptr(r.ID.String()), ptr(strconv.FormatInt(r.TimeUS, 10)), &runID,
-		&r.ActorType, &r.Actor, &r.Action, r.Target, &r.Outcome, r.SourceIP} {
+	fields := []*string{ptr(r.ID.String()), ptr(strconv.FormatInt(r.TimeUS, 10)), &runID,
+		&r.ActorType, &r.Actor, &r.Action, r.Target, &r.Outcome, r.SourceIP}
+	if r.HashFormat == 2 {
+		if r.HashSalt == nil || !saltPattern.MatchString(*r.HashSalt) {
+			return nil
+		}
+		fields = append([]*string{ptr("v2"), r.HashSalt}, fields...)
+	}
+	for i, s := range fields {
 		if i > 0 {
 			b = append(b, ", "...)
 		}
@@ -71,7 +109,11 @@ func HashInput(r Row) []byte {
 
 // RowHash is audit_row_hash in Go: lowercase hex sha256 of HashInput.
 func RowHash(r Row) string {
-	sum := sha256.Sum256(HashInput(r))
+	in := HashInput(r)
+	if in == nil {
+		return ""
+	}
+	sum := sha256.Sum256(in)
 	return hex.EncodeToString(sum[:])
 }
 

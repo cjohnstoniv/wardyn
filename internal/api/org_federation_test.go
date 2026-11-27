@@ -137,6 +137,7 @@ func TestCreateRunGateRefusesBeforeTheStore(t *testing.T) {
 // or a listed one that stops calling the gate, fails here.
 func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	wantGated := []string{
+		"assistant_run.go:assistantNewRun",
 		"harnesscred.go:launchHarnessLoginRun",
 		"run_queue.go:answer",
 		"runs.go:handleCreateRun",

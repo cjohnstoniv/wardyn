@@ -278,6 +278,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	cfg.RunToken = id.Token
 	freshJTI := id.JTI
+	s.recordRevivedSecretFacts(ctx, run, cfg, freshJTI)
 	cfgJSON, rerr := encodeRevivedConfig(ctx, cfg) // loaded as the new proxy will load it, before the claim
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -545,7 +546,7 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
 		return nil, nil, rerr
 	}
-	return cfg, old, s.reviveModelListRunnerRefusal(run, cfg)
+	return cfg, old, s.reviveProxySettingRunnerRefusal(run, cfg)
 }
 
 // rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.

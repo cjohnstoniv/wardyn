@@ -764,3 +764,44 @@ func TestUserView_WritesOnlyTheCurrentAuditAction(t *testing.T) {
 		assertSingleEmit(t, audit.rows, true)
 	})
 }
+
+// TestMemberMode_AssistantAvailabilityIsAMemberRead: an admin viewing as a member may ask whether the
+// assistant is available, as any member may, and is refused the settings behind it as a member is.
+func TestMemberMode_AssistantAvailabilityIsAMemberRead(t *testing.T) {
+	srv, _ := memberModeServer(t)
+	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/me/assistant?purpose=review", on, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"off"`) {
+		t.Fatalf("GET /me/assistant in member mode = %d %s, want 200 off", w.Code, w.Body.String())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		w := doSSO(t, srv, method, "/api/v1/assistant/settings", on, "{}")
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "requires admin role") {
+			t.Errorf("%s /assistant/settings in member mode = %d %s, want the admin-role refusal", method, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestMemberMode_AssistantSessionsAreAMemberRoute: an admin viewing as a member reaches the session routes as any
+// member does. None answers the admin-role refusal; an id that is not theirs answers 404, as a missing one does.
+func TestMemberMode_AssistantSessionsAreAMemberRoute(t *testing.T) {
+	srv, _ := memberModeServer(t)
+	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+	session := "/api/v1/assistant/sessions/" + uuid.NewString()
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/assistant/preview", `{"purpose":"compose","target":{"kind":"template"}}`},
+		{http.MethodPost, "/api/v1/assistant/sessions", `{"purpose":"compose","target":{"kind":"template"},"preview_digest":"x"}`},
+		{http.MethodPost, session + "/messages", `{"text":"hello"}`},
+		{http.MethodPost, session + "/edits", `{"draft":{},"changed":[]}`},
+		{http.MethodPost, session + "/build-files/confirm", `{"preview_digest":"x"}`},
+		{http.MethodGet, session + "/events", ""},
+		{http.MethodDelete, session, ""},
+		{http.MethodPost, "/api/v1/assistant/checks", `{"target_kind":"run","draft":{}}`},
+		{http.MethodPost, "/api/v1/assistant/replay", `{"target_kind":"run","draft":{}}`},
+	} {
+		w := doSSO(t, srv, c.method, c.path, on, c.body)
+		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			t.Errorf("%s %s in member mode = %d %s, want a member's answer", c.method, c.path, w.Code, w.Body.String())
+		}
+	}
+}

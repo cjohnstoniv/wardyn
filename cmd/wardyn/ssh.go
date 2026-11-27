@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -33,6 +34,8 @@ type sshHealthz struct {
 	HostKeyFingerprint string   `json:"host_key_fingerprint"`
 	ProxyCommand       string   `json:"proxy_command"`
 	Channels           []string `json:"channels"` // absent on a server older than WARDYN_SSH_CHANNELS: all four
+	Tickets            bool     `json:"tickets"`  // WARDYN_SSH_TICKETS on: GET /runs/{id}/ssh takes a single-use ticket
+	HostKey            string   `json:"host_key"` // with tickets: the gateway's public host key, an authorized_keys line
 }
 
 // sshCmd returns the cobra command for `wardyn run ssh <run-id>`. It is a
@@ -44,6 +47,7 @@ func sshCmd(client clientFn) *cobra.Command {
 	var doConfig bool
 	var doJSON bool
 	var advertisedProxy bool
+	var forceKey bool
 	cmd := &cobra.Command{
 		Use:   "ssh <run-id>",
 		Short: "Connect to a running sandbox over the SSH gateway",
@@ -66,6 +70,14 @@ outputs carry it. Connecting runs that command on this computer, so it needs
 The control plane URL must be https:// or a loopback address. A plain-http
 server elsewhere is refused before /healthz is read, because the gateway
 address, host key fingerprint and ProxyCommand all come from it.
+
+When the deployment turns SSH tickets on (WARDYN_SSH_TICKETS), connecting needs
+no registered key: this command takes a 30-second single-use ticket for the one
+connection, and ssh reaches the run through 'wardyn run ssh-proxy' over the
+HTTPS API, with the gateway's host key pinned in ~/.wardyn/known_hosts. The
+ticket is never on the command line, in a URL or in a file, and an advertised
+ProxyCommand is not run. --print, --config and --json still print the key form.
+--key connects with your registered key instead.
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -78,13 +90,14 @@ address, host key fingerprint and ProxyCommand all come from it.
 			if modes > 1 {
 				return errors.New("ssh: --print, --config and --json are mutually exclusive")
 			}
-			return runSSH(cmd, client(), args[0], sshModes{doPrint, doConfig, doJSON, advertisedProxy})
+			return runSSH(cmd, client(), args[0], sshModes{doPrint, doConfig, doJSON, advertisedProxy, forceKey})
 		},
 	}
 	cmd.Flags().BoolVar(&doPrint, "print", false, "print the ssh command instead of running it")
 	cmd.Flags().BoolVar(&doConfig, "config", false, "print an ssh_config Host block instead of running it")
 	cmd.Flags().BoolVar(&doJSON, "json", false, "print the SSH target as JSON instead of connecting (host, port, username, host_key_fingerprint, proxy_command, command)")
 	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
+	cmd.Flags().BoolVar(&forceKey, "key", false, "connect with your registered SSH key even when the deployment offers SSH tickets")
 	return cmd
 }
 
@@ -92,6 +105,8 @@ address, host key fingerprint and ProxyCommand all come from it.
 type sshGateway struct {
 	host, port, fingerprint, proxy string
 	channels                       []string // the kinds served; nil = all four
+	tickets                        bool     // the ticket door is on (ssh_proxy.go)
+	hostKey                        string   // with tickets: the host key line /healthz publishes
 }
 
 // errSSHGatewayOff is /healthz saying the operator has not turned SSH on.
@@ -132,7 +147,8 @@ func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
 	if err := cliutil.CheckSSHProxyCommand(proxy); err != nil {
 		return sshGateway{}, fmt.Errorf("ssh: this deployment advertises a ProxyCommand that %v, so it is not shown or run; ask your operator", err)
 	}
-	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy, channels: health.SSH.Channels}, nil
+	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy, channels: health.SSH.Channels,
+		tickets: health.SSH.Tickets, hostKey: health.SSH.HostKey}, nil
 }
 
 // checkGatewayAddr refuses an advertised address that is not a DNS name or IP
@@ -172,7 +188,7 @@ type sshTarget struct {
 // sshModes is the command's flags: at most one of print, config and json, and
 // advertisedProxy, the consent to run a server-supplied ProxyCommand.
 type sshModes struct {
-	print, config, json, advertisedProxy bool
+	print, config, json, advertisedProxy, key bool
 }
 
 func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
@@ -242,6 +258,10 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	if err := refuseSSHChannelsOff("ssh", gw); err != nil {
 		return err
 	}
+	if gw.tickets && !m.key {
+		// The ticket path reaches the door over the HTTPS API: no key, and the advertised ProxyCommand is not run.
+		return runTicketSSH(cmd.Context(), c, gw, "ssh", runID, url.Values{"purpose": {sshTicketPurposes["ssh"]}}, nil, nil)
+	}
 	if proxy != "" && !m.advertisedProxy {
 		return fmt.Errorf("ssh: this deployment advertises a ProxyCommand, which ssh would run on this computer:\n  %s\n"+
 			"run again with --advertised-proxy to connect through it, or use --print or --config to copy it", proxy)
@@ -284,6 +304,7 @@ func refuseSSHChannelsOff(verb string, gw sshGateway) error {
 type sshAccess struct {
 	gw       sshGateway
 	identity string // the CLI's own key file when it exists, else ""
+	ticket   bool   // the ticket path: no key, a single-use ticket per connection (ssh_proxy.go)
 }
 
 // resolveSSHAccess is the shared front door of exec, forward and editor: a run
@@ -291,6 +312,14 @@ type sshAccess struct {
 // Each refusal is one line. It never creates a key: that is `ssh-key ensure`,
 // which puts a long-lived private key on this computer and so is the user's call.
 func resolveSSHAccess(ctx context.Context, c *sdk.Client, verb, runID string, advertisedProxy bool) (sshAccess, error) {
+	return resolveSSHAccessKey(ctx, c, verb, runID, advertisedProxy, false)
+}
+
+// resolveSSHAccessKey is resolveSSHAccess with forceKey (--key). With SSH tickets
+// on and no forceKey it takes the ticket path instead: the run id, plain-http,
+// gateway and channel checks still run; the ProxyCommand consent and the key
+// listing do not.
+func resolveSSHAccessKey(ctx context.Context, c *sdk.Client, verb, runID string, advertisedProxy, forceKey bool) (sshAccess, error) {
 	if _, err := parseID("run", runID); err != nil {
 		return sshAccess{}, err
 	}
@@ -306,6 +335,10 @@ func resolveSSHAccess(ctx context.Context, c *sdk.Client, verb, runID string, ad
 	}
 	if err := refuseSSHChannelsOff(verb, gw); err != nil {
 		return sshAccess{}, err
+	}
+	if gw.tickets && !forceKey {
+		// The ticket path dials the HTTPS API, never the advertised ProxyCommand.
+		return sshAccess{gw: gw, ticket: true}, nil
 	}
 	if gw.proxy != "" && !advertisedProxy {
 		if verb == "editor" {
@@ -378,16 +411,25 @@ func localSSHKey() string {
 }
 
 // runSSHBinary execs ssh(1) on the terminal and passes its exit status through.
-func runSSHBinary(ctx context.Context, args []string) error {
+func runSSHBinary(ctx context.Context, args []string) error { return runSSHBinaryEnv(ctx, args, nil) }
+
+// runSSHChild runs the ssh(1) child; tests replace it to read the command it was given.
+var runSSHChild = (*exec.Cmd).Run
+
+// runSSHBinaryEnv is runSSHBinary with extra added to ssh(1)'s environment after
+// the scrub: the ticket path's WARDYN_SSH_TICKET, which this process never sets
+// in its own environment.
+func runSSHBinaryEnv(ctx context.Context, args, extra []string) error {
 	sub := exec.CommandContext(ctx, "ssh", args...)
 	// ssh(1) is a third-party binary that runs the operator's own
 	// ProxyCommand/LocalCommand children and can SendEnv to the remote host.
 	// It has no use for the admin bearer, the age master key or an API key.
 	sub.Env = cliutil.ScrubChildEnv(os.Environ())
+	sub.Env = append(sub.Env, extra...)
 	sub.Stdin = os.Stdin
 	sub.Stdout = os.Stdout
 	sub.Stderr = os.Stderr
-	if err := sub.Run(); err != nil {
+	if err := runSSHChild(sub); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			// docs/CI.md documents ssh's exit status passing straight through

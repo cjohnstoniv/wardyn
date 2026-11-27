@@ -8,7 +8,8 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 
 - `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks work on `<kind>/<issue#>-<slug>` branches, not on `main`, so a filtered trigger gave a stacked PR no checks at all.
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
-- It has no `release/**`: `release.yml` accepts CI by tree, and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there.
+- It has no `release/**`: `release.yml` accepts CI by tree, and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs DCO and gitleaks there, and, with the repository variable `WARDYN_RELEASE_GO_CACHE` set, warms and prunes the Go caches a pull request into that branch restores.
+- Code scanning is `codeql.yml` (CodeQL advanced setup): Go, JavaScript and TypeScript, Python and the workflows, on every push to `main` and `release/**`, on pull requests into them, weekly and on dispatch. Every job skips until the repository variable `WARDYN_CODEQL_ADVANCED` is `true`. A pull request analysis reports only the lines it changed, so a release is judged on a push or dispatch analysis of its exact tree.
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
 - [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then a throwaway Postgres (pool guard, `localhost` DSN).
 - `make candidate-preflight` vets release candidates.
@@ -18,6 +19,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 | `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
 | internal/api's tests build without DWARF | `GOFLAGS` on each step that builds them, [`scripts/ci-api-prebuild.sh`](../scripts/ci-api-prebuild.sh) | A step that reuses a prebuild sets the same `GOFLAGS`, since with any other value it compiles the package again; each prebuild's notice records the compile's largest single process |
+| internal/api runs as three slices | WARDYN_TEST_REPORT_SPLIT_BIN on the go job's prebuild and test steps and _PKG on the test step, [scripts/test-report.sh](../scripts/test-report.sh), [scripts/lib/test_slices.py](../scripts/lib/test_slices.py) | The slices run the prebuilt binary; every test it lists is picked by exactly one slice and must report a result there, or the leg fails |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files, and `WARDYN_TRUSTED_CA_PATH` to a stand-in for the mounted `/etc/wardyn-trusted-ca.pem`.
@@ -42,6 +44,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `stop-early-notices` | – | pending | pending | 10 |
 | `stop-early-diagrams` | – | pending | pending | 10 |
 | `stop-early-dco` | – | pending | pending | 10 |
+| `cross-os` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 40 |
 | `conformance-k8s-agent-sandbox` (not required; train and main only) | – | pending | pending | 109 |
@@ -49,12 +52,13 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `macos` (not required) | – | pending | pending | 30 |
 | `macos-xcode-27` (not required) | – | pending | pending | 10 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
-| `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
+| `test-pg-shard` (api-1, api-2, store, race-store, race-api) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
-| `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
+| `staticcheck` (tagless, docker, docker,k8s matrix; checks `staticcheck (staticcheck-…)`) | – | pending | pending | 40 |
+| `gates-staticcheck` (aggregator, check `gates (staticcheck)`) | – | pending | pending | 10 |
 | `helm-install-test` | – | pending | pending | 20 |
 | `vm` | – | pending | pending | 30 |
 | `trivy-wardynd` (check `trivy (wardynd)`) | 50 | 2.0 | 2.5 | 40 |
@@ -82,6 +86,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `runner-units` | – | pending | pending | 15 |
 | `ci-ran` | – | pending | pending | 10 |
 | `train-suites` | – | pending | pending | 180 |
+| `mixed-version` | – | pending | pending | 50 |
 | `train-gate` | – | pending | pending | 10 |
 | `go-modules` | – | pending | pending | 15 |
 | `go-gate-tools` | – | pending | pending | 15 |
@@ -111,10 +116,12 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
 - Five jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `migration-merge-check` and `published-image-scan`.
-- `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk` and `ssh-editors-live` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green.
+- `ai-gateway-kind`, `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk` and `ssh-editors-live` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
-- A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
-- On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
+- A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled. A call from another workflow gets a group of its own.
+- On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`; `publish=true` only when the head commit has the line Candidate: v<version> matching its own version, otherwise false) on the head and waits. It names its dispatch in the run title (`[ci-<run>-<attempt>]`) and waits on that run only; `train-gate` needs that run green. A call of the nightly would fail on a fork's read-only token, so `train-suites` dispatches it; the one job that does call a workflow is `mixed-version`, below.
+- [`lane-check.yml`](../.github/workflows/lane-check.yml) runs go (lint), go (unit) and the store and race Postgres shards on a dispatched `lane/*` branch. Its steps are copies of `ci.yml`'s (guard 35). It needs its file on `main` and on the branch.
+- On the same heads, `mixed-version` calls [`mixed-version.yml`](../.github/workflows/mixed-version.yml): the published 0.10.1 wardynd runs as an old replica beside this tree's in one kind cluster, and the issuer-portal activation barrier is checked. `train-gate` needs it. A call runs from the head, before its file is on `main`.
 - The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
 - [`overlay-proofs.yml`](../.github/workflows/overlay-proofs.yml) runs [`scripts/overlay-proof.sh`](../scripts/overlay-proof.sh) revert proofs; each must exit 1 with its named FAIL. Never dispatch it while a train attempt 1 is queued.
   - Dispatch it on the bundle branch `proofs/<branch>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
@@ -226,8 +233,8 @@ So:
 
 - `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the ten `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
 - `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. A required check.
-- `build` needs `go-lint`, `image-scope` and every `go` leg and runs with `if: always()`.
-  - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
+- `build` needs `go-lint`, `image-scope`, `cross-os` and every `go` leg and runs with `if: always()`.
+  - Its first step fails unless every leg passed, and its second unless `cross-os` (the Windows and macOS builds and vets, which need only the source) passed or skipped with `backend == 'false'`, so the `build` context is green only when all four legs, the cross builds and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
   - A failed or missing classification runs the full suites in the legs and requires the union.
 - `ui` always runs and narrows only vitest (above).
@@ -257,9 +264,9 @@ So:
 - The `agent-run --selftest` step stays in the `agent-aws-sso` and `agent-codex-cli` scans, so it runs whenever their Dockerfile or `agent-run` scripts change.
 - [`image_scope_guard_test.go`](../cmd/wardynd/image_scope_guard_test.go) plants every input it derives from the Dockerfiles and `go list`, and fails when the script says "skip".
 
-**Start order under the 20-job cap.**
+**Start order under the 40-job cap.**
 
-- The account runs 20 jobs at once and a change to Go asks for about 35, so some wait, and GitHub picks which among the jobs that became ready together.
+- The account runs 40 jobs at once across all of its runs, and a change to Go asks for about 35, so when runs overlap some wait, and GitHub picks which among the jobs that became ready together.
 - The long jobs (`go`, `ui`, `ui-e2e`, `helm-install-test`, both conformance jobs, `envbuild-integration`, `test-pg-shard`) need only `changes`.
 - The short ones (`gates`, `notices`, the `trivy` scans) also need `diagrams`, a 45-second job that starts with the run (the scans also need `image-scope`, which has no `needs` and so starts with it),
   - so they become ready about half a minute after the long jobs, which by then hold their runners, and share what is left.

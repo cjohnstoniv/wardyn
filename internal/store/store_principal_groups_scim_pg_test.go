@@ -8,6 +8,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -148,5 +149,73 @@ func TestPG_PrincipalGroups_ScimRemovalSkipsARecordThatIsNoList(t *testing.T) {
 	var kind string
 	if err := pool.QueryRow(ctx, `SELECT jsonb_typeof(groups) FROM principal_groups WHERE principal = 'sub-ann'`).Scan(&kind); err != nil || kind != "null" {
 		t.Fatalf("record groups are %q, %v; want JSON null left as it was", kind, err)
+	}
+}
+
+// The sweeper's batch is chosen among the configured issuer's people, and tenant when one is configured, before
+// its limit: a full batch's worth of earlier pending removals of another issuer or of another tenant under the
+// same issuer, whose identity ids sort first, does not hide the own or the legacy (no tenant recorded) ones. The
+// predicate is the one the API applies to a user by id: the issuer, and the tenant unless either side has none.
+func TestPG_PendingGroupRemovals_AreFilteredToTheIssuerAndTenantBeforeTheLimit(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now()
+	const issuer, otherIssuer, tenant, otherTenant = "https://idp.example", "https://idp.other.example", "tenant-a", "tenant-b"
+	grp, err := st.CreateScimGroup(ctx, "eng", "Engineering", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := func(id uuid.UUID, principal, iss, ten string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `INSERT INTO principal_identities (id, principal, issuer, tenant_id, email_lower) VALUES ($1, $2, $3, $4, $5)`,
+			id, principal, iss, ten, principal+"@corp.example"); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.StartGroupRemoval(ctx, grp.ID, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const limit = 50
+	var foreignTenant []uuid.UUID
+	for i := range limit + 10 {
+		id := uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", i))
+		if i%2 == 0 {
+			pending(id, fmt.Sprintf("sub-fi-%d", i), otherIssuer, tenant)
+		} else {
+			pending(id, fmt.Sprintf("sub-ft-%d", i), issuer, otherTenant)
+			foreignTenant = append(foreignTenant, id)
+		}
+	}
+	own := uuid.MustParse("ffffffff-ffff-4fff-8fff-fffffffffffe")
+	legacy := uuid.MustParse("ffffffff-ffff-4fff-8fff-ffffffffffff")
+	pending(own, "sub-own", issuer, tenant)
+	pending(legacy, "sub-legacy", issuer, "")
+
+	ids := func(issuer, tenant string) []uuid.UUID {
+		t.Helper()
+		got, err := st.PendingGroupRemovals(ctx, issuer, tenant, 0, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []uuid.UUID
+		for _, p := range got {
+			if p.GroupID != grp.ID {
+				t.Errorf("pending removal of group %v, want %v", p.GroupID, grp.ID)
+			}
+			out = append(out, p.IdentityID)
+		}
+		return out
+	}
+	if got := ids(issuer, tenant); !slices.Equal(got, []uuid.UUID{own, legacy}) {
+		t.Errorf("issuer and tenant configured: %v, want the own and the legacy row alone", got)
+	}
+	// With no tenant configured the tenant is not asked, as in the API: every row of the issuer is listed, none of another's.
+	want := append(slices.Clone(foreignTenant), own, legacy)
+	if got := ids(issuer, ""); len(got) != len(want) || !slices.Equal(got, want) {
+		t.Errorf("issuer alone: %d rows %v, want the issuer's %d", len(got), got, len(want))
+	}
+	if got := ids("https://idp.nobody.example", tenant); len(got) != 0 {
+		t.Errorf("an issuer with no people: %v", got)
 	}
 }

@@ -117,7 +117,8 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_lease.go", "Server.leaseRun", "endSandbox"}:                                                   {1, "unguarded: K11"},
 	{"internal/api/run_lost.go", "Server.stopLostSandbox", "endSandbox"}:                                             {1, "unguarded: K11"},
 	{"internal/api/run_agent_cut.go", "Server.copyBackCut", "cutAgent"}:                                              {1, guardNotReplaceable},
-	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "cutAgent"}:                                 {2, guardNotReplaceable},
+	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "cutAgent"}:                                 {1, guardNotReplaceable},
+	{"internal/api/run_folder_quiesce.go", "Server.quiesceRunnerRun", "cutAgent"}:                                    {1, guardNotReplaceable},
 	{"internal/api/run_contain.go", "Server.containCutItem", "cutAgent"}:                                             {1, guardNotReplaceable},
 	{"internal/api/run_contain_d1.go", "Server.d1LastCut", "cutAgent"}:                                               {1, guardNotReplaceable},
 	{"internal/api/run_kept_stop_forced.go", "Server.forceKeptStop", "cutAgent"}:                                     {1, guardNotReplaceable},
@@ -127,6 +128,13 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_tail_owner.go", "Server.tailFinalize", "finalizeRunEffects"}:                                  {1, "unguarded: K16"},
 	{"internal/api/runner_exits.go", "Server.applyRunnerExit", "finalizeRunEffects"}:                                 {1, "unguarded: K16"},
 	{"internal/api/runs_lifecycle.go", "Server.finalizeRunTailOrdered", "finalizeRunEffects"}:                        {1, "unguarded: K16"},
+}
+
+// releaseHeldSeed's stop of a held run whose task could not be released, in dispatchRun once the readback
+// confirmed: it adds no guard of its own, so it carries its wrapper's, read from stopSandboxOrAudit's row.
+func init() {
+	wrapper := destructiveCallCensus[destructiveSite{"internal/api/runs_lifecycle.go", "Server.stopSandboxOrAudit", "StopSandbox"}]
+	destructiveCallCensus[destructiveSite{"internal/api/run_held_seed.go", "Server.releaseHeldSeed", "stopSandboxOrAudit"}] = destructiveRow{1, wrapper.guard}
 }
 
 // destructiveCallSites counts each function's destructive references in files, keyed by their path.

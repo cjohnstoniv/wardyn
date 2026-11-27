@@ -603,6 +603,9 @@ type QueueStart struct {
 	// Binding, set for a custom resource's run, is the namespace binding its launch was authorised under:
 	// the start holds only while that binding exists (ErrWorkloadBindingGone).
 	Binding *uuid.UUID
+	// Containers are the run's extras with the start's image admission verdicts (types.AgentRun.Containers),
+	// written over the create's; nil leaves the stored row.
+	Containers []types.RunExtraContainer
 }
 
 // ErrRunTasksErased is StartQueuedRun's answer for a promoted run, not yet started, that its owner's
@@ -698,6 +701,20 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 	}
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: start queued run: %w", err)
+	}
+	if st.Containers != nil {
+		doc, err := json.Marshal(st.Containers)
+		if err != nil {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %w", err)
+		}
+		tag, err := q.Exec(ctx, `UPDATE run_containers SET containers = $2 WHERE run_id = $1`, id, doc)
+		if err != nil {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %d stored rows, want 1", tag.RowsAffected())
+		}
+		run.Containers = st.Containers
 	}
 	return run, true, nil
 }
@@ -806,21 +823,11 @@ func (s PG) SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map
 	})
 }
 
-// ExitQueuedRun moves a QUEUED run to a terminal state through LeaveRunQueue and, in the same
+// ExitQueuedRun moves a QUEUED run to a terminal state through LeaveRunQueueIn and, in the same
 // statement, writes the reason the queue ended it: status_detail ("queue: <token>") and the sentence
 // for failure_hint. false means another exit won first.
 func (s PG) ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, detail, hint string) (bool, error) {
-	var moved int
-	if err := s.Pool.QueryRow(ctx, `
-		WITH moved AS (
-			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
-			WHERE id=$1 AND state=$5 RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
-		SELECT count(*) FROM moved`,
-		id, string(to), detail, hint, string(types.RunQueued)).Scan(&moved); err != nil {
-		return false, fmt.Errorf("store: exit queued run: %w", err)
-	}
-	return moved > 0, nil
+	return LeaveRunQueueIn(ctx, s.Pool, id, to, QueueExit{Detail: detail, Hint: hint})
 }
 
 // cancelPoolQueue ends every run waiting for poolID as KILLED with the removal reason, deleting the
@@ -831,7 +838,8 @@ func cancelPoolQueue(ctx context.Context, q Querier, poolID uuid.UUID, detail, h
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
 			WHERE state=$5 AND id IN (SELECT run_id FROM run_queue WHERE pool_id=$1) RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id)
+		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id),
+		held AS (`+keptDriveHoldSQL+`)
 		SELECT id FROM moved`,
 		poolID, string(types.RunKilled), detail, hint, string(types.RunQueued))
 	if err != nil {

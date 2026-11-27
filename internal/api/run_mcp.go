@@ -6,9 +6,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -392,8 +390,7 @@ func mintMCPToken() (token, digest string) {
 	raw := make([]byte, 32)
 	_, _ = rand.Read(raw)
 	token = base64.RawURLEncoding.EncodeToString(raw)
-	sum := sha256.Sum256([]byte(token))
-	return token, hex.EncodeToString(sum[:])
+	return token, types.TokenDigest(token)
 }
 
 // reviveMCPBindings re-derives which harness reaches which MCP server from the

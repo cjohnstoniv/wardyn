@@ -36,8 +36,12 @@ const (
 	// PurposeProviderSignIn names a read for a custom endpoint provider's own sign-in: its client secret at the
 	// callback, and a person's stored sign-in to redeem or revoke it.
 	PurposeProviderSignIn Purpose = "provider-signin"
-	PurposeBranchList     Purpose = "branch-list"
-	PurposeStatus         Purpose = "status"
+	// PurposeServiceGrant names the mint's read of a provider service grant's client secret record.
+	PurposeServiceGrant Purpose = "service-grant"
+	PurposeBranchList   Purpose = "branch-list"
+	// PurposeBuildFiles names the read of the person's own Azure DevOps credential for a repository draft's root files.
+	PurposeBuildFiles Purpose = "build-files"
+	PurposeStatus     Purpose = "status"
 
 	// PurposeRunnerResident names a dispatch read of a runner_resident value,
 	// handed to the run's runner. Its site records the secret.read itself
@@ -219,6 +223,9 @@ func (a *audited) Revision(ctx context.Context, name string) (string, error) {
 	}
 	return r.Revision(ctx, name)
 }
+
+// RevisionRowOwner forwards the wrapped store's RevisionRow owner, or answers ok=false when it keeps none.
+func (a *audited) RevisionRowOwner() (string, bool) { return RevisionRowOf(a.inner) }
 
 // Generation and AdvanceGeneration forward the wrapped store's erase generation
 // (Generational), or answer ErrNoGeneration. Not audited: neither reads a value.

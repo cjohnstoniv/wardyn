@@ -173,6 +173,9 @@ type metrics struct {
 
 	// queueHist is how long runs waited in a runner pool's queue, by how they left it (metrics_queue.go).
 	queueHist queueWaitHist
+
+	// latency is the route, start-phase and egress-decision histograms (metrics_latency.go), each behind its own lock.
+	latency latencyHists
 }
 
 // startWaited records one stretch a starting sandbox spent on one reason.
@@ -403,8 +406,9 @@ const (
 )
 
 // isPolicyDeny reports whether an egress.Deny with this rule_source is a denial
-// by policy — the thing wardyn_egress_denies_total's HELP string promises and
-// the only thing an operator alerting on that series wants to be paged for.
+// by policy or a built-in guard — the filter wardyn_egress_denies_total's HELP string
+// names (network faults, credential reauthentication timeouts and dropped-decision
+// summaries are left out of the count) and the only thing an operator alerting on that series wants to be paged for.
 //
 // Exclusion, not an allowlist, on purpose: the policy/guard sources are open-
 // ended (policy, approval:<id>, builtin:private-ip, policy:tool-deny,
@@ -471,7 +475,7 @@ func (m *metrics) write(w io.Writer) {
 	// to describe the labels the series actually has (none), rather than
 	// splitting it into {reason=...}, which stays a separate, owner-gated
 	// change (the filed alternative in M2-canon-sheet.md §2/§6b).
-	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny (proxy decision ingest). Unlabeled: does not break down by reason.\n"+
+	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions denied by policy or a built-in guard: ingested decision=deny rows, less network faults, credential reauthentication timeouts and dropped-decision summaries. Unlabeled: does not break down by reason.\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	m.writeModelTokens(w)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
@@ -535,6 +539,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) MetricsText(ctx context.Context) []byte {
 	var body bytes.Buffer
 	s.metrics.write(&body)
+	s.metrics.writeLatency(&body)
+	s.cfg.PortalRefreshFailures.write(&body)
 	s.writeHealthGauges(ctx, &body)
 	s.writeFleetGauges(ctx, &body)
 	s.writeQueueGauges(ctx, &body)
@@ -547,8 +553,8 @@ func (s *Server) MetricsText(ctx context.Context) []byte {
 //
 // They exist because a store outage makes every counter above simply stop
 // moving, which a scrape cannot tell apart from a quiet cluster: wardyn_store_up
-// is the same Postgres ping /readyz makes (0 = the pod is out of the Service's
-// endpoints and runs are failing their durable writes), and
+// is the same Postgres ping /readyz makes (0 = runs are failing their durable writes, and a pod whose
+// readiness reads /readyz is out of the Service's endpoints), and
 // wardyn_audit_spool_lines is the backlog those failed writes are spooling to
 // disk. A spool that grows and never drains back to 0 is the fallback doing
 // its job while the drain loop is not doing its own — invisible until now

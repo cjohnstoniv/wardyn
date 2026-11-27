@@ -5,12 +5,13 @@
 
 // The Launched screen's reads: the run by its id (the 201 carries only a state and
 // a sentence, so the queue is read from the run), kept fresh while it is still
-// starting or waiting, and the name and limit of the pool it waits for.
+// starting or waiting (polled, and read again at once on each event the run's stream sends), and the name and
+// limit of the pool it waits for.
 
 import * as React from "react";
 import { runs } from "../../../../lib/api/runs";
 import { runnerPools } from "../../../../lib/api/runner-pools";
-import { usePoll } from "../../../../lib/use-poll";
+import { PollPauseContext, usePoll } from "../../../../lib/use-poll";
 import { failureSentence } from "../../../wardyn/states";
 import type { LaunchedRun } from "./launched-model";
 
@@ -64,20 +65,24 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
   const [now, setNow] = React.useState(Date.now);
   const current = React.useRef(runId);
   current.current = runId;
+  const latest = React.useRef(0);
 
+  // A read a later one overtook answers for an older state: an event's read and a poll's can overlap.
   const read = React.useCallback(async () => {
+    const mine = ++latest.current;
+    const fresh = () => current.current === runId && mine === latest.current;
     try {
       const next = await runs.getRun(runId);
-      if (current.current !== runId) return;
+      if (!fresh()) return;
       setRun(next ?? null);
       setFailed(false);
     } catch (e) {
-      if (current.current === runId) {
+      if (fresh()) {
         setFailMessage(failureSentence(e));
         setFailed(true);
       }
     }
-    if (current.current === runId) setNow(Date.now());
+    if (fresh()) setNow(Date.now());
   }, [runId]);
 
   React.useEffect(() => {
@@ -87,6 +92,17 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
   usePoll(read, LAUNCHED_POLL_MS, !failed && !stillLaunching(run));
+
+  // While the run starts or waits, its event stream says when it changed, and the run is read at once instead of
+  // at the next poll. The poll above stays: the stream can be refused, dropped or capped, and a queued run's
+  // promotion sends no event. A console signed out mid-page holds the stream as it holds every poll, and signing
+  // back in opens it again.
+  const held = React.useContext(PollPauseContext);
+  const following = !held && !failed && run !== null && stillLaunching(run);
+  React.useEffect(() => {
+    if (!following) return;
+    return runs.followEvents(runId, () => void read());
+  }, [runId, following, read]);
 
   const pool = useWaitingPool(run?.queue?.pool_id);
 

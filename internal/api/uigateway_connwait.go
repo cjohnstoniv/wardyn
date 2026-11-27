@@ -5,10 +5,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +24,15 @@ import (
 // the transport hands the request a pooled connection or dials a new one; it never covers a dial or
 // a response. Fifteen seconds lets a slow but finite backlog drain before the refusal; the refusal
 // itself is unchanged.
-var uiConnWait = 15 * time.Second
+func uiConnWait() time.Duration { return time.Duration(uiConnWaitNanos.Load()) }
+
+// uiConnWaitNanos holds uiConnWait atomically, so a test can shorten it while an earlier test's relay goroutines
+// still read it (setUIConnWait).
+var uiConnWaitNanos = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(15 * time.Second))
+	return &v
+}()
 
 var uiConnCapMsg = fmt.Sprintf("too many open UI connections for this run (max %d) — close a tab and retry", maxUIConnsPerRun)
 
@@ -38,16 +48,25 @@ type uiConnWaiter struct {
 	timer     *time.Timer
 	base      context.Context
 	cancel    context.CancelFunc
+	// end is the wait's own end, its start plus uiConnWait; dispatch is set when an issuer portal's request
+	// reaches its dispatch time first, and the timer fires then.
+	end      time.Time
+	dispatch bool
 }
 
-// expire answers the connection-cap 503 and cancels the request, unless a connection was delivered.
+// expire answers the connection-cap 503, or at an issuer portal's dispatch time the dispatch 503, and cancels
+// the request, unless a connection was delivered.
 func (w *uiConnWaiter) expire() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.delivered {
 		return
 	}
-	_ = uiFail(w.base, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
+	if w.dispatch {
+		_ = uiDispatchRefusal(w.base)
+	} else {
+		_ = uiFail(w.base, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
+	}
 	w.cancel()
 }
 
@@ -61,15 +80,43 @@ func (w *uiConnWaiter) done() {
 
 // serveUIRelay relays r, answering the connection-cap 503 if no connection is in hand within
 // uiConnWait. r's context carries the relay's dial-error box.
+//
+// An issuer portal's request (uiDispatchFrom) goes out on the single-use proxy (uiPortalProxy). It is refused
+// before the hand-off at or after its dispatch time, and its wait also ends then, with the dispatch 503.
 func (s *Server) serveUIRelay(w http.ResponseWriter, r *http.Request) {
 	base, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	wait := &uiConnWaiter{base: base, cancel: cancel}
-	wait.timer = time.AfterFunc(uiConnWait, wait.expire)
+	every := uiConnWait()
+	wait := &uiConnWaiter{base: base, cancel: cancel, end: time.Now().Add(every)}
+	proxy := s.uiReverseProxy()
+	if d, ok := uiDispatchFrom(r.Context()); ok {
+		left := d.by.Sub(d.now())
+		if left <= 0 {
+			_ = uiDispatchRefusal(base)
+			uiErrorHandler(w, r, errDispatchPassed)
+			return
+		}
+		if left < every {
+			every, wait.dispatch = left, true
+		}
+		proxy = s.uiPortalProxy()
+	}
+	wait.timer = time.AfterFunc(every, wait.expire)
 	defer wait.done()
 	ctx := context.WithValue(base, uiConnWaitCtxKey{}, wait)
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { wait.done() }})
-	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
+	proxy.ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
+}
+
+// errDispatchPassed is a request refused before its hand-off, at or after its dispatch time.
+var errDispatchPassed = errors.New("the request's dispatch time passed before its hand-off")
+
+// uiConnWaitEnd is the end of ctx's connection wait (its start plus uiConnWait), or fallback without one.
+func uiConnWaitEnd(ctx context.Context, fallback time.Time) time.Time {
+	if wait, ok := ctx.Value(uiConnWaitCtxKey{}).(*uiConnWaiter); ok {
+		return wait.end
+	}
+	return fallback
 }
 
 // uiConnWaitDone ends the wait when the transport dials: the request has a connection slot.
@@ -99,13 +146,37 @@ func (c *uiConn) Close() error {
 // in-memory bound here (the single-replica control plane is a documented
 // constraint, docs/OPERATIONS.md).
 func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
+	release, ok, _ := s.tryUIConn(runID)
+	return release, ok
+}
+
+// uiSlotAfterIdleClose closes the shared pool's idle connections once and retries the run's slot. An idle pooled
+// connection holds its slot until it closes (uiIdleConnTimeout), so one app's idle pool could refuse another app
+// of the same run, or the run's desktop. The trade-off: it drops every run's idle connections, but only when a run
+// hits its cap, and an idle connection simply redials, so a run at its cap is never wedged by its own idle pool.
+// Not for an issuer portal's request, which must not wait on the close (uiIdleCloseAsync).
+func (s *Server) uiSlotAfterIdleClose(runID uuid.UUID) (func(), bool) {
+	tr, ok := s.uiReverseProxy().Transport.(*http.Transport)
+	if !ok {
+		return nil, false
+	}
+	tr.CloseIdleConnections() // each close releases its slot (uiConn.Close) before this returns
+	return s.acquireUIConn(runID)
+}
+
+// tryUIConn is acquireUIConn, and with the slots full also the channel the next release closes, taken under
+// the same uiConnsMu hold as the refusal, so a dial that waits on it misses no release (acquireUIConnBy).
+func (s *Server) tryUIConn(runID uuid.UUID) (func(), bool, <-chan struct{}) {
 	s.uiConnsMu.Lock()
 	defer s.uiConnsMu.Unlock()
 	if s.uiConns == nil {
 		s.uiConns = map[uuid.UUID]int{}
 	}
 	if s.uiConns[runID] >= maxUIConnsPerRun {
-		return nil, false
+		if s.uiDispatch.slotFreed == nil {
+			s.uiDispatch.slotFreed = make(chan struct{})
+		}
+		return nil, false, s.uiDispatch.slotFreed
 	}
 	s.uiConns[runID]++
 	var once sync.Once
@@ -113,11 +184,15 @@ func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
 		once.Do(func() {
 			s.uiConnsMu.Lock()
 			defer s.uiConnsMu.Unlock()
+			if freed := s.uiDispatch.slotFreed; freed != nil {
+				close(freed) // wakes every dial waiting for a slot (acquireUIConnBy)
+				s.uiDispatch.slotFreed = nil
+			}
 			if s.uiConns[runID] <= 1 {
 				delete(s.uiConns, runID)
 				return
 			}
 			s.uiConns[runID]--
 		})
-	}, true
+	}, true, nil
 }

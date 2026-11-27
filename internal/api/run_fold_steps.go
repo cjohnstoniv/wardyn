@@ -359,12 +359,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		advertised, f.placed.read = offered, true
 	}
 	f.placed.classes = advertised
-	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
+	enforced, source, raised, err := resolveConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
-	f.enforced, f.confinementDefault = enforced, source
+	f.enforced, f.confinementDefault, f.confinementRaised = enforced, source, raised
 	if f.mode == foldPreflight {
 		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
 	}
@@ -399,7 +399,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
 		return true
 	}
-	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
+	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil, includedHarnessIDs(*f.req))
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
@@ -576,7 +576,7 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	var refusal *runRefusal
-	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
+	f.innerWalls, refusal = agentRulesInnerWallsFor(*f.req, f.spec, f.harnesses, f.enforced, f.source)
 	return !refusal.write(s, f.w, f.r)
 }
 
@@ -664,7 +664,7 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second,
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), f.enforced, f.req.MachineKind, time.Duration(f.end.capSec)*time.Second,
 		runProxyAzure(f.mpChoice, f.harnessChoices), f.queued)
 	return !refused
 }
@@ -864,7 +864,7 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
 	in := placementInput{req: f.req, floor: confinementFloor(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: drives, driveRunner: driveRunner, noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: drives, driveRunner: driveRunner, driveIDs: driveIDsOf(f.drives), noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}

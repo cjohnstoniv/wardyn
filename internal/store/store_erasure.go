@@ -59,6 +59,20 @@ type PersonErasureStore interface {
 
 var _ PersonErasureStore = PG{}
 
+// RetainedRunErasureStore is what erasing a person's recordings reads once the run history retention sweep may
+// have deleted some of their runs: a recording outlives its run, and the run's tombstone keeps its creator until
+// the erasure has reached it.
+type RetainedRunErasureStore interface {
+	// PersonRunIDs lists the runs created_by createdBy: those still kept, and those the retention sweep deleted
+	// (by their tombstones). One statement reads both, so a run the sweep moves meanwhile is in one of the lists.
+	PersonRunIDs(ctx context.Context, createdBy string) (kept, deleted []uuid.UUID, err error)
+	// BlankRunTombstoneCreators empties created_by on the tombstones of runIDs that still name createdBy, keeping
+	// their unit, and returns how many it changed.
+	BlankRunTombstoneCreators(ctx context.Context, createdBy string, runIDs []uuid.UUID) (int, error)
+}
+
+var _ RetainedRunErasureStore = PG{}
+
 // PrincipalDirectoryStore answers who a name an admin typed is, from every place
 // a principal is recorded: the identity directory (principal_identities and its
 // aliases), the people an admin pre-created, API tokens and workspace owners.
@@ -184,6 +198,43 @@ func (s PG) RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID,
 	return ids, nil
 }
 
+func (s PG) PersonRunIDs(ctx context.Context, createdBy string) (kept, deleted []uuid.UUID, err error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, false FROM agent_runs WHERE created_by = $1
+		UNION ALL SELECT run_id, true FROM run_history_tombstones WHERE created_by = $1 ORDER BY 1`, createdBy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: list a person's kept and deleted runs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var gone bool
+		if err := rows.Scan(&id, &gone); err != nil {
+			return nil, nil, fmt.Errorf("store: list a person's kept and deleted runs: %w", err)
+		}
+		if gone {
+			deleted = append(deleted, id)
+		} else {
+			kept = append(kept, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: list a person's kept and deleted runs: %w", err)
+	}
+	return kept, deleted, nil
+}
+
+func (s PG) BlankRunTombstoneCreators(ctx context.Context, createdBy string, runIDs []uuid.UUID) (int, error) {
+	if len(runIDs) == 0 {
+		return 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `UPDATE run_history_tombstones SET created_by = '' WHERE created_by = $1 AND run_id = ANY($2)`,
+		createdBy, runIDs)
+	if err != nil {
+		return 0, fmt.Errorf("store: blank deleted runs' creator: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 	// Marked before the blank: a promoted start holds the queue row it was promoted with, the task text
 	// included, and RequeuePromotedRun puts no marked run back.
@@ -224,20 +275,30 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 		}
 	}
 	// What a helper gave as a reason and the emails a revoke may name, on the grants the person asked for or
-	// owns. A blank email only weakens an email-only revoke check on a grant that lasts an hour at most.
-	// Skipped for a role without INSERT on the table (a split-role app role the grant missed): it can have
-	// written no row. A role that can insert but not update fails the erasure loudly, so the blank is never
-	// silently left undone.
-	canBlank, err := s.hasSupportGrantPrivilege(ctx, "INSERT")
-	if err != nil {
-		return 0, err
+	// owns. A blank email only weakens an email-only revoke check on a grant that lasts an hour at most. Read
+	// first, as the agent tasks above: a role that cannot read the table fails the erasure loudly, one with
+	// nothing to blank never issues the UPDATE, and one with text to blank and no UPDATE fails it too, so the
+	// blank is never silently left undone.
+	const grantsOf = `(reason <> '' OR helper_email <> '' OR owner_email <> '')
+			  AND (helper = $1 OR run_id IN (SELECT id FROM agent_runs WHERE created_by = $1))`
+	var granted bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_support_grants WHERE `+grantsOf+`)`, createdBy).Scan(&granted); err != nil {
+		return 0, fmt.Errorf("store: read a person's support grants: %w", err)
 	}
-	if canBlank {
+	if granted {
 		if _, err := s.Pool.Exec(ctx, `UPDATE run_support_grants SET reason = '', helper_email = '', owner_email = ''
-			WHERE (reason <> '' OR helper_email <> '' OR owner_email <> '')
-			  AND (helper = $1 OR run_id IN (SELECT id FROM agent_runs WHERE created_by = $1))`, createdBy); err != nil {
+			WHERE `+grantsOf, createdBy); err != nil {
 			return 0, fmt.Errorf("store: blank a person's support grants: %w", err)
 		}
+	}
+	// The command of each extra container on the person's runs: argv is a paste surface, and this row is the copy
+	// of it the scope's other blanks leave. A refused blank fails the erasure: rows another role wrote may be there.
+	if _, err := s.Pool.Exec(ctx, `UPDATE run_containers c
+		SET containers = (SELECT jsonb_agg(e.v - 'command' ORDER BY e.n) FROM jsonb_array_elements(c.containers) WITH ORDINALITY AS e(v, n))
+		FROM agent_runs r
+		WHERE r.id = c.run_id AND r.created_by = $1
+		  AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.containers) x WHERE x ? 'command')`, createdBy); err != nil {
+		return 0, fmt.Errorf("store: blank a person's extra container commands: %w", err)
 	}
 	return n, nil
 }

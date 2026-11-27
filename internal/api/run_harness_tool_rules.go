@@ -5,9 +5,7 @@ package api
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"maps"
 	"net/http"
@@ -430,8 +428,7 @@ func mintHarnessCredentials(sets []types.HarnessToolRules, agents []string) (dig
 			return nil, nil, err
 		}
 		cred := base64.RawURLEncoding.EncodeToString(raw)
-		sum := sha256.Sum256([]byte(cred))
-		digests = append(digests, types.HarnessCredential{Harness: s.Harness, SHA256: hex.EncodeToString(sum[:])})
+		digests = append(digests, types.HarnessCredential{Harness: s.Harness, SHA256: types.TokenDigest(cred)})
 		if slices.Contains(agents, s.Harness) {
 			agentCredentials[s.Harness] = cred
 		}

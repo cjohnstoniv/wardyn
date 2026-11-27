@@ -42,6 +42,9 @@ export interface UIApp {
   // Callable from outside the run through the gateway, by the callers listed.
   inbound?: boolean;
   callers?: string[];
+  // "desktop": the app serves a desktop, so the gateway filters its clipboard and puts it behind the desktop door,
+  // whatever its name (Go's UIAppKindDesktop). The "novnc" app is a desktop without it.
+  kind?: "desktop";
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
@@ -105,6 +108,18 @@ export interface RunQueue {
 }
 
 export type { ImageAdmissionVerdict } from "./image-admission";
+
+/** One extra container a run keeps beside its agent, as create admitted it (Go: types.RunExtraContainer). */
+export interface ExtraContainer {
+  name: string;
+  /** The admitted pin when admission pinned one. */
+  image: string;
+  command?: string[];
+  ports?: number[];
+  cpu_millis: number;
+  memory_mib: number;
+  image_admission?: ImageAdmissionVerdict;
+}
 
 export interface AgentRun {
   id: string;
@@ -200,6 +215,8 @@ export interface AgentRun {
   // The image admission verdict for the member's image (Go: types.AgentRun.ImageAdmission); absent when
   // admission was off, the run named no member image, an operator started it, or the run predates it.
   image_admission?: ImageAdmissionVerdict | null;
+  // The run's extra containers (Go: types.AgentRun.Containers): on the 201 only; a read of the run does not load them.
+  containers?: ExtraContainer[];
   // The scan/verify/record-only TRUSTED linkage (internal/types/types.go's
   // AgentRun.WorkspaceID) — set for a record/verify step run, nil for an
   // ordinary user run. Modeled here ONLY so runHasWorkspace (below) can read
@@ -256,6 +273,11 @@ export interface AgentRun {
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
   // for mirror parity, same reason as source_id above.
   agent_exec_id?: string;
+  // The organisation site of the run's pool when it was placed
+  // (internal/types/types.go's AgentRun.SiteID), written once at create while
+  // sites are on; absent otherwise. No console reader today, kept for mirror
+  // parity, same reason as source_id above.
+  site_id?: string;
   // The user type the run's creator resolved as at create time
   // (internal/types/types.go's AgentRun.UserType, migration 0080) — the chosen
   // type for a run launched in the user view, the stamped one otherwise. Empty
@@ -520,17 +542,14 @@ export interface RunSync {
   deny?: string[];
 }
 
-// GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
-// endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
-// the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
-// row itself carries only policy_id, and an inline/default policy has no id to
-// fetch, so the console reads this off the run payload rather than GET
-// /policies/{id}. Absent (never present as []) when the run has no declared
-// apps or the lookup failed server-side — both render the lane's "no apps"
-// state. Split off AgentRun rather than left optional-on-everything: every
-// LIST consumer (GET /runs, the board/table) is typed for a field it never
-// receives, and a card built from list data must not silently type-check as
-// having answered "no apps declared" for one it was never asked about.
+// GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that endpoint sends (handleGetRun's anonymous
+// wrapper struct, runs_policy.go) — the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run row
+// itself carries only policy_id, and an inline/default policy has no id to fetch, so the console reads this off the
+// run payload rather than GET /policies/{id}. Absent (never present as []) when the run has no declared apps or the
+// lookup failed server-side — both render the lane's "no apps" state. Split off AgentRun rather than left
+// optional-on-everything: every LIST consumer (GET /runs, the board/table) is typed for a field it never receives,
+// and a card built from list data must not silently type-check as having answered "no apps declared" for one it was
+// never asked about.
 //
 // user_type_name is the display name of AgentRun.user_type, resolved by the
 // same handler (runUserTypeName) because GET /user-types is securityOps and a
@@ -585,6 +604,8 @@ export interface RunDetail extends AgentRun {
   macos_disk?: RunMacOSDisk;
   wall_preset?: RunWallPreset; // the preset the run was launched with, never its spec (GET /runs/{id} only)
   machine?: RunMachine; // the kept machine the run keeps or resumed (GET /runs/{id} only); absent for a run that keeps none
+  kept_copy_out?: boolean; // whether this caller may copy work out of this kept run now (GET /runs/{id} only)
+  desktop_watermark?: { who: string; run: string; required: boolean }; // who is viewing and whether the organisation requires the watermark (GET /runs/{id}, desktop runs only)
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
@@ -712,7 +733,11 @@ export interface RunPolicyView {
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.
 export interface RunPolicyHostMarks {
+  // Entries whose every destination the proxy opens.
   inspected: string[];
+  // An entry the proxy opens only some destinations of (a wildcard, or a host with no port opened on one
+  // port), with those destinations as terminated lists them. The rest it allows passes through unread.
+  partial?: Record<string, string[]>;
   // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
   terminated: string[];
   // The terminated hosts the proxy opens on a port no allowed_domains entry names (under allow-all,
@@ -849,15 +874,12 @@ export function runHeadline(run: Pick<AgentRun, "title" | "task">): string {
   return (run.title ?? "").trim() || run.task || "—";
 }
 
-// Whether an `always` egress-approval decision has somewhere on THIS run to
-// persist to — the ONE place that answers it, mirroring the server's own
-// rule-5 tie-break (internal/api/approvals.go): workspace_ids first, falling
-// back to workspace_id. NEITHER field is sufficient alone: an ordinary user
-// run has workspace_ids but no workspace_id, while a record/verify step run
-// is the reverse (its workspace_ids is always empty — see workspace_id's
-// doc). Reading workspace_ids alone — as run-detail.tsx once did — shows
-// Always disabled on a record/verify run with the false reason "this run
-// isn't attached to one", when the server would accept it.
+// Whether an `always` egress-approval decision has somewhere on THIS run to persist to — the ONE place that answers
+// it, mirroring the server's own rule-5 tie-break (internal/api/approvals.go): workspace_ids first, falling back to
+// workspace_id. NEITHER field is sufficient alone: an ordinary user run has workspace_ids but no workspace_id, while
+// a record/verify step run is the reverse (its workspace_ids is always empty — see workspace_id's doc). Reading
+// workspace_ids alone — as run-detail.tsx once did — shows Always disabled on a record/verify run with the false
+// reason "this run isn't attached to one", when the server would accept it.
 export function runHasWorkspace(run: Pick<AgentRun, "workspace_ids" | "workspace_id">): boolean {
   return (run.workspace_ids?.length ?? 0) > 0 || !!run.workspace_id;
 }

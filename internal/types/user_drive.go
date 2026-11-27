@@ -285,6 +285,19 @@ type UserDrive struct {
 	// HomeRunnerID is the Mac a mac_disk drive's disk is kept on, set on that backend and no other
 	// (migration 0246): only macOS VM runs on that Mac attach it.
 	HomeRunnerID *uuid.UUID `json:"home_runner_id,omitempty"`
+	// DeleteIssues counts the physical deletes issued for a member drive: it only grows, and goes back to 0 only
+	// with the row's own delete (migration 0299). Odd means a call to the storage may still be outstanding, which
+	// the tombstone alone does not say.
+	DeleteIssues int `json:"-"`
+	// LegacyUnsettled marks a person's Mac disk or Docker volume that existed when migration 0299 ran: listed, but
+	// not attachable until its Mac's runner proves it is a new process or an administrator releases the Docker ones.
+	LegacyUnsettled bool `json:"-"`
+}
+
+// Deleting reports whether a member drive's delete has started: the tombstone is set, or a physical delete may be
+// outstanding (an odd issue count). A drive that is deleting is treated as absent.
+func (d UserDrive) Deleting() bool {
+	return d.DeleteStartedAt != nil || d.DeleteIssues%2 == 1
 }
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's
@@ -314,6 +327,10 @@ type UserDriveGrant struct {
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by,omitempty"`
+	// ObjectName is the Docker volume or Kubernetes claim a portal allocation's folder is, so a super admin can
+	// create the claim before the first run. It is derived, never stored, and set only in the answer to a write
+	// of a portal allocation (DriveSubjectPortal).
+	ObjectName string `json:"object_name,omitempty"`
 }
 
 // UserDriveListItem is one row of the admin Drives table. GrantCount is a
@@ -322,6 +339,10 @@ type UserDriveGrant struct {
 type UserDriveListItem struct {
 	UserDrive
 	GrantCount int `json:"grant_count"`
+	// PortalGrantCount is how many of GrantCount are allocations to a portal (DriveSubjectPortal). It is read by the
+	// re-home guard alone, because a portal's folder is named by the drive and the portal ids only, so most edits of an
+	// identity field move none of them. Never on the wire.
+	PortalGrantCount int `json:"-"`
 	// SingleHost is set on a team drive whose folder is a Docker volume: it
 	// lives on one Docker host, so runs on another host see a different folder.
 	SingleHost bool `json:"single_host,omitempty"`
@@ -408,6 +429,9 @@ type DriveMount struct {
 	// RunnerID is set on a drive's second place: the one runner it is bound to,
 	// the only one a local plan verifies its path on (drivePathsOn).
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// Namespace is set on a drive kept on an organisation runner: the runs namespace its claim is in. RunnerID is then
+	// that runner, and the drive mounts only there.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // UserDriveHostRootCheck is the signature of the deployment's ENV CEILING over
@@ -489,6 +513,37 @@ func DriveTeamHome(d UserDrive) string {
 	return "t-" + hex.EncodeToString(sum[:])[:driveHomeHashLen]
 }
 
+// DriveSubjectPortal is the subject type of a team drive's allocation to an issuer portal, by the portal's
+// delegates.id in canonical lowercase form. It is valid on drive allocations only, as RunnerPoolSubjectUnit is
+// valid on pool-use rows only: CapabilitySubjectType.Valid does not know it, so no capability grant, governance
+// row or pool rule can carry it, and the resolvers that match a person's subjects never select a portal row.
+const DriveSubjectPortal CapabilitySubjectType = "portal"
+
+// DriveSubjectUnit is the tier of a person's own team drive's allocation to the governance unit it belongs to
+// (#3459). It is built in memory from user_drives.team_unit_id and never stored: no grant row, capability grant or
+// governance row carries it, and CapabilitySubjectType.Valid does not know it.
+const DriveSubjectUnit CapabilitySubjectType = "unit"
+
+// drivePortalObjectPrefix starts the object name of a portal's folder. No other Wardyn-named drive object
+// begins with it: every other one begins driveObjectPrefix, and neither prefix begins with the other.
+const drivePortalObjectPrefix = "wardyn-portal-"
+
+// DrivePortalHome is a portal's one folder on a team drive: `p-` + the first 20 hex of
+// sha256("portal\n" + portal id + "\n" + drive id). It is derived from the portal and the drive, so two portals
+// on one drive, one portal on two drives and a group on the same drive (DriveTeamHome) all name different
+// folders, and every person who reaches the drive through one portal names the same one.
+func DrivePortalHome(d UserDrive, portal uuid.UUID) string {
+	sum := sha256.Sum256([]byte("portal\n" + portal.String() + "\n" + d.ID.String()))
+	return "p-" + hex.EncodeToString(sum[:])[:driveHomeHashLen]
+}
+
+// DrivePortalObjectName is the Docker volume or Kubernetes claim a portal's folder is: `wardyn-portal-` + the
+// drive's 32-hex id + `-` + home, whatever the drive's object_scheme. The id is a fixed-width fragment, so the
+// home starts at a fixed offset and no drive name can shift it.
+func DrivePortalObjectName(d UserDrive, home string) string {
+	return drivePortalObjectPrefix + DriveObjectID(d.ID) + "-" + home
+}
+
 // DriveSubjectHash fingerprints the principal a drive object was allocated
 // to, in the one shape a substrate LABEL may carry it: the first 20 hex of
 // sha256(subject), folded exactly as DriveHomeName folds it.
@@ -532,6 +587,12 @@ func DriveSubjectFoldsOntoASCII(tmpl HomeTemplate, subject string) bool {
 // driveObjectPrefix is shared by every minted object name so an operator can
 // find every Wardyn-created volume or claim with one glob.
 const driveObjectPrefix = "wardyn-drive-"
+
+// DriveClaimNamedByWardyn reports whether name is an object name Wardyn derives for a drive: it begins
+// driveObjectPrefix (DriveObjectName) or drivePortalObjectPrefix (DrivePortalObjectName). A runner mounts no other claim.
+func DriveClaimNamedByWardyn(name string) bool {
+	return strings.HasPrefix(name, driveObjectPrefix) || strings.HasPrefix(name, drivePortalObjectPrefix)
+}
 
 // driveSlugMaxLen bounds the drive-name half of a minted object name. A PVC
 // name is capped at 253 characters (Docker volume at 255) and the home

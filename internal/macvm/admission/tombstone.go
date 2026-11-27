@@ -56,12 +56,16 @@ func named(p Proc, name string) bool { return p.Name != "" && strings.HasPrefix(
 // and its parent (reparented once the helper died). One exception is
 // positive: a process that is exactly (PID and start) the recorded helper of
 // another counted entry of the same uid is that entry's helper, not e's; its
-// VM, if it has one yet, still counts.
+// VM, if it has one yet, still counts. Once MarkHelperEnded has bounded e,
+// one whose MonoStart is known and later than e.HelperEndMono was created
+// after e's helper, and every helper process that could still have made e's
+// VM, had gone: Docker's Linux VM restarted after the job ended.
 func (v *view) mayBeVM(e Entry) bool {
 	since := e.HelperMonoStart
 	if e.HelperPID == 0 {
 		since = e.OwnerMonoStart
 	}
+	until := e.HelperEndMono
 	type incarnation struct {
 		pid   int
 		start int64
@@ -77,7 +81,8 @@ func (v *view) mayBeVM(e Entry) bool {
 			continue
 		}
 		if p.UID == e.UID && (named(p, VirtualizationProcess) || named(p, HelperProcess)) &&
-			(since == 0 || p.MonoStart == 0 || p.MonoStart >= since) {
+			(since == 0 || p.MonoStart == 0 || p.MonoStart >= since) &&
+			(until == 0 || p.MonoStart == 0 || p.MonoStart <= until) {
 			return true
 		}
 	}
@@ -91,6 +96,63 @@ func (v *view) helperGone(e Entry) bool {
 		return !v.alive(e.HelperPID, e.HelperStart)
 	}
 	return !v.alive(e.OwnerPID, e.OwnerStart)
+}
+
+// endMark is the upper bound MarkHelperEnded records for e from this snapshot, or 0 when none can be
+// taken yet: e has no recorded helper, the helper is alive, a helper process of e's uid that may be e's
+// own (as mayBeVM reads one) is alive, or a Virtualization process of e's uid has no known MonoStart. The
+// bound is the newest known MonoStart in the snapshot: e's VM, if alive later, was alive now, so its
+// MonoStart is at most the bound, and a process with a later one was created after this snapshot.
+func (v *view) endMark(e Entry) uint64 {
+	if e.HelperPID == 0 || !v.helperGone(e) {
+		return 0
+	}
+	others := map[[2]int64]bool{}
+	for _, o := range v.counted {
+		if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 {
+			others[[2]int64{int64(o.HelperPID), o.HelperStart}] = true
+		}
+	}
+	var newest uint64
+	for _, p := range v.procs {
+		if p.UID == e.UID && !others[[2]int64{int64(p.PID), p.Start}] {
+			if named(p, HelperProcess) && (p.MonoStart == 0 || p.MonoStart >= e.HelperMonoStart) {
+				return 0
+			}
+			if named(p, VirtualizationProcess) && p.MonoStart == 0 {
+				return 0
+			}
+		}
+		newest = max(newest, p.MonoStart)
+	}
+	return newest
+}
+
+// MarkHelperEnded records the upper bound mayBeVM reads for one of this runner's entries, once its
+// helper and every helper process that may be its own are gone (endMark). runnerd calls it as soon as a
+// helper it started has exited. It is a no-op for an entry that is gone, already marked, leaked, from an
+// earlier boot, or not yet markable.
+func (l *Ledger) MarkHelperEnded(id string) error {
+	return l.withLock(func() error {
+		v, err := l.load()
+		if err != nil {
+			return err
+		}
+		e, err := l.own(v, id)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if e.HelperEndMono != 0 || e.Kind == KindLeaked || !v.sameBoot(e) {
+			return nil
+		}
+		if e.HelperEndMono = v.endMark(e); e.HelperEndMono == 0 {
+			return nil
+		}
+		return l.rewrite(&e)
+	})
 }
 
 // tombstonable is the tombstone condition: an entry of this boot, not
@@ -131,6 +193,13 @@ func (l *Ledger) ReclaimOwn(id, runDir string) error {
 				return errors.New("admission: the helper is still running")
 			}
 			if v.mayBeVM(e) {
+				if e.HelperEndMono == 0 {
+					if e.HelperEndMono = v.endMark(e); e.HelperEndMono != 0 {
+						if err := l.rewrite(&e); err != nil {
+							return err
+						}
+					}
+				}
 				return errors.New("admission: a Virtualization or helper process of this user may still be this VM")
 			}
 		}

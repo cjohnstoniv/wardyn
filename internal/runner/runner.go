@@ -36,8 +36,9 @@ type Capabilities struct {
 	NetworkPolicyAcknowledged bool                              `json:"network_policy_acknowledged,omitempty"` // operator accepted a canary failure as expected rather than proven
 	SessionRecording          bool                              `json:"session_recording"`                     // wardyn-rec sidecar support
 	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
-	UserDrives   bool `json:"user_drives,omitempty"`
-	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
+	UserDrives      bool `json:"user_drives,omitempty"`
+	ManagedFiles    bool `json:"managed_files,omitempty"`    // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
+	ExtraContainers bool `json:"extra_containers,omitempty"` // fail-closed like UserDrives, AND-aggregated: runs SandboxSpec.Containers (extra_containers.go)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
 	// `filesystem` (docker quota), `eviction` (k8s, never refuses the write),
 	// or `none`/empty. Aggregated as the WEAKEST across substrates.
@@ -48,8 +49,10 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool        `json:"-"`
-	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
+	ExecOutputUncaptured bool                     `json:"-"`
+	NetworkPolicyCheck   NetPolCheck              `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
+	UntaintedPools       []types.ConfinementClass `json:"-"`                             // k8s: pinned classes whose RuntimeClass nodes the runner's own placement may also use, read at boot
+	AnyNodeClasses       []types.ConfinementClass `json:"-"`                             // k8s: pinned classes whose RuntimeClass sets no scheduling, so their pods run on any node with the runtime, read at boot
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -106,6 +109,7 @@ type SandboxSpec struct {
 	// POLICY-controlled. A driver that doesn't advertise
 	// Capabilities.ManagedFiles MUST refuse rather than start without them.
 	ManagedFiles []ManagedFile
+	Containers   []ExtraContainer `json:"containers,omitempty"` // beside the agent; omitted when empty, so an older runner gets the bytes it always did (extra_containers.go)
 	// OnWaiting, non-nil, reports WHY the sandbox isn't up yet, each time the
 	// reason CHANGES. Called SYNCHRONOUSLY on CreateSandbox's own goroutine
 	// (must not block). Call NotifyWaiting, never the field.
@@ -233,6 +237,7 @@ type ProxyConfig struct {
 	Unattended           bool                      // a run nobody is driving: a held push is refused instead
 	ScrubResponses       bool                      // replace proxy-held credentials in relayed responses (proxy.Config.ScrubResponses)
 	CanonicalPushRepos   bool                      // one held-push key per github.com repository spelling (proxy.Config.CanonicalPushRepos)
+	PushHoldRemovals     bool                      `json:"push_hold_removals,omitempty"` // hold a push that removes a review path (proxy.Config.PushHoldRemovals)
 	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
 	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
@@ -301,6 +306,9 @@ type Resources struct {
 	// (ProxyLimitsFor). Only FitChecker.CheckFit reads it, in-process; the sandbox create reads
 	// ProxyConfig.AzureGates, so it never rides the runner wire.
 	ProxyAzure bool `json:"-"`
+	// ConfinementClass is the class whose RuntimeClass the agent pod runs under: the k8s fit judges the pod
+	// with that class's scheduling and overhead. In-process only, like ProxyAzure; never on the runner wire.
+	ConfinementClass types.ConfinementClass `json:"-"`
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).
@@ -374,16 +382,17 @@ type ExecSpec struct {
 	// corrupted by interleaved stderr without one.
 	TTY        bool
 	Cols, Rows uint16 // initial PTY window size (TTY only); zero => implementation default
+	// AgentDir, when set, says the exec reads and writes only under this folder of the agent's. Kubernetes then runs
+	// it in the pod's main container once the agent's own container has ended (ErrAgentDirUnshared when the folder is
+	// on no volume the two share); other substrates ignore it.
+	AgentDir string `json:",omitempty"`
 }
 
-// ExecSession is a live, bidirectional stream into ONE exec started by
-// Runner.ExecStream. A PLAIN STRUCT of streams/closures, deliberately NEVER
-// an interface: a fake can construct a partial ExecSession by filling in
-// fields directly. Resize, Wait, and Close take NO context: an implementation
-// binds them to whatever context it created the exec with.
-// Wait may still return the exec's own exit after that context ended, when the
-// exec had already exited; a caller that must tell a cut from an exit checks
-// its own context, not Wait's error.
+// ExecSession is a live, bidirectional stream into ONE exec started by Runner.ExecStream. A PLAIN STRUCT of
+// streams/closures, deliberately NEVER an interface: a fake can construct a partial ExecSession by filling in fields
+// directly. Resize, Wait, and Close take NO context: an implementation binds them to whatever context it created the
+// exec with. Wait may still return the exec's own exit after that context ended, when the exec had already exited; a
+// caller that must tell a cut from an exit checks its own context, not Wait's error.
 type ExecSession struct {
 	// Stdin writes to the exec's stdin. Close HALF-closes the write side only
 	// — implementations MUST NOT tear down Stdout/Stderr when Stdin.Close is
@@ -400,6 +409,10 @@ type ExecSession struct {
 	Resize func(cols, rows uint16) error // no-op returning nil with no TTY
 	Wait   func() (int, error)
 	Close  func() error // tears down ONLY this exec stream — never the sandbox, agent, or any sidecar
+	// Abort stops this exec's input at once, with no I/O on any shared link: no byte written to Stdin
+	// passes to the substrate after Abort returns, and it never waits on a blocked Stdin.Write or on
+	// another stream. Nil: Close already does this.
+	Abort func()
 }
 
 // Sandbox is a handle to a created sandbox.
@@ -433,7 +446,8 @@ type Sandbox struct {
 	// when its namespace's NetworkPolicy is proven enforced; otherwise why not ("netpol_not_enforced" and
 	// "netpol_ambient_acknowledged", which only an override admits, or "netpol_not_proven").
 	// Empty for any other run, and from a driver or runner that predates it.
-	NoNetworkProxyOnly string `json:",omitempty"`
+	NoNetworkProxyOnly string        `json:",omitempty"`
+	Where              *SandboxWhere `json:",omitempty"` // where it runs (sandbox_where.go); nil from other drivers and older runners
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
@@ -856,17 +870,30 @@ var ErrDriveInUse = errors.New("runner: the drive's storage is still held by a r
 // reclaim that gets this wrong deletes another member's files.
 var ErrDriveNotReclaimable = errors.New("runner: the object under this drive's name is not the storage it allocated")
 
+// ErrDriveUntouched marks a refusal a DriveReclaimer made before it changed anything: nothing was deleted, and the
+// object is as it was. A caller that issued a delete under a claim may then give the claim up. It rides beside the
+// refusal's own sentinel (see Untouched) and is never answered for a refusal that may have changed something, nor
+// by a Mac, whose answer crosses the wire without it.
+var ErrDriveUntouched = errors.New("runner: the drive's storage was not touched")
+
+// untouched is err that also answers errors.Is(ErrDriveUntouched); its text is err's.
+type untouched struct{ err error }
+
+func (u untouched) Error() string   { return u.err.Error() }
+func (u untouched) Unwrap() []error { return []error{u.err, ErrDriveUntouched} }
+
+// Untouched marks err, a refusal made before anything changed, as ErrDriveUntouched too.
+func Untouched(err error) error { return untouched{err} }
+
 // DriveReclaimer is an OPTIONAL Runner capability, modelled on ImageRemover: a
 // substrate that can DESTROY the per-person storage object a user drive
 // allocated. The one irreversible verb in this file; a drive OUTLIVES every
 // run that mounts it, so no automatic reclaim path may exist. On Kubernetes
 // the chart's Role gains `delete` only under `drives.reclaim.enabled`.
 type DriveReclaimer interface {
-	// ReclaimDrive destroys the storage object mount names, bounded by ctx.
-	// MUST refuse rather than destroy when the object is not this drive's
-	// (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse),
-	// and MUST answer DriveReclaimAlreadyAbsent, not an error, when nothing
-	// answers to the name.
+	// ReclaimDrive destroys the storage object mount names, bounded by ctx. MUST refuse rather than destroy when the
+	// object is not this drive's (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse), and MUST
+	// answer DriveReclaimAlreadyAbsent, not an error, when nothing answers to the name.
 	ReclaimDrive(ctx context.Context, mount types.DriveMount) (DriveReclaimOutcome, error)
 }
 

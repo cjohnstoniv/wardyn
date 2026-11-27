@@ -26,15 +26,41 @@ var sponsorReachRoutes = map[string]string{
 	"handleGetRunContainment": `r.Get("/runs/{id}/containment", s.handleGetRunContainment)`,
 }
 
+// sponsorReachHelpers are the helpers a handler above asks ownsRunOrSponsorOrAdmin through: the handler, its one
+// caller, and how many times the helper asks it. runEventsOpeningRun is handleRunEvents' read gate, split out so an
+// issuer portal's stream reads its run under its opening's bound; it asks once on each of its two paths, that
+// stream's and every other's (getRunAuthorizedBy).
+var sponsorReachHelpers = map[string]struct {
+	handler string
+	asks    int
+}{
+	"runEventsOpeningRun": {"handleRunEvents", 2},
+}
+
+// sponsorReachAssistantChecks are the assistant's checks strip and replay (POST /assistant/checks and
+// /assistant/replay), which a sponsor also reaches: the function that asks ownsRunOrSponsorOrAdmin, how many
+// times, and the route lines in assistant_routes.go that reach it. assistantPersonTarget reads a run target
+// through getRunAuthorizedBy, as GET /runs/{id} reads it, for both routes; handleAssistantReplay keeps the runs it
+// counts to the ones the same predicate admits. Both answer checks and counts only, never more of a run than GET
+// /runs/{id} shows.
+var sponsorReachAssistantChecks = map[string]struct {
+	asks   int
+	routes []string
+}{
+	"assistantPersonTarget": {1, []string{`r.Post("/assistant/checks", s.handleAssistantChecks)`, `r.Post("/assistant/replay", s.handleAssistantReplay)`}},
+	"handleAssistantReplay": {1, []string{`r.Post("/assistant/replay", s.handleAssistantReplay)`}},
+}
+
 // TestSponsorReach_RouteCensus: ownsRunOrSponsorOrAdmin is asked by exactly the five per-run handlers above, once
-// each, and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
+// each (directly or through their helper in sponsorReachHelpers), by the assistant checks in sponsorReachAssistantChecks, and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
 // reaches, and has to be classified here before it merges.
 func TestSponsorReach_RouteCensus(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, direct, redeem := map[string]int{}, map[string]int{}, map[string]int{}
+	found, direct, redeem, entry := map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
+	callers := map[string]map[string]int{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -58,11 +84,30 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 						direct[fn.Name.Name]++
 					case "mayEnterRunOrSponsor":
 						redeem[fn.Name.Name]++
+					case "sponsorEntry":
+						entry[fn.Name.Name]++
+					default:
+						if _, ok := sponsorReachHelpers[sel.Sel.Name]; ok {
+							if callers[sel.Sel.Name] == nil {
+								callers[sel.Sel.Name] = map[string]int{}
+							}
+							callers[sel.Sel.Name][fn.Name.Name]++
+						}
 					}
 				}
 				return true
 			})
 		}
+	}
+	for helper, h := range sponsorReachHelpers {
+		if found[helper] != h.asks {
+			t.Errorf("%s asks ownsRunOrSponsorOrAdmin %d times, want %d", helper, found[helper], h.asks)
+		}
+		if want := map[string]int{h.handler: 1}; !maps.Equal(callers[helper], want) {
+			t.Errorf("%s is called by %v, want %v: a helper is one handler's read gate, not a route of its own", helper, callers[helper], want)
+		}
+		found[h.handler]++ // the handler asks it through the helper
+		delete(found, helper)
 	}
 	for fn, route := range sponsorReachRoutes {
 		if found[fn] != 1 {
@@ -71,6 +116,18 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 		delete(found, fn)
 		if src, err := os.ReadFile("routes.go"); err != nil || !strings.Contains(string(src), route) {
 			t.Errorf("routes.go does not mount %s (%v)", route, err)
+		}
+	}
+	for fn, c := range sponsorReachAssistantChecks {
+		if found[fn] != c.asks {
+			t.Errorf("%s asks ownsRunOrSponsorOrAdmin %d times, want %d", fn, found[fn], c.asks)
+		}
+		delete(found, fn)
+		src, err := os.ReadFile("assistant_routes.go")
+		for _, route := range c.routes {
+			if err != nil || !strings.Contains(string(src), route) {
+				t.Errorf("assistant_routes.go does not mount %s (%v)", route, err)
+			}
 		}
 	}
 	// sponsorsRun itself is asked only by the predicate above and by the interactive entry rule (admitRunEntry,
@@ -86,9 +143,19 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	// (uiEnterCommon's, moved there beside the inbound caller's ticket, which never takes this arm).
 	// inboundCaller redeems an inbound token, with no role (superAdmin false); a portal's delegated token
 	// cannot mint one (mintGuards' delegation refusal, on both token mints), so the portal refusal holds there too.
-	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "uiSessionStillAuthorized": 1, "inboundCaller": 1, "attachAuthority": 1}
+	// previewTicketCaller is a preview ticket's mint, which asks the entry rule as an app's ticket does (superAdmin
+	// false, never a role) and stamps the ticket member, so uiTicketMayEnter asks the same rule at the enter; a
+	// portal's delegated token cannot reach the route (delegationAllowed does not list it), so the portal refusal holds.
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "inboundCaller": 1, "previewTicketCaller": 1}
 	if !maps.Equal(redeem, wantRedeem) {
 		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
+	}
+	// sponsorEntry is mayEnterRunOrSponsor for a re-check: it returns the sponsor read's error, so an open session
+	// rides the session budget on a read that failed. Its callers are the two re-checks and the predicate itself.
+	// uiSessionArms is the open session's re-check, after its portal's arm (uiSessionAuthority, its one caller).
+	wantEntry := map[string]int{"mayEnterRunOrSponsor": 1, "attachAuthority": 1, "uiSessionArms": 1}
+	if !maps.Equal(entry, wantEntry) {
+		t.Errorf("sponsorEntry is asked by %v, want %v", entry, wantEntry)
 	}
 	if len(found) != 0 {
 		t.Errorf("ownsRunOrSponsorOrAdmin is also asked by %v: a route a sponsor now reaches", slices.Sorted(func(yield func(string) bool) {

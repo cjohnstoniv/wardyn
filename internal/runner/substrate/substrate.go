@@ -46,11 +46,20 @@ type ClassSupport struct {
 	// member's user drive / deliver a root-owned file; false fail-closed.
 	UserDrives   bool
 	ManagedFiles bool
+	// ExtraContainers is CONJUNCTION-aggregated like UserDrives: can this substrate run
+	// SandboxSpec.Containers. False fail-closed.
+	ExtraContainers bool
 	// EphemeralDiskEnforcement names what binds runner.Resources.DiskMiB —
 	// `filesystem`, `eviction`, or `none`/empty. Aggregated as the WEAKEST.
 	EphemeralDiskEnforcement types.StorageEnforcement
 	Freeze                   map[types.ConfinementClass]bool // per-class pause/resume support; absent/false = none
 	ExecOutputUncaptured     bool                            // an exec's output cannot be captured (runner.Capabilities.ExecOutputUncaptured)
+	// UntaintedPools are the pinned classes whose RuntimeClass nodes the substrate's own placement may also
+	// use: a pool labelled and not tainted (k8s, read at boot). OR-merged; absent on an older runner.
+	UntaintedPools []types.ConfinementClass
+	// AnyNodeClasses are the pinned classes whose RuntimeClass sets no scheduling, so their pods run on any
+	// node with the runtime (k8s, read at boot). OR-merged; absent on an older runner.
+	AnyNodeClasses []types.ConfinementClass
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate.

@@ -135,22 +135,10 @@ const gitHubAPIRESTOnly = "Wardyn's GitHub CLI works through GitHub's REST API o
 	"Use `gh api repos/{owner}/{repo}/...` instead."
 
 // gitHubAPIAdmit is the whole gate: "" admits the request, otherwise the
-// sentence its refusal carries. It mints nothing.
+// sentence its refusal carries. It mints nothing. It decides through
+// reqcheck.Decide, and only an Allow decision forwards.
 func gitHubAPIAdmit(r *http.Request, g *GitHubAPIGrant) (ghscope.Verdict, string) {
-	v, err := ghscope.Classify(ghscope.Request{Method: r.Method, Host: ghscope.APIHost, Path: adoRawPath(r), RawQuery: r.URL.RawQuery, Header: r.Header})
-	switch {
-	case err != nil:
-		return v, gitHubAPIRefusedPrefix + "it could not be read as one GitHub operation."
-	case ghscope.Permits(g.Capabilities, g.Repos, v):
-		return v, ""
-	case v.Capability == ghscope.CapDeniedGraphQL:
-		return v, gitHubAPIRESTOnly
-	case !v.Capability.Grantable() && v.Capability != ghscope.CapMetadata:
-		return v, "Wardyn refused this GitHub API request. " + ghscope.Label(v.Capability) + "."
-	case !ghscope.Permits(ghscope.GrantableCapabilities(), g.Repos, v):
-		return v, gitHubAPIRefusedPrefix + "it names a repository or an owner outside this run's own."
-	}
-	return v, gitHubAPIRefusedPrefix + "this run's GitHub CLI is not granted \"" + ghscope.Label(v.Capability) + "\"."
+	return gitHubAnswer(decideGitHub(gitHubChecker{g: g}, gitHubRequest(r)))
 }
 
 // serveGitHubAPI is the door: judge, mint, forward.
@@ -166,6 +154,7 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 		return
 	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceGitHubAPI, denied: ruleSourceGitHubAPIRefused, mintFailed: "mint github token",
+		beforeSend: p.brokerOfflineErr,
 		credential: func(ctx context.Context) (string, string, error) {
 			if p.ghAPIStopped.Load() {
 				return "", "", errGitHubAPIStopped
@@ -247,11 +236,16 @@ func (p *Proxy) revokeGitHubAPITokens(ctx context.Context) {
 		p.gitTokMu.Lock()
 		e := p.gitTokens[id]
 		p.gitTokMu.Unlock()
-		if e == nil || !e.reMu.TryLock() {
+		if e == nil {
 			continue
 		}
+		select {
+		case e.turn <- struct{}{}:
+		default:
+			continue // a mint in flight: its own request hands the token back when it lands
+		}
 		tok := e.token
-		e.reMu.Unlock()
+		<-e.turn
 		if tok == "" {
 			continue
 		}

@@ -262,7 +262,9 @@ func TestRelayRefusals(t *testing.T) {
 
 	t.Run("a name the proxy refuses resets the SYN", func(t *testing.T) {
 		addr := g.Resolve(t, "denied", "test")
-		if c, err := g.Dial(addr, 443, 3*time.Second); err == nil {
+		// The reset ends the dial; the bound only stops a hang. A frozen runner can outlast a short one before
+		// the relay has asked, and the dial then fails with no ask recorded.
+		if c, err := g.Dial(addr, 443, 10*time.Second); err == nil {
 			c.Close()
 			t.Fatal("connected to a refused name")
 		}
@@ -309,13 +311,16 @@ func TestRelayRefusals(t *testing.T) {
 	})
 	t.Run("port 80 goes as a forward request, not an ask", func(t *testing.T) {
 		addr := g.Resolve(t, "origin", "test")
-		c, err := g.Dial(addr, 80, 3*time.Second)
+		// Both bounds only stop a hang: the handshake and the reply end the waits. The reply waits on the
+		// relay, its dial to the proxy and the proxy's answer, and a stalled macOS runner froze this read
+		// past a three-second bound.
+		c, err := g.Dial(addr, 80, 10*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
 		_, _ = io.WriteString(c, "GET /x HTTP/1.1\r\nHost: origin.test\r\nConnection: close\r\n\r\n")
-		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
 		if err != nil || resp.StatusCode != 200 {
 			t.Fatalf("resp %v %v", resp, err)

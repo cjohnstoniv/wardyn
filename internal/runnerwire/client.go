@@ -45,11 +45,15 @@ type RunnerHooks struct {
 	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
 	ProxyImage func(string)
 	// LocalAttach, when set, is told on every connect whether the organisation's AUTH_OK allows local
-	// attach (false from an organisation that does not say).
+	// attach or a local window, either of which needs the local socket (false from an organisation that
+	// says neither).
 	LocalAttach func(bool)
 	// PerRunLimits, when set, is told on every connect the per-run CPU (milli-CPU) and memory (MiB) the
 	// organisation's AUTH_OK names for this runner (0, 0 from an organisation that names none).
 	PerRunLimits func(cpuMillis, memoryMiB int64)
+	// DeviceCert, when set, is told on every connect whether the organisation's AUTH_OK asks for the Mac's MDM
+	// device certificate (false from an organisation that does not say).
+	DeviceCert func(bool)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 	// ConnectFailed, when set, is told each error that ended a connection attempt or a session, except
@@ -82,6 +86,9 @@ type Client struct {
 	// at the head of the replay buffer.
 	quickDeaths int
 	link        linkState
+	// authOKs counts the sessions of this process the organisation has accepted (AUTH_OK); prior is that count
+	// before the current one.
+	authOKs, prior int
 }
 
 // A resumed session that ends within resumeQuickDeath of READY with an EVENT unacknowledged, resumeQuickDeaths times
@@ -278,23 +285,28 @@ func (c *Client) Connect(ctx context.Context) error {
 	defer conn.Close()
 	cfg, resume := c.resume(ctx)
 	c.link.setPhase(phaseAuthenticate)
-	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock)
+	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock, StreamWindowLarge)
 	if err != nil {
 		return err
 	}
 	if !ok.Resumed {
 		cfg = PeerConfig{}
 	}
+	cfg.StreamWindow = int64(ok.StreamWindow) // the window agreed on THIS connection, resumed or not
 	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
 	}
 	if c.cfg.Hooks.LocalAttach != nil {
-		c.cfg.Hooks.LocalAttach(ok.LocalAttach)
+		c.cfg.Hooks.LocalAttach(ok.LocalAttach || ok.LocalWindow)
 	}
 	if c.cfg.Hooks.PerRunLimits != nil {
 		c.cfg.Hooks.PerRunLimits(ok.PerRunCPUMillis, ok.PerRunMemoryMiB)
 	}
+	if c.cfg.Hooks.DeviceCert != nil {
+		c.cfg.Hooks.DeviceCert(ok.DeviceCert)
+	}
 	c.session, c.ready = ok.SessionID, false
+	c.prior, c.authOKs = c.authOKs, c.authOKs+1
 	return c.serve(ctx, conn, cfg, ok)
 }
 
@@ -346,6 +358,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	var readyAt time.Time
 	c.configure(ctx, &cfg, &ready, pending, func() *Peer { return peer })
 	peer = NewPeer(conn, cfg)
+	peer.prior = c.prior
 	c.peer = peer
 	defer func() {
 		c.setLink(false, "")

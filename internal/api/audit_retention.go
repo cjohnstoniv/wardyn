@@ -101,7 +101,7 @@ func (s *Server) handleDropAuditPartition(w http.ResponseWriter, r *http.Request
 		s.refuseRetentionDrop(w, r, refused)
 	case err != nil:
 		slog.ErrorContext(r.Context(), "wardyn: audit retention drop failed", slog.String("partition", body.Partition), slog.Any("err", err))
-		writeErrorReason(w, http.StatusInternalServerError, reasonAuditRetentionDropFailed, "the partition was not dropped")
+		writeErrorReason(w, http.StatusInternalServerError, reasonAuditRetentionDropFailed, "the drop did not finish, or its answer was lost: read GET /api/v1/audit/retention, and if the partition is still listed nothing was deleted")
 	default:
 		writeJSON(w, http.StatusOK, d)
 	}
@@ -127,15 +127,23 @@ func (s *Server) refuseRetentionDrop(w http.ResponseWriter, r *http.Request, e *
 
 // auditPartitionChecks is /setup/status's one row about the partition runway: a warning once fewer than
 // minPartitionsAhead months ahead have a partition, because every insert into a month with no partition
-// fails and waits in the spool. Nothing while the runway is healthy, and nothing on a store that is not
-// partitioned (a test fake, or a store with no retention).
+// fails and waits in the spool. A warning too when the runway cannot be read. Nothing while the runway is
+// healthy, and nothing on a store that is not partitioned (a test fake, or a store with no retention).
 func (s *Server) auditPartitionChecks(ctx context.Context) []SetupCheck {
 	rs, ok := s.cfg.Store.(store.AuditRetention)
 	if !ok {
 		return nil
 	}
 	ahead, err := rs.AuditPartitionsAhead(ctx)
-	if err != nil || ahead >= minPartitionsAhead {
+	if err != nil {
+		slog.WarnContext(ctx, "wardyn: audit partition runway read failed", slog.Any("err", err))
+		return []SetupCheck{{
+			ID: "audit_partitions", Label: "Audit partitions", Status: "warn",
+			Detail: "The months of audit partitions ahead of today could not be checked.",
+			Fix:    "Check that wardynd can read the database; the wardyn_audit_partitions_ahead metric is missing for the same reason.",
+		}}
+	}
+	if ahead >= minPartitionsAhead {
 		return nil
 	}
 	return []SetupCheck{{

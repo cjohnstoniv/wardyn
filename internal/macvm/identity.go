@@ -14,16 +14,18 @@ import (
 	"path/filepath"
 )
 
-// IdentityStrategy picks a run's machine identifier. Both are built and kept
-// until a real Mac shows which ones boot and give two concurrent guests
-// distinct identities:
+// IdentityStrategy picks a VM's machine identifier:
 //
 //   - travel: the base's identifier is copied with its disk and aux storage;
 //   - fresh: each run gets a new identifier.
 //
-// The per-slot-base fallback (one base per licence slot, each with the
-// identifier of its own install) is travel with the run's base_dir set to its
-// ledger slot's base (Layout.BaseDir(slot)).
+// Runs use fresh (cmd/wardyn-runnerd macOSVMIdentity): each run is a different Mac, so nothing one run leaves
+// tied to the machine identity reaches the next, and two runs at once never share one. A real Mac has booted
+// runs from an installed base this way, each with its own platform UUID. edit-base and the tools-update boot
+// use travel, so what a person sets up there is tied to the base's identity and does not carry into runs.
+//
+// The per-slot-base fallback (one base per licence slot, each with the identifier of its own install) is
+// travel with the run's base_dir set to its ledger slot's base (Layout.BaseDir(slot)).
 type IdentityStrategy string
 
 const (
@@ -36,8 +38,8 @@ func (s IdentityStrategy) Valid() bool { return s == IdentityTravel || s == Iden
 
 // HostCapFor is the host cap (for the admission ledger) a strategy allows.
 // fresh configures every VM with its own identifier, so 2. travel configures
-// two concurrent VMs from one base with one identifier, so 1 until a real Mac
-// proves the framework replaces it; the helper's read-back comes from its own
+// two concurrent VMs from one base with one identifier, so 1: nothing has shown
+// that the framework replaces it, and the helper's read-back comes from its own
 // configuration object and cannot show that. The per-slot-base fallback
 // (travel from slotBases ready bases, each its own install) allows one VM per
 // base, up to 2.

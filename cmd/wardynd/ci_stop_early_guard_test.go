@@ -192,8 +192,11 @@ func TestCIGoLintRunsGuardsFirstAndGatesBuild(t *testing.T) {
 			t.Error("the lint leg is back in the go matrix as well as go-lint")
 		}
 	}
-	if got := ciNeeds(t, wf.Jobs["build"].Needs); !slices.Equal(got, []string{"changes", "go", "go-lint", "image-scope"}) {
-		t.Errorf("build needs %v, want [changes go go-lint image-scope]", got)
+	if got := ciNeeds(t, wf.Jobs["build"].Needs); !slices.Equal(got, []string{"changes", "cross-os", "go", "go-lint", "image-scope"}) {
+		t.Errorf("build needs %v, want [changes cross-os go go-lint image-scope]", got)
+	}
+	if blk := ciJobBlock(t, raw, "build"); !strings.Contains(blk, `[ "$CROSS" = success ] || { [ "$CROSS" = skipped ] && [ "$BACKEND" = false ]; } ||`) {
+		t.Errorf("build no longer fails unless the Windows and macOS builds passed:\n%s", blk)
 	}
 	if blk := ciJobBlock(t, raw, "build"); !strings.Contains(blk, `[ "$LEGS" = success ] && [ "$LINT" = success ] ||`) {
 		t.Errorf("build no longer fails unless both the go legs and go (lint) succeeded:\n%s", blk)

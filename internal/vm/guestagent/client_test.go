@@ -45,7 +45,7 @@ func rawGuest(t *testing.T, handler http.Handler) *Client {
 	}
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
-	hs := &http.Server{Protocols: &protocols, Handler: handler}
+	hs := &http.Server{Protocols: &protocols, Handler: handler, HTTP2: agentHTTP2Config()}
 	go func() { _ = hs.Serve(guestagenttest.Listener(l)) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	c := NewClient(func(context.Context) (net.Conn, error) { return net.Dial("tcp", l.Addr().String()) })

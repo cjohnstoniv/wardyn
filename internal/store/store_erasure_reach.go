@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -91,17 +93,53 @@ func (s PG) DeleteErasedRefusedRunPATs(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// DeleteDelegatedTokensOf deletes every delegated token minted for one of principals, live or
-// expired. It returns the rows it deleted.
+// DeleteDelegatedTokensOf deletes every delegated token and every issuer-portal grant minted for one of
+// principals, live or expired, and the record of which portals a portal person used, in one transaction. It
+// returns the delegated tokens and the portal grants it deleted, added together: a grant is the same kind of
+// bearer record for a portal that issues its own people.
 func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (int64, error) {
 	if len(principals) == 0 {
 		return 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM delegated_tokens WHERE principal = ANY($1)`, principals)
+	var deleted int64
+	err := s.inTx(ctx, func(q Querier) error {
+		// The per-person lock of every portal person named, in lock-key order, held to commit. A mint takes the
+		// same lock before it writes a grant and its history, so it either commits whole before this and is
+		// deleted whole, or waits for this commit and writes both after it. The lock does not depend on an
+		// identity row, which a first exchange creates after the erase has looked. The erase takes no other lock
+		// a mint holds, so the two cannot wait on each other in a cycle.
+		rows, err := q.Query(ctx, `SELECT DISTINCT `+portalPersonLockKey("p")+` AS k FROM unnest($1::text[]) p WHERE starts_with(p, $2) ORDER BY k`,
+			principals, types.PortalPersonPrefix)
+		if err != nil {
+			return err
+		}
+		keys, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, k); err != nil {
+				return err
+			}
+		}
+		for _, stmt := range []string{
+			`DELETE FROM delegated_tokens WHERE principal = ANY($1)`,
+			`DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE principal = ANY($1) ORDER BY id FOR UPDATE)`,
+		} {
+			tag, err := q.Exec(ctx, stmt, principals)
+			if err != nil {
+				return err
+			}
+			deleted += tag.RowsAffected()
+		}
+		_, err = q.Exec(ctx, `DELETE FROM portal_person_portals WHERE identity_id IN
+			(SELECT id FROM principal_identities WHERE principal = ANY($1))`, principals)
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("store: delete delegated tokens: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return deleted, nil
 }
 
 // DeleteRunCreateKeysOf deletes every POST /runs Idempotency-Key of one of principals, direct or through

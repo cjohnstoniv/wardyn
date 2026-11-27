@@ -23,6 +23,16 @@ var chainRewriteMigrations = []string{
 	"0058_audit_chain_schema_qualified.sql",
 }
 
+// applyMigrationsAfter applies, in order, every migration file named after last.
+func applyMigrationsAfter(t *testing.T, pool *pgxpool.Pool, last string) {
+	t.Helper()
+	for _, name := range migrationFileNames(t) {
+		if name > last {
+			execMigrationFile(t, pool, name)
+		}
+	}
+}
+
 // appendAuditRow appends one row through whichever audit_events_chain() trigger
 // is installed and returns (seq, prev_hash, row_hash) as the trigger computed
 // them. Nothing here supplies a hash: choosing one is the thing
@@ -84,6 +94,11 @@ func TestPG_AuditChainSurvivesTheTriggerRewriteOnAPopulatedDatabase(t *testing.T
 	for _, action := range []string{"test.post.2", "test.post.3"} {
 		appendAuditRow(t, pool, action)
 	}
+
+	// The verifier reads each row's hash format (0410), which needs the
+	// partitioned log (0111): the rest of the upgrade runs first, as it does
+	// when the deployment next boots.
+	applyMigrationsAfter(t, pool, chainRewriteMigrations[len(chainRewriteMigrations)-1])
 
 	// And the verifier — which walks pre- and post-upgrade rows as one chain —
 	// must agree.

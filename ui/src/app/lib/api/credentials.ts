@@ -59,7 +59,7 @@ export interface AdminMintedToken {
   owner_refused?: boolean;
 }
 
-/** An erasure's `not_erased`: other principals that have, or had, the person's tenant and object id, left alone. */
+/** An erasure's `not_erased`: names the erasure left out. A name can be another principal that has, or had, the person's tenant and object id, or an unbound name that more than one person may match; none is shown as a person or account of its own. */
 export interface NotErased {
   subjects: string[];
   note: string;

@@ -693,21 +693,15 @@ func TestSCIMGroupsRoutes(t *testing.T) {
 		t.Errorf("a removal of nobody was audited: %+v", got)
 	}
 
-	// Filtered lists carry at most 100 groups, whatever startIndex and count say.
+	// A filter that selects more than the cap answers tooMany, never a set cut at the cap, whatever startIndex
+	// and count say.
 	for range 101 {
 		if _, err := e.st.CreateScimGroup(context.Background(), uuid.NewString(), "bulk", time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	w := e.scim(n, http.MethodGet, "/scim/v2/Groups?filter="+url.QueryEscape(`displayName eq "bulk"`)+"&startIndex=5&count=3", "")
-	var list struct {
-		TotalResults int         `json:"totalResults"`
-		StartIndex   int         `json:"startIndex"`
-		Resources    []scimGroup `json:"Resources"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list.Resources) != 100 || list.TotalResults != 100 || list.StartIndex != 1 {
-		t.Errorf("a filtered list = %d resources, total %d, start %d (%v), want 100, 100, 1", len(list.Resources), list.TotalResults, list.StartIndex, err)
-	}
+	scimCovWantError(t, w, http.StatusBadRequest, scim.TypeTooMany)
 
 	// The recorded group POST has the shape Wardyn stores.
 	var rec struct {

@@ -41,8 +41,15 @@ type decisionSink struct {
 	client       *http.Client
 	out          io.Writer
 
-	ch      chan egress.DecisionLog
+	ch      chan queuedDecision
 	dropped atomic.Uint64
+	// batchMax is how many records one post may carry: 0 (single posts) until an answer of the control plane
+	// says it takes batches (DecisionBatchHeader), and again 0 after an answer that does not. Never persisted.
+	batchMax atomic.Int64
+	// lastOK is when a post last landed (unix nanoseconds; the sink's start before any), and failing says a
+	// post has failed since: emit labels a decision made while the control plane could not be reached.
+	lastOK  atomic.Int64
+	failing atomic.Bool
 	// reported is the drop count already summarized. The worker owns it; close reads and advances it only
 	// once the worker has exited (wg), for the drops counted after the worker's last summary.
 	reported uint64
@@ -57,6 +64,13 @@ type decisionSink struct {
 	// appending counts admitted records whose append runs without mu (emitLocal); close waits for them.
 	appending sync.WaitGroup
 
+	// spool keeps batches the control plane could not take (decisions_spool.go); nil when it is off, which is
+	// also how a runner-hosted proxy and the tests run. drainStop, drainKick and drainWG are the drain's.
+	spool     *decisionSpool
+	drainStop chan struct{}
+	drainKick chan struct{}
+	drainWG   sync.WaitGroup
+
 	// outMu serialises writes to out: a single Write over PIPE_BUF is not
 	// atomic at the OS level, so concurrent mirror() calls could interleave
 	// into a corrupted record without it.
@@ -67,13 +81,21 @@ type decisionSink struct {
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
+	return newRunDecisionSink(uuid.Nil, controlPlaneURL, token, bufferSize, client, out)
+}
+
+// newRunDecisionSink is newDecisionSink for the sidecar of run runID, whose spool file is named for the run.
+func newRunDecisionSink(runID uuid.UUID, controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
 	s := &decisionSink{
 		endpoint: controlPlaneEndpoint(controlPlaneURL, "/api/v1/internal/decisions"),
 		token:    token,
 		client:   client,
 		out:      out,
-		ch:       make(chan egress.DecisionLog, bufferSize),
+		ch:       make(chan queuedDecision, bufferSize),
 	}
+	s.lastOK.Store(time.Now().UnixNano())
+	s.openSpool(runID)
+	s.startSpoolDrain()
 	s.wg.Add(1)
 	go s.run()
 	return s
@@ -108,7 +130,7 @@ func (s *decisionSink) emit(log egress.DecisionLog) {
 		return
 	}
 	select {
-	case s.ch <- log:
+	case s.ch <- s.queued(log):
 	default:
 		s.dropped.Add(1)
 	}
@@ -144,15 +166,19 @@ func (s *decisionSink) run() {
 	defer ticker.Stop()
 	for {
 		select {
-		case log, ok := <-s.ch:
+		case q, ok := <-s.ch:
 			if !ok {
 				s.reportDropped(&s.reported) // drained + closed: final tail summary
 				return
 			}
+			if s.batchMax.Load() > 1 {
+				s.postBatches(q) // the control plane said it takes batches (decisions_batch.go)
+				continue
+			}
 			s.reportDropped(&s.reported) // piggyback on the next successful flush
 			// A decision the control plane REFUSED (e.g. 413 over maxJSONBody)
 			// counts as dropped too, so it isn't silently lost from the audit trail.
-			if err := s.post(log); err != nil {
+			if err := s.post(q.log); err != nil {
 				s.dropped.Add(1)
 			}
 		case <-ticker.C:
@@ -215,10 +241,12 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
+		s.failing.Store(true)
 		return err
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	s.noteAnswer(resp)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("decision post: status %d", resp.StatusCode)
 	}
@@ -282,6 +310,7 @@ func (s *decisionSink) close(ctx context.Context) error {
 		// A decision emitted once the sink closed is counted (emit), and one counted after the worker's final
 		// summary would be in no summary: post one more for those, once the worker is gone, even when close
 		// has stopped waiting.
+		s.stopSpool(func() bool { return ctx.Err() != nil }) // replays what it can within the close budget; the rest is dropped and counted
 		s.reportDropped(&s.reported)
 		close(done)
 	}()

@@ -75,7 +75,7 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 		erasure.Recordings: s.eraseRecordingsOf,
 	}
 	if s.cfg.Secrets != nil {
-		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
+		steps[erasure.Credentials] = s.alsoEraseRunTokenBindings(func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
 			history := map[string]any{}
 			fenced, revokeFailed, err := s.eraseCredentialsScope(ctx, person, want, &rep)
@@ -100,7 +100,7 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 				data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 			}
 			return data, err
-		}
+		})
 	}
 	if _, ok := s.cfg.Store.(store.ComponentStore); ok {
 		steps[erasure.Components] = s.alsoEraseLaunchIntents(s.eraseComponentsOf)
@@ -132,11 +132,12 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 	return &erasure.Orchestrator{Steps: steps}
 }
 
-// erasureTokensNotRevoked is the credentials scope's statement, beside tokens_revocation_failed, that an Azure
-// DevOps token it tried to revoke may still work: Azure DevOps refused the revoke for good, and the sign-in a
-// later revoke would need is erased with the rest. A revoke that did not finish erases nothing instead
+// erasureTokensNotRevoked is the statement, beside tokens_revocation_failed, that an Azure DevOps token Wardyn
+// tried to revoke may still work: Azure DevOps refused the revoke for good, and the sign-in a later revoke would
+// need is erased with the rest. It says nothing of whether the credentials are erased, since the same text is on
+// a failure that stopped before they were (the mask fence). A revoke that did not finish erases nothing instead
 // (errADORevokeUnfinished).
-const erasureTokensNotRevoked = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked. A token that was not revoked works until it expires; to end it sooner, revoke it in Azure DevOps."
+const erasureTokensNotRevoked = "Wardyn could not confirm that every token it created for this person's runs was revoked. A token whose revoke failed may still work until it expires; to end it sooner, revoke it in Azure DevOps."
 
 // tokensNotRevokedOf is the two keys a credentials step set before it failed (err is the orchestrator's),
 // so the failure's audit row still says a token may work; nil when the step did not say so.
@@ -274,6 +275,24 @@ func (s *Server) alsoEraseLaunchIntents(step erasure.Step) erasure.Step {
 		case store.RunSetupsErased:
 			d.LaunchIntents = n
 			detail = d
+		}
+		return detail, err
+	}
+}
+
+// alsoEraseRunTokenBindings wraps the credentials step: it also deletes the spire token bindings whose
+// subject or sponsor is the person, so any live token of theirs, or one they sponsored, is refused at its
+// next verify. A store that keeps no bindings does nothing.
+func (s *Server) alsoEraseRunTokenBindings(step erasure.Step) erasure.Step {
+	return func(ctx context.Context, person string) (any, error) {
+		detail, err := step(ctx, person)
+		bs, ok := s.cfg.Store.(store.TokenBindingEraser)
+		if err != nil || !ok {
+			return detail, err
+		}
+		n, err := bs.DeleteTokenBindingsOf(ctx, person)
+		if d, isMap := detail.(map[string]any); isMap {
+			d["token_bindings_deleted"] = n
 		}
 		return detail, err
 	}
@@ -545,6 +564,13 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *er
 		}
 		detail["approvals"] = n
 	}
+	if ae, ok := s.cfg.Store.(assistantSessionEraser); ok {
+		n, err := s.eraseAssistantSessions(ctx, ae, names)
+		if err != nil {
+			return nil, err
+		}
+		detail["assistant_sessions"] = n
+	}
 	return detail, nil
 }
 
@@ -769,10 +795,12 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 // under action, when name is a reserved identity (isReservedPrincipal): the
 // admin token, the local operator, a device or a portal is no person, and the
 // runs, outputs and recordings stamped with it belong to the deployment's
-// automation, not to someone who can ask to be forgotten. It reports whether it
-// answered.
+// automation, not to someone who can ask to be forgotten. A portal person
+// (delegate:person:<k>:<e>) is a person, and the one reserved name erasure
+// accepts, unless the name is the configured local operator's: that seat is
+// protected first, whatever shape it was given. It reports whether it answered.
 func (s *Server) refuseReservedErasure(w http.ResponseWriter, r *http.Request, action, name string) bool {
-	if !s.isReservedPrincipal(name) {
+	if !s.isReservedPrincipal(name) || (isPortalPersonName(name) && !s.isLocalOperatorName(name)) {
 		return false
 	}
 	s.auditOwnerRefusal(r, action, name, reasonReservedPrincipal)

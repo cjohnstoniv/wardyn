@@ -59,6 +59,10 @@ type AuditFilter struct {
 	// `data @> $n::jsonb`): every key present with an equal value, objects
 	// recursively. A string, not a map, so the filter stays comparable (IsZero).
 	DataContains string
+	// DataContainsAny is a JSON array of objects, each as DataContains reads one: the row's data must contain
+	// at least one of them. A string for the same reason. A value that is not an array of objects matches no
+	// row, and so does an empty array.
+	DataContainsAny string
 }
 
 // The two AuditFilter.Origin values: rows a device forwarded, and rows the
@@ -94,8 +98,36 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 		return false
 	case f.DataContains != "" && !dataContains(ev.Data, f.DataContains):
 		return false
+	case f.DataContainsAny != "" && !dataContainsAny(ev.Data, f.DataContainsAny):
+		return false
 	}
 	return true
+}
+
+// dataContainsAny is `data @> w1 OR data @> w2 ...` in Go for the objects of the JSON array want.
+func dataContainsAny(data []byte, want string) bool {
+	for _, w := range jsonObjects(want) {
+		if dataContains(data, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonObjects is the elements of the JSON array want that are objects, each as its own JSON text; nothing when
+// want is not an array.
+func jsonObjects(want string) []string {
+	var raw []json.RawMessage
+	if json.Unmarshal([]byte(want), &raw) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if t := strings.TrimSpace(string(r)); strings.HasPrefix(t, "{") {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // dataContains is `data @> want` in Go: want and data are JSON; an unparseable
@@ -209,6 +241,17 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 	if f.DataContains != "" {
 		add("data @> $%d::jsonb", f.DataContains)
 	}
+	if f.DataContainsAny != "" {
+		var alts []string
+		for _, w := range jsonObjects(f.DataContainsAny) {
+			args = append(args, w)
+			alts = append(alts, fmt.Sprintf("data @> $%d::jsonb", len(args)))
+		}
+		if len(alts) == 0 {
+			alts = []string{"false"}
+		}
+		clauses = append(clauses, "("+strings.Join(alts, " OR ")+")")
+	}
 	switch f.Origin {
 	case AuditOriginDevice:
 		clauses = append(clauses, federatedRowSQL)
@@ -230,11 +273,18 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 // DataContains adds a per-row `data @>` test with no GIN index behind it; the
 // planner walks the pkey or the (time) index and filters, and the LIMIT plus a
 // Since window bound it (about 0.1 s over 2M rows in the #1449 review).
+// A run's read is bounded by runAuditFromSQL.
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
 	q, args := filteredAuditQuery(auditCols, runID, f, p.Newest, 0)
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
+
+// runAuditFromSQL bounds a run's audit read by recorded_at, the column audit_events is partitioned by, so the read
+// skips the partitions from before the run: its creation less a day, a margin for the two clocks (created_at is the
+// server's, recorded_at the database's). A run whose row is gone gets no bound, and the read is the one it was. %s is
+// the run_id placeholder.
+const runAuditFromSQL = `recorded_at >= COALESCE((SELECT created_at FROM agent_runs WHERE id = %s) - interval '1 day', '-infinity'::timestamptz)`
 
 // filteredAuditQuery is the filtered audit read without its LIMIT: cols from audit_events narrowed by the
 // run and f, in the order QueryAuditEventsFilteredPage documents (newest flips a run's trail to newest-first).
@@ -248,7 +298,8 @@ func filteredAuditQuery(cols string, runID *uuid.UUID, f AuditFilter, newest boo
 	var clauses []string
 	if runID != nil {
 		args = append(args, *runID)
-		clauses = append(clauses, fmt.Sprintf("run_id = $%d", len(args)))
+		at := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, "run_id = "+at, fmt.Sprintf(runAuditFromSQL, at))
 	}
 	extra, args := f.where(args)
 	clauses = append(clauses, extra...)

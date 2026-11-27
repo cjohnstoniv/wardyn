@@ -610,14 +610,13 @@ func (m *Manifests) Watch(runID uuid.UUID, every time.Duration) func() bool {
 	return func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		// A moved generation means values were added or dropped (an erasure's
-		// tombstones among them) since the answer: read it again at once.
-		if !last.IsZero() && time.Since(last) < every && m.reg.Generation() == gen {
+		// A moved generation means this run's values, or the globals, were added or dropped (an erasure's tombstones among them) since the answer: read it again at once.
+		if !last.IsZero() && time.Since(last) < every && m.reg.RunGeneration(runID) == gen {
 			return ok
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		gen = m.reg.Generation()
+		gen = m.reg.RunGeneration(runID)
 		ok, last = m.Covered(ctx, runID), time.Now()
 		return ok
 	}

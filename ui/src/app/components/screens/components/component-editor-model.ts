@@ -34,6 +34,8 @@ export interface ComponentDraft {
   description?: string;
   // One host per line.
   hosts: string;
+  // The image a run must use to attach the component (#1972); empty for none.
+  image?: string;
   secrets: SecretDraft[];
   settings: SettingDraft[];
 }
@@ -56,11 +58,12 @@ export const blankSecret = (): SecretDraft => ({
 export const blankSetting = (): SettingDraft => ({ key: nextKey++, name: "", value: "" });
 
 export function draftOf(c: Component | null): ComponentDraft {
-  if (!c) return { name: "", description: "", hosts: "", secrets: [], settings: [] };
+  if (!c) return { name: "", description: "", hosts: "", image: "", secrets: [], settings: [] };
   return {
     name: c.name,
     description: c.definition.description ?? "",
     hosts: c.definition.hosts.join("\n"),
+    image: c.definition.image ?? "",
     secrets: (c.definition.secrets ?? []).map((s) => ({
       ...blankSecret(),
       secret_name: s.secret_name,
@@ -76,6 +79,9 @@ export function draftOf(c: Component | null): ComponentDraft {
     settings: Object.entries(c.definition.config ?? {}).map(([name, value]) => ({ ...blankSetting(), name, value })),
   };
 }
+
+// Whether an image reference names a tag or a digest: the repository alone meets any tag or digest of it.
+export const imageNamesTagOrDigest = (ref: string): boolean => ref.includes("@") || ref.slice(ref.lastIndexOf("/") + 1).includes(":");
 
 export const hostLines = (text: string): string[] =>
   text
@@ -116,11 +122,13 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
   const choices = headerHostChoices(hosts);
   const config = Object.fromEntries(d.settings.filter((s) => s.name.trim()).map((s) => [s.name.trim(), s.value]));
   const description = d.description?.trim() ?? "";
+  const image = d.image?.trim() ?? "";
   return {
     name: d.name.trim(),
     definition: {
       ...(description ? { description } : {}),
       hosts,
+      ...(image ? { image } : {}),
       ...(d.secrets.length > 0 && { secrets: d.secrets.map((s) => secretOf(s, choices)) }),
       ...(Object.keys(config).length > 0 && { config }),
     },

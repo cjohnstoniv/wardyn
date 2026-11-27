@@ -40,6 +40,7 @@ var otherConcept = map[string]string{
 	"*:shell_profile":                                              "the setup check for the user's shell profile",
 	"*:profile_proposal":                                           "the workspace profile proposal",
 	"*:queue_profile_changed":                                      "HELD: a stored run end reason, see lanes/RENAME/TRIAGE.md",
+	"*:token_profile":                                              "an issuer portal's subject-token shape (okta_access_token or okta_id_token), not a governance unit",
 	"internal/types/workspace.go:profile":                          "the workspace scan profile",
 	"internal/types/workspace_contract.go:profile":                 "the workspace scan profile",
 	"internal/adoscope/areas.go:profile":                           "the Azure DevOps user-profile scope area",

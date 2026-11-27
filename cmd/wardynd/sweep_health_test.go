@@ -225,8 +225,8 @@ func (f failingSweeps) SweepRunSecrets(context.Context) (int, error)         { r
 func (f failingSweeps) SweepExpiredCredentials(context.Context) (int, error) { return 0, f.err }
 func (f failingSweeps) RenewAWSSSOCredentials(context.Context) (int, error)  { return 0, f.err }
 func (f failingSweeps) Sweep(time.Duration) (int, error)                     { return 0, f.err }
-func (f failingSweeps) SweepTerminalSandboxesPage(context.Context, store.Page) (int, int, error) {
-	return 0, 0, f.err
+func (f failingSweeps) SweepTerminalSandboxesAfter(context.Context, store.RunCursor, int) (int, int, store.RunCursor, error) {
+	return 0, 0, store.RunCursor{}, f.err
 }
 
 // An erroring tick moves the attempt and never the success, for each sweep in
@@ -329,5 +329,29 @@ func TestRunCredentialSweeper_AlsoSweepsExpiredEphemeralRows(t *testing.T) {
 	case <-rec.calls:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the credential sweep never swept the expired attach tickets and delegated tokens")
+	}
+}
+
+// The run-history retention sweep is registered only when a window is set: unset (0) it never runs, so it has no
+// series and can never be stale.
+func TestRegisterSweepHealth_RunRetentionOnlyWhenSet(t *testing.T) {
+	for _, tc := range []struct {
+		days int
+		want bool
+	}{{0, false}, {30, true}} {
+		clk := &healthClock{t: time.Now().UTC().Truncate(time.Second)}
+		tr := registeredFor(t, sweepInstall{runHistoryRetentionDays: tc.days}, clk)
+		got := false
+		for _, s := range tr.Registered() {
+			if s.Name == sweephealth.RunRetention {
+				got = true
+				if s.Interval != runRetentionSweepInterval {
+					t.Errorf("run_retention interval = %v, want %v", s.Interval, runRetentionSweepInterval)
+				}
+			}
+		}
+		if got != tc.want {
+			t.Errorf("days %d: run_retention registered = %v, want %v", tc.days, got, tc.want)
+		}
 	}
 }

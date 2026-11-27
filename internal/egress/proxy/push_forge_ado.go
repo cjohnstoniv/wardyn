@@ -63,6 +63,9 @@ type adoForge struct {
 	base string
 	auth func(context.Context) (injectedHeader, error)
 	hdr  injectedHeader
+	// brokered says auth is the Git broker's own token (git_pat), which goes on only inside its offline
+	// bound; the Entra reader's header has a lease of its own.
+	brokered bool
 }
 
 const (
@@ -145,7 +148,7 @@ func (p *Proxy) adoPATForge(host, rest string, g PATGrant) *forgeRepo {
 	if !ok {
 		return nil
 	}
-	return &forgeRepo{p: p, ado: &adoForge{host: host, base: base, auth: func(ctx context.Context) (injectedHeader, error) {
+	return &forgeRepo{p: p, ado: &adoForge{host: host, base: base, brokered: true, auth: func(ctx context.Context) (injectedHeader, error) {
 		tok, user, err := p.patToken(ctx, g)
 		if err != nil {
 			return injectedHeader{}, err
@@ -170,6 +173,11 @@ func (f *forgeRepo) adoGet(ctx context.Context, path string, v any) (int, error)
 			}
 			registerHeaderCredentialFor(f.p.maskKey, h.value)
 			a.hdr = h
+		}
+		if a.brokered {
+			if err := f.p.brokerOfflineErr(); err != nil {
+				return fmt.Errorf("the run's credential: %w", err)
+			}
 		}
 		req.Header.Set(a.hdr.name, a.hdr.value)
 		req.Header.Set("Accept", "application/json")

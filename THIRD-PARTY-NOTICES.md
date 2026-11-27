@@ -98,6 +98,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/jackc/pgservicefile` | MIT | https://github.com/jackc/pgservicefile/blob/5a60cdf6a761/LICENSE |
 | `github.com/jackc/pgx/v5` | MIT | https://github.com/jackc/pgx/blob/v5.12.0/LICENSE |
 | `github.com/jackc/puddle/v2` | MIT | https://github.com/jackc/puddle/blob/v2.2.3/LICENSE |
+| `github.com/jezek/xgb` | BSD-3-Clause | https://github.com/jezek/xgb/blob/v1.3.1/LICENSE |
 | `github.com/json-iterator/go` | MIT | https://github.com/json-iterator/go/blob/v1.1.12/LICENSE |
 | `github.com/kr/fs` | BSD-3-Clause | https://github.com/kr/fs/blob/v0.1.0/LICENSE |
 | `github.com/moby/docker-image-spec/specs-go/v1` | Apache-2.0 | https://github.com/moby/docker-image-spec/blob/v1.3.1/LICENSE |
@@ -124,7 +125,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/sigstore/timestamp-authority/v2/pkg` | Apache-2.0 | https://github.com/sigstore/timestamp-authority/blob/v2.2.0/LICENSE |
 | `github.com/spf13/cobra` | Apache-2.0 | https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt |
 | `github.com/spf13/pflag` | BSD-3-Clause | https://github.com/spf13/pflag/blob/v1.1.0/LICENSE |
-| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.9.0/LICENSE |
+| `github.com/spiffe/go-spiffe/v2` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.9.0/LICENSE |
+| `github.com/spiffe/spire-api-sdk/proto/spire/api` | Apache-2.0 | https://github.com/spiffe/spire-api-sdk/blob/v1.16.0/LICENSE |
 | `github.com/theupdateframework/go-tuf/v2/metadata` | Apache-2.0 | https://github.com/theupdateframework/go-tuf/blob/v2.4.2/LICENSE |
 | `github.com/transparency-dev/formats/log` | Apache-2.0 | https://github.com/transparency-dev/formats/blob/v0.1.1/LICENSE |
 | `github.com/transparency-dev/merkle` | Apache-2.0 | https://github.com/transparency-dev/merkle/blob/v0.0.2/LICENSE |
@@ -177,7 +179,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 
 | package | version | licence |
 |---|---|---|
-| `@babel/runtime` | 7.29.7 | MIT |
+| `@babel/runtime` | 7.29.7, 7.29.10 | MIT |
 | `@floating-ui/core` | 1.8.0 | MIT |
 | `@floating-ui/dom` | 1.8.0 | MIT |
 | `@floating-ui/react-dom` | 2.1.9 | MIT |
@@ -221,11 +223,16 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `@radix-ui/react-use-size` | 1.1.5 | MIT |
 | `@radix-ui/react-visually-hidden` | 1.2.13 | MIT |
 | `@radix-ui/rect` | 1.1.3 | MIT |
+| `@react-three/fiber` | 9.8.2 | MIT |
 | `@solid-primitives/refs` | 1.1.3 | MIT |
 | `@solid-primitives/transition-group` | 1.1.2 | MIT |
 | `@solid-primitives/utils` | 6.4.0 | MIT |
+| `@tanstack/query-core` | 5.107.1 | MIT |
+| `@tanstack/react-query` | 5.107.1 | MIT |
 | `@types/react` | 19.3.0 | MIT |
 | `@types/react-dom` | 19.3.0 | MIT |
+| `@types/react-reconciler` | 0.28.9 | MIT |
+| `@types/webxr` | 0.5.24 | MIT |
 | `@xterm/addon-clipboard` | 0.2.0 | MIT |
 | `@xterm/addon-fit` | 0.11.0 | MIT |
 | `@xterm/addon-unicode11` | 0.9.0 | MIT |
@@ -234,6 +241,9 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `@xterm/xterm` | 6.0.0 | MIT |
 | `aria-hidden` | 1.2.6 | MIT |
 | `asciinema-player` | 3.17.0 | Apache-2.0 |
+| `base64-js` | 1.5.1 | MIT |
+| `buffer` | 6.0.3 | MIT |
+| `camera-controls` | 3.1.2 | MIT |
 | `class-variance-authority` | 0.7.1 | Apache-2.0 |
 | `clsx` | 2.1.1 | MIT |
 | `cmdk` | 1.1.1 | MIT |
@@ -242,6 +252,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `detect-node-es` | 1.1.0 | MIT |
 | `fast-equals` | 4.0.3 | MIT |
 | `get-nonce` | 1.0.1 | MIT |
+| `ieee754` | 1.2.1 | BSD-3-Clause |
+| `its-fine` | 2.1.1 | MIT |
 | `jetbrains-mono` | 1.0.6 | MIT |
 | `js-base64` | 3.9.4 | BSD-3-Clause |
 | `js-tokens` | 4.0.0 | MIT |
@@ -260,6 +272,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `react-router` | 7.18.4 | MIT |
 | `react-router-dom` | 7.18.4 | MIT |
 | `react-style-singleton` | 2.2.3 | MIT |
+| `react-use-measure` | 2.1.7 | MIT |
 | `resize-observer-polyfill` | 1.5.1 | MIT |
 | `scheduler` | 0.28.0 | MIT |
 | `seroval` | 1.6.12 | MIT |
@@ -268,12 +281,16 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `solid-js` | 1.9.13 | MIT |
 | `solid-transition-group` | 0.2.3 | MIT |
 | `sonner` | 2.0.8 | MIT |
+| `suspend-react` | 0.1.3 | MIT |
 | `tailwind-merge` | 3.7.0 | MIT |
+| `three` | 0.187.0 | MIT |
 | `tslib` | 2.8.1 | 0BSD |
 | `tw-animate-css` | 1.4.0 | MIT |
 | `use-callback-ref` | 1.3.3 | MIT |
 | `use-sidecar` | 1.1.3 | MIT |
+| `use-sync-external-store` | 1.7.0 | MIT |
 | `yaml` | 2.9.1 | ISC |
+| `zustand` | 5.1.0 | MIT |
 
 ## Fonts
 
@@ -292,6 +309,7 @@ canonical text for that licence is in `licenses/texts/common/`.
 
 | package | version | declared licence | copyright holder |
 |---|---|---|---|
+| `@react-three/fiber` | 9.8.2 | MIT | Paul Henschel |
 | `react-remove-scroll-bar` | 2.3.8 | MIT | Anton Korzunov |
 
 ## Components bundled inside UI packages

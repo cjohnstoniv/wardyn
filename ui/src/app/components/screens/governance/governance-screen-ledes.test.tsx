@@ -15,6 +15,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const getGovernanceMock = vi.fn();
 const listChangesMock = vi.fn();
+const getApprovalCountsMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -23,6 +24,7 @@ vi.mock("../../../lib/api/governance", async () => {
       getGovernance: () => getGovernanceMock(),
       previewGovernance: () => Promise.resolve({}),
       listChanges: () => listChangesMock(),
+      getApprovalCounts: () => getApprovalCountsMock(),
     },
   };
 });
@@ -36,9 +38,18 @@ vi.mock("../../../lib/api/policies", async () => {
   return { ...actual, policies: { ...actual.policies, getDefaultPolicy: () => getDefaultPolicyMock() } };
 });
 vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () => Promise.resolve([]) } }));
+// The assistant's settings and availability answer off, with the stored defaults.
+vi.mock("../../../lib/api/assistant", () => ({
+  assistant: {
+    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
+    getMyAssistant: () => Promise.resolve({ state: "off" }),
+  },
+}));
 
 import type { GovernanceEffective, GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
-import { CHANGES, GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { APPROVALS_NEEDED } from "../../../lib/approvals-needed-copy";
+import { BASELINE, CHANGES, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
@@ -71,6 +82,7 @@ function renderScreen(snap: GovernanceSnapshot = WITH_ROWS) {
 beforeEach(() => {
   getGovernanceMock.mockReset();
   listChangesMock.mockReset().mockResolvedValue([]);
+  getApprovalCountsMock.mockReset();
   // The signed-in person's own ceiling, narrower than the deployment's.
   getDefaultPolicyMock.mockReset().mockResolvedValue({ allowed_domains: ["mine.corp"], min_confinement_class: "CC2" });
   window.localStorage.clear();
@@ -204,5 +216,38 @@ describe("GovernanceScreen — the Default unit", () => {
     const row = (await screen.findByText("wardyn.ops")).closest("tr") as HTMLElement;
     expect(within(row).getByText("Default")).toBeInTheDocument();
     expect(within(row).queryByText(DEFAULT_GOVERNANCE_UNIT_ID)).toBeNull();
+  });
+});
+
+describe("GovernanceScreen — the Approvals needed tab", () => {
+  const counts = { minimum: 2, highest: 2, default: { required: 2, require_security: false }, kinds: [] };
+
+  it("is a security operator's tab, after Baseline hosts, and opens the counts", async () => {
+    getApprovalCountsMock.mockResolvedValue(counts);
+    renderScreen();
+    const tab = await screen.findByRole("tab", { name: APPROVALS_NEEDED.TITLE });
+    const names = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(names.indexOf(APPROVALS_NEEDED.TITLE)).toBe(names.indexOf(BASELINE.TAB) + 1);
+    expect(getApprovalCountsMock).not.toHaveBeenCalled();
+    await userEvent.click(tab);
+    expect(await screen.findByText(APPROVALS_NEEDED.MIN_LABEL)).toBeInTheDocument();
+    expect(getApprovalCountsMock).toHaveBeenCalledTimes(1);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("is absent for a caller without the security tier, whatever the URL asks", async () => {
+    getGovernanceMock.mockResolvedValue(WITH_ROWS);
+    render(
+      <MemoryRouter initialEntries={["/?tab=approvals-needed"]}>
+        <OperatorProvider operator={false} securityOperator={false}>
+          <GovernanceScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("heading", { name: GOV.TITLE, level: 1 });
+    expect(await screen.findByRole("tab", { name: CHANGES.TAB })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: APPROVALS_NEEDED.TITLE })).toBeNull();
+    expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toHaveAttribute("aria-selected", "true");
+    expect(getApprovalCountsMock).not.toHaveBeenCalled();
   });
 });

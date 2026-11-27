@@ -50,7 +50,7 @@ func TestPG_Devices_IngestRefusesARowUnderAnOrgRun(t *testing.T) {
 		Data: json.RawMessage(`{"decision":"APPROVED"}`),
 	}
 	ev.RowHash = auditRowHash(t, pool, "", ev)
-	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}})
+	_, err = ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}})
 	if !errors.Is(err, store.ErrFederatedOrgRun) {
 		t.Fatalf("ingest of a row under org run %s: err = %v, want ErrFederatedOrgRun", run.ID, err)
 	}
@@ -98,7 +98,7 @@ func TestPG_Devices_IngestRecordsTheObservedPeerAndBothChainsVerify(t *testing.T
 		prev = ev.RowHash
 		rows = append(rows, types.FederatedAuditEvent{AuditEvent: ev, Seq: seq})
 	}
-	res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+	res, err := ingestEvents(ctx, st, d.ID, testPeer, rows)
 	if err != nil || res.Accepted != 3 {
 		t.Fatalf("ingest: %+v %v", res, err)
 	}
@@ -106,8 +106,8 @@ func TestPG_Devices_IngestRecordsTheObservedPeerAndBothChainsVerify(t *testing.T
 	q := `
 		SELECT e.seq, e.source_ip, e.data->'device_origin'->>'source_ip',
 		       ` + store.FederatedClaimHashSQL + ` = e.data->'device_origin'->>'row_hash',
-		       e.row_hash = audit_row_hash(e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
-		                                   e.action, e.target, e.outcome, e.source_ip, e.data),
+		       e.row_hash = audit_row_hash_any(e.hash_format, e.hash_salt, e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
+		                                       e.action, e.target, e.outcome, e.source_ip, e.data),
 		       COALESCE(e.prev_hash, '') = COALESCE((SELECT p.row_hash FROM audit_events p
 		                                             WHERE p.seq < e.seq AND p.row_hash IS NOT NULL ORDER BY p.seq DESC LIMIT 1), '')
 		FROM audit_events e
@@ -181,7 +181,7 @@ func TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters(t *testing.T)
 		t.Fatal(err)
 	}
 	start := time.Now()
-	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, batch)
+	_, err = ingestEvents(ctx, st, d.ID, testPeer, batch)
 	single := time.Since(start)
 	_, _ = holder.Exec(ctx, `SELECT pg_advisory_unlock($1)`, db.AuditChainLockKey)
 	_ = holder.Close(ctx)
@@ -203,7 +203,7 @@ func TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters(t *testing.T)
 		go func() {
 			defer wg.Done()
 			for time.Now().Before(deadline) {
-				_, _ = st.IngestDeviceAudit(ctx, d.ID, testPeer, batch)
+				_, _ = ingestEvents(ctx, st, d.ID, testPeer, batch)
 				replays.Add(1)
 			}
 		}()
@@ -246,7 +246,7 @@ func TestPG_Devices_IngestForARevokedDeviceIsErrDeviceRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	r1 := chainedRow(t, pool, "", 1, "run.create")
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1}); !errors.Is(err, store.ErrDeviceRevoked) || errors.Is(err, store.ErrConflict) {
+	if _, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{r1}); !errors.Is(err, store.ErrDeviceRevoked) || errors.Is(err, store.ErrConflict) {
 		t.Fatalf("ingest for a revoked device: err = %v, want ErrDeviceRevoked and not ErrConflict", err)
 	}
 }
@@ -267,8 +267,8 @@ func storedFederated(t *testing.T, pool *pgxpool.Pool, deviceID uuid.UUID) []sto
 	q := `
 		SELECT e.seq, e.target, e.data::text,
 		       ` + store.FederatedClaimHashSQL + ` = e.data->'device_origin'->>'row_hash',
-		       e.row_hash = audit_row_hash(e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
-		                                   e.action, e.target, e.outcome, e.source_ip, e.data),
+		       e.row_hash = audit_row_hash_any(e.hash_format, e.hash_salt, e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
+		                                       e.action, e.target, e.outcome, e.source_ip, e.data),
 		       COALESCE(e.prev_hash, '') = COALESCE((SELECT p.row_hash FROM audit_events p
 		                                             WHERE p.seq < e.seq AND p.row_hash IS NOT NULL ORDER BY p.seq DESC LIMIT 1), '')
 		FROM audit_events e WHERE e.actor = $1 ORDER BY e.seq`
@@ -330,7 +330,7 @@ func TestPG_Devices_EveryAcceptedRowReChecksFromTheStoredRow(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := federationDevice(t, st)
-			res, err := st.IngestDeviceAudit(context.Background(), d.ID, testPeer,
+			res, err := ingestEvents(context.Background(), st, d.ID, testPeer,
 				[]types.FederatedAuditEvent{federationRow(t, pool, d, "", 1, c.target, c.data)})
 			if err != nil || res.Accepted != 1 {
 				t.Fatalf("ingest: %+v %v", res, err)
@@ -359,7 +359,7 @@ func TestPG_Devices_ProxiedIngestKeepsTheClaimReCheckable(t *testing.T) {
 	d := federationDevice(t, st)
 	r1 := federationRow(t, pool, d, "", 1, "t", json.RawMessage(`{"s":"x"}`))
 	r2 := federationRow(t, pool, d, r1.RowHash, 2, "t", nil)
-	if res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2}); err != nil || res.Accepted != 2 {
+	if res, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2}); err != nil || res.Accepted != 2 {
 		t.Fatalf("ingest: %+v %v", res, err)
 	}
 	got := storedFederated(t, pool, d.ID)
@@ -408,7 +408,7 @@ func TestPG_Devices_UnreCheckableClaimsAreRefused(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := federationDevice(t, st)
-			_, err := st.IngestDeviceAudit(context.Background(), d.ID, testPeer,
+			_, err := ingestEvents(context.Background(), st, d.ID, testPeer,
 				[]types.FederatedAuditEvent{federationRow(t, pool, d, "", 1, c.target, c.data)})
 			if !errors.Is(err, store.ErrFederatedRowInvalid) {
 				t.Fatalf("err = %v, want ErrFederatedRowInvalid", err)
@@ -438,7 +438,7 @@ func TestPG_Devices_UnstorableClaimedValueIsErrFederatedRowInvalid(t *testing.T)
 			d := federationDevice(t, st)
 			ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman, Actor: c.actor,
 				Action: "run.create", Outcome: "success", Data: c.data, RowHash: "claimed"}
-			_, err := st.IngestDeviceAudit(context.Background(), d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}})
+			_, err := ingestEvents(context.Background(), st, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}})
 			if !errors.Is(err, store.ErrFederatedRowInvalid) {
 				t.Fatalf("err = %v, want ErrFederatedRowInvalid", err)
 			}
@@ -455,15 +455,15 @@ func TestPG_Devices_RowChainedOnASupersededHeadIsRefused(t *testing.T) {
 	ctx := context.Background()
 	d := federationDevice(t, st)
 	a1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{a1}); err != nil {
+	if _, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{a1}); err != nil {
 		t.Fatal(err)
 	}
 	g5 := federationRow(t, pool, d, "", 5, "g5", json.RawMessage(`{}`))
-	if res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{g5}); err != nil || !res.Reset {
+	if res, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{g5}); err != nil || !res.Reset {
 		t.Fatalf("reset: %+v %v", res, err)
 	}
 	b6 := federationRow(t, pool, d, a1.RowHash, 6, "b6", json.RawMessage(`{}`))
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{b6}); !errors.Is(err, store.ErrConflict) {
+	if _, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{b6}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a row chained on a superseded head: err = %v, want ErrConflict", err)
 	}
 }
@@ -479,7 +479,7 @@ func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testin
 	ctx := context.Background()
 	d := federationDevice(t, st)
 	ingest := func(rows ...types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
-		return st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+		return ingestEvents(ctx, st, d.ID, testPeer, rows)
 	}
 	held := func() (n int) {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE data->'device_origin'->>'device_id' = $1`,
@@ -542,7 +542,7 @@ func TestPG_Devices_IngestBatchSpliceRefused(t *testing.T) {
 
 	foreign := federationDevice(t, st)
 	fRow := federationRow(t, pool, foreign, "", 1, "f1", json.RawMessage(`{}`))
-	if res, err := st.IngestDeviceAudit(ctx, foreign.ID, testPeer, []types.FederatedAuditEvent{fRow}); err != nil || res.Accepted != 1 {
+	if res, err := ingestEvents(ctx, st, foreign.ID, testPeer, []types.FederatedAuditEvent{fRow}); err != nil || res.Accepted != 1 {
 		t.Fatalf("seed foreign device row: %+v %v", res, err)
 	}
 
@@ -553,7 +553,7 @@ func TestPG_Devices_IngestBatchSpliceRefused(t *testing.T) {
 	// self-consistent (audit_row_hash of ITS claimed PrevHash and fields).
 	row2 := federationRow(t, pool, d, fRow.RowHash, 2, "a2", json.RawMessage(`{}`))
 
-	res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{row1, row2})
+	res, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{row1, row2})
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("batch splice onto a foreign device's hash: err = %v, want ErrConflict", err)
 	}
@@ -586,7 +586,7 @@ func TestPG_Devices_AResetPastTheOldCursorIsAcceptedFromItsGenesis(t *testing.T)
 	ctx := context.Background()
 	d := federationDevice(t, st)
 	ingest := func(rows ...types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
-		return st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+		return ingestEvents(ctx, st, d.ID, testPeer, rows)
 	}
 	a1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
 	a2 := federationRow(t, pool, d, a1.RowHash, 2, "a2", json.RawMessage(`{}`))
@@ -622,13 +622,13 @@ func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
 	ctx := context.Background()
 	d := federationDevice(t, st)
 	r1 := federationRow(t, pool, d, "", 1, "t", json.RawMessage(`{"a":1}`))
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1}); err != nil {
+	if _, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{r1}); err != nil {
 		t.Fatal(err)
 	}
 	r2 := federationRow(t, pool, d, r1.RowHash, 2, "t", json.RawMessage(`{"a":2}`))
 	edited := r1
 	edited.Data = json.RawMessage(`{"a":"edited"}`)
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{edited, r2}); !errors.Is(err, store.ErrConflict) {
+	if _, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{edited, r2}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("retry with an edited prefix: err = %v, want ErrConflict", err)
 	}
 }
@@ -661,7 +661,7 @@ func TestPG_Devices_ConcurrentPushesNeitherDeadlockNorBreakTheChain(t *testing.T
 		go func() {
 			defer wg.Done()
 			for time.Now().Before(deadline) {
-				if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, next()); err != nil && !errors.Is(err, store.ErrConflict) {
+				if _, err := ingestEvents(ctx, st, d.ID, testPeer, next()); err != nil && !errors.Is(err, store.ErrConflict) {
 					mu.Lock()
 					errs = append(errs, err.Error())
 					mu.Unlock()
@@ -762,7 +762,7 @@ func TestPG_Devices_IngestCarriesTheADOAuditFamiliesVerbatim(t *testing.T) {
 		prev = ev.RowHash
 		rows = append(rows, types.FederatedAuditEvent{AuditEvent: ev, Seq: int64(i + 1)})
 	}
-	if res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, rows); err != nil || res.Accepted != len(rows) {
+	if res, err := ingestEvents(ctx, st, d.ID, testPeer, rows); err != nil || res.Accepted != len(rows) {
 		t.Fatalf("ingest: %+v %v", res, err)
 	}
 	stored, err := pool.Query(ctx, `SELECT action, target, outcome, data - 'device_origin' FROM audit_events WHERE actor = $1 ORDER BY seq`,

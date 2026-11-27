@@ -363,13 +363,14 @@ var _ audit.Recorder = fanoutRecorder{}
 func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	// store.InsertAuditEvent is called directly rather than through
 	// f.primary.Record for ONE reason: it takes ev by POINTER and fills in the
-	// hash chain Postgres computed (migration 0047), so what fans out to the
+	// hash chain Postgres computed (audit_append, migration 0111), so what fans out to the
 	// sinks below carries prev_hash and this row's own row_hash — the CURRENT
 	// CHAIN HEAD at the moment of the write. That is what lets an external SIEM
 	// detect a later truncation: it holds head hashes off-box, and a chain that
 	// no longer contains one it saw has been rewritten. audit.Recorder takes ev
 	// by value, so Recorder.Record structurally cannot hand them back.
 	// A failed store write leaves both empty and the event still fans out.
+	// A replay of an event the table already holds carries that row's stored hashes.
 	err := store.InsertAuditEvent(ctx, f.primary.Pool, &ev)
 	if f.fanout != nil {
 		// Best-effort: log a total fanout failure, but do not propagate it.
@@ -386,9 +387,9 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 }
 
 // landedRecorder writes an event to the store and emits it to the sink fanout only once the store took it,
-// with the chain hashes the database computed. The spool drain uses it for a row that never reached the
-// sinks while it waited under the pending key; a failed write emits nothing, so the drain's retry cannot
-// send it twice.
+// with the chain hashes the database computed — a replay the table already held included. The spool drain
+// uses it for a row that never reached the sinks while it waited under the pending key; a failed write emits
+// nothing, so the drain's retry cannot send it twice.
 type landedRecorder struct {
 	primary store.Recorder
 	fanout  *sinks.Fanout
@@ -438,9 +439,13 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 // label had already counted as covered. It tries again, then labels the row globals_only, which says less.
 func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 	var out types.AuditEvent
+	var run uuid.UUID // uuid.Nil for a run-less event: the masker maskOnce derives for it
+	if ev.RunID != nil {
+		run = *ev.RunID
+	}
 	for range 3 {
-		g := m.reg.Generation()
-		if out = m.maskOnce(ev); ev.RunID == nil || m.reg.Generation() == g {
+		g := m.reg.RunGeneration(run)
+		if out = m.maskOnce(ev); ev.RunID == nil || m.reg.RunGeneration(run) == g {
 			return out
 		}
 	}
@@ -510,7 +515,7 @@ func runValueMasker(reg *secretmask.Registry, covers sinks.RunCoverage) sinks.Ru
 	if reg == nil {
 		return nil
 	}
-	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }, covers, reg.Generation)
+	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }, covers, reg.RunGeneration)
 }
 
 // enrichCoverage is the gate on the correlation id the sinks add: the serving boot's maskScope, the same
@@ -597,13 +602,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// The one exception is a run kept after an outage whose agent still runs
 	// (store.HoldsSandboxSQL): it is listed as Kept, for the max age alone.
 	//
+	// runner_id comes back so the reaper can skip a run whose registered runner this replica holds no
+	// session for (lifecycle.Config.RunnerOnline).
+	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
 		SELECT id, created_at, admitted_at, updated_at,
 		       CASE WHEN experience = 'background' THEN 0 ELSE auto_stop_after_sec END,
-		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, now()
+		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, runner_id, now()
 		FROM agent_runs
 		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
@@ -617,7 +625,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	for rows.Next() {
 		var s lifecycle.RunSummary
 		var admitted *time.Time
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &dbNow); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &s.RunnerID, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		if admitted != nil {
@@ -629,6 +637,22 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 		return nil, time.Time{}, fmt.Errorf("wardynd: iterate run summaries: %w", err)
 	}
 	return out, dbNow, nil
+}
+
+// StampIdleClocks is lifecycle.Config.StampIdle. It restarts the idle clock of every run
+// ListRunningWithPolicy could idle-stop (RUNNING, not kept, not a background task, a positive idle stop),
+// or with runner set only that runner's. updated_at moves to the store's own clock, the one the scan
+// measures against, and never back, so an idle stop's guard (UpdateRunStateIfIdle) skips a run it touched.
+func (l lifecycleStore) StampIdleClocks(ctx context.Context, runner *uuid.UUID) (int64, error) {
+	const q = `
+		UPDATE agent_runs SET updated_at = GREATEST(updated_at, now())
+		WHERE state = $1 AND lost_at IS NULL AND experience IS DISTINCT FROM 'background'
+		  AND auto_stop_after_sec > 0 AND ($2::uuid IS NULL OR runner_id = $2::uuid)`
+	tag, err := l.pool.Exec(ctx, q, string(types.RunRunning), runner)
+	if err != nil {
+		return 0, fmt.Errorf("wardynd: restart idle clocks: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // reapTickLock is the reaper's single-flight gate: a Postgres try-advisory-lock

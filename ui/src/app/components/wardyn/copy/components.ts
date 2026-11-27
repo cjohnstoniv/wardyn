@@ -44,6 +44,9 @@ export const CUSTOM_COMPONENT = {
   NAME_HINT_SAVE: "What you will pick it by. Two of yours can't share a name.",
   HOSTS: "Hosts it reaches",
   HOSTS_HINT: "One per line, such as api.example.com or *.example.com. Names only: an IP address is refused. Add :443 to allow one port.",
+  IMAGE: "Image",
+  IMAGE_PLACEHOLDER: "ghcr.io/acme/tools:1.2",
+  IMAGE_HINT: "Optional. A run must use this image to attach the component. With no tag or digest, any tag or digest of the repository meets it. Wardyn never pulls or changes the run's image because of a component.",
 
   SECRETS: "Secrets",
   SECRETS_HINT: "Name a secret you have stored. Its value stays on the Secrets page and is never shown here.",

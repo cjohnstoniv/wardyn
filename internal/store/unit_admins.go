@@ -108,6 +108,11 @@ func GetUnitAdminByKeyQ(ctx context.Context, q Querier, unit uuid.UUID, subjectT
 // GrantUnitAdminQ stores a grant on q (a nil id gets a fresh one). ErrConflict when the subject already
 // holds one on the unit, ErrNotFound when the unit is unknown.
 func GrantUnitAdminQ(ctx context.Context, q Querier, a types.GovernanceUnitAdmin) (types.GovernanceUnitAdmin, error) {
+	if a.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "governance_unit_admins.subject", a.Subject); err != nil {
+			return types.GovernanceUnitAdmin{}, err
+		}
+	}
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
 	}

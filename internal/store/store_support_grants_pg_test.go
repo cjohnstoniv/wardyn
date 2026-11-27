@@ -455,7 +455,7 @@ func TestPG_SupportGrants(t *testing.T) {
 		}
 	})
 
-	t.Run("a role without the table's grant gets an empty sweep, list and helper read", func(t *testing.T) {
+	t.Run("a role without the table's grant gets an empty sweep and list, and a helper read that fails", func(t *testing.T) {
 		f := supportFixture{t: t, ctx: f.ctx, pool: f.pool, pg: f.pg}
 		r := f.run("")
 		g := f.request(r, "helper-a")
@@ -481,8 +481,8 @@ func TestPG_SupportGrants(t *testing.T) {
 		if got, err := pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 0 {
 			t.Errorf("live list without SELECT = %v, %v; want no rows and no error", got, err)
 		}
-		if got, err := pg.SupportHelperSince(f.ctx, r.ID, "helper-a", time.Time{}); err != nil || got {
-			t.Errorf("helper read without SELECT = %v, %v; want false and no error", got, err)
+		if got, err := pg.SupportHelperSince(f.ctx, r.ID, "helper-a", time.Time{}); err == nil || got {
+			t.Errorf("helper read without SELECT = %v, %v; want an error, never a plain false", got, err)
 		}
 		if got, err := f.pg.LiveSupportGrants(f.ctx); err != nil || len(got) != 1 {
 			t.Fatalf("setup: the owner role lists %v, %v; want the one live grant", got, err)
@@ -508,6 +508,59 @@ func TestPG_SupportGrants(t *testing.T) {
 		}
 		if f.read(g.ID).EndedAt != nil {
 			t.Error("the sweep of a role with UPDATE and no SELECT still ended a grant (off = true)")
+		}
+	})
+
+	t.Run("an erasure fails rather than leave grant text a role cannot read or blank", func(t *testing.T) {
+		f := supportFixture{t: t, ctx: f.ctx, pool: f.pool, pg: f.pg}
+		// The person is only a helper here: their erasure touches no run of their own, so it reaches the
+		// support grants without writing agent_runs (no run trigger fires under the restricted role).
+		person := "erased-" + uuid.NewString()
+		theirs := f.run("")
+		g := f.request(theirs, person)
+		role := "wardyn_noblank_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+		f.exec(`CREATE ROLE ` + role + ` NOLOGIN`)
+		t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DROP OWNED BY `+role+`; DROP ROLE IF EXISTS `+role) })
+		f.exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends TO ` + role)
+		f.exec(`GRANT SELECT ON run_harnesses TO ` + role)
+		f.exec(`GRANT SELECT, UPDATE ON run_containers TO ` + role) // the erasure blanks extra container commands after the grants
+		cfg := f.pool.Config()
+		cfg.ConnConfig.RuntimeParams["role"] = role
+		restricted, err := pgxpool.NewWithConfig(f.ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(restricted.Close)
+		pg := store.NewPG(restricted)
+		text := func() string {
+			t.Helper()
+			var reason, helperEmail string
+			if err := f.pool.QueryRow(f.ctx, `SELECT reason, helper_email FROM run_support_grants WHERE id = $1`, g.ID).Scan(&reason, &helperEmail); err != nil {
+				t.Fatal(err)
+			}
+			return reason + helperEmail
+		}
+
+		if _, err := pg.BlankRunTasks(f.ctx, person); err == nil || !strings.Contains(err.Error(), "support grants") {
+			t.Error("erasure without SELECT on the grants succeeded; want an error")
+		}
+		f.exec(`GRANT SELECT ON run_support_grants TO ` + role)
+		if _, err := pg.BlankRunTasks(f.ctx, person); err == nil || !strings.Contains(err.Error(), "support grants") {
+			t.Error("erasure with grant text and no UPDATE succeeded; want an error")
+		}
+		if text() == "" {
+			t.Fatal("setup: the grant's text is gone before the role could blank it")
+		}
+		f.exec(`GRANT UPDATE ON run_support_grants TO ` + role) // still no INSERT
+		if _, err := pg.BlankRunTasks(f.ctx, person); err != nil {
+			t.Fatalf("erasure with SELECT and UPDATE, without INSERT = %v; want it to blank", err)
+		}
+		if got := text(); got != "" {
+			t.Errorf("grant text %q left after a successful erasure", got)
+		}
+		f.exec(`REVOKE UPDATE ON run_support_grants FROM ` + role)
+		if _, err := pg.BlankRunTasks(f.ctx, person); err != nil {
+			t.Errorf("erasure with nothing left to blank and no UPDATE = %v; want nil", err)
 		}
 	})
 }

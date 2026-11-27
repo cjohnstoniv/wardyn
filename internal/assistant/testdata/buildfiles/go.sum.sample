@@ -1,0 +1,6 @@
+example.com/fixture/core v1.0.0 h1:3qptmDj0yp8xAFXrn6KZ7FUqC7/izyNUKe9QPG+6udL=
+example.com/fixture/core v1.0.0/go.mod h1:Sv+rBZBx2UMZLl0WbKQZoY7EaA7qd2FpYkBW5zOFUTr=
+example.com/fixture/util v1.1.0 h1:O5yP/ng386/4111111111111111+xTPoXAZ8sQONT4L=
+example.com/fixture/util v1.1.0/go.mod h1:LkL43eVhSKWKJ4Q/CYqscl+72SBddCe9v/cqwl2Xjox=
+example.com/fixture/log v1.2.0 h1:jKBIQaTvxfrMOXUW8YEathZxtLK7UyMRUARnmW1rovz=
+example.com/fixture/log v1.2.0/go.mod h1:x7AKnChp1AnxdWihEiqkcSaZhzBhvDWnp+5+Z1rU7K1=

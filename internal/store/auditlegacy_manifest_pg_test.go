@@ -55,6 +55,7 @@ func convertedHashlessDatabase(t *testing.T, withManifestEntry, futureRow bool) 
 	if withManifestEntry {
 		execMigrationFile(t, pool, legacyManifestMigration)
 	}
+	applyHashV2(t, pool)
 	return pool
 }
 

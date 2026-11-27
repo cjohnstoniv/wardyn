@@ -10,8 +10,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -27,8 +25,7 @@ import (
 // reaches SQL, so a live-DB reader (reporting role, hot standby, pg_dump)
 // can't read a usable bearer credential off the row.
 func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	return types.TokenDigest(token)
 }
 
 // AttachTicket is what one redeemed single-use WS attach ticket carries: the
@@ -66,6 +63,15 @@ type AttachTicket struct {
 	// (migration 0293); uuid.Nil and the zero time on any other ticket.
 	SupportGrant   uuid.UUID
 	SupportExpires time.Time
+	// Purpose is the one door a ticket opens ("" = the terminal and the UI doors, as before; see the api package's
+	// attach_ticket_purpose.go) and Ports the ports a forwarding purpose may reach (migration 0402); "" and nil on
+	// every other ticket.
+	Purpose string
+	Ports   []int
+	// SponsorService, when set, is the service identity whose sponsorship admitted this mint. MintAttachTicket then
+	// inserts only while that identity is usable and Principal is still its sponsor, holding its row FOR SHARE, and
+	// answers ErrServiceIdentityInactive otherwise. Not stored: a redeemed ticket's is always "".
+	SponsorService string
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -92,6 +98,10 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 	if t.CLISessionID != uuid.Nil {
 		cliSessionID = &t.CLISessionID
 	}
+	var ports []int32 // NULL when the ticket names none
+	for _, p := range t.Ports {
+		ports = append(ports, int32(p))
+	}
 	if t.Via != nil {
 		viaDelegate, viaGrant = &t.Via.Delegate, &t.Via.Grant
 		var err error
@@ -99,13 +109,40 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 			return err
 		}
 	}
-	_, err := s.Pool.Exec(ctx, `
+	insert := func(q Querier) error {
+		_, err := q.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
-		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
-		t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID, supportGrant, supportExpires,
-	)
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires, purpose, ports)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+			hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
+			t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID, supportGrant, supportExpires,
+			t.Purpose, ports,
+		)
+		return err
+	}
+	var err error
+	if t.SponsorService == "" {
+		err = insert(s.Pool)
+	} else {
+		err = s.inTx(ctx, func(q Querier) error {
+			var sponsor string
+			var usable bool
+			if err := q.QueryRow(ctx, `SELECT sponsor, suspended_at IS NULL AND retired_at IS NULL
+				FROM service_identities WHERE name = $1 FOR SHARE`, t.SponsorService).Scan(&sponsor, &usable); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrServiceIdentityInactive
+				}
+				return err
+			}
+			if !usable || sponsor != t.Principal {
+				return ErrServiceIdentityInactive
+			}
+			return insert(q)
+		})
+	}
+	if errors.Is(err, ErrServiceIdentityInactive) {
+		return err
+	}
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
 	}
@@ -127,12 +164,13 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	var viaActor []byte
 	var authorizedAt, supportExpires *time.Time
 	var email *string
+	var ports []int32 // a NULL column scans to nil
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires, purpose, ports`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq, &t.Caller, &t.App, &viaActor, &tokenID, &cliSessionID, &supportGrant, &supportExpires)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq, &t.Caller, &t.App, &viaActor, &tokenID, &cliSessionID, &supportGrant, &supportExpires, &t.Purpose, &ports)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
@@ -140,6 +178,9 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 		return AttachTicket{}, false, fmt.Errorf("store: consume attach ticket: %w", err)
 	}
 	t.ActorType = types.ActorType(actorType)
+	for _, p := range ports {
+		t.Ports = append(t.Ports, int(p))
+	}
 	if tokenID != nil {
 		t.TokenID = *tokenID
 	}

@@ -18,6 +18,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { createOutputFlow } from "./attach-terminal-flow";
 import { decideKey } from "./attach-terminal-keys";
 import { terminalLinkHandlers } from "./attach-terminal-links";
+import { TERMINAL_THEME } from "./terminal-theme";
 import { exposeTerminalForE2E } from "./attach-terminal-e2e-seam";
 import { createRenderer, type RendererControl, type RendererPref, type RendererState } from "./attach-terminal-renderer";
 import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
@@ -86,9 +87,10 @@ const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 export const OWNER_JOINED_REASON = "The run's owner joined";
 
 // The authority contract (internal/api/attach_authority.go): an open socket
-// whose sign-in stopped authorizing it (signed out, revoked, expired, or a
-// check that could not be answered) is closed with 4401 and the reason
-// "session ended". Reconnecting would only fail the same check, so like a
+// whose sign-in stopped authorizing it (signed out, revoked or expired) is
+// closed with 4401 and the reason "session ended". A check that gets no answer
+// closes 1013 once the session budget runs out, which takes the reconnect path
+// below. Reconnecting would only fail the same check, so like a
 // take-over it is final: no retry. The one exception is a session renewed
 // since the socket opened: the socket keeps the expiry its handshake saw, so
 // it ends at that while the session lives on, and a fresh ticket opens it again.
@@ -221,6 +223,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
   // be the helper's. Never reset, so a person who was a helper here never reads "sign in again".
   const helperRef = React.useRef(false);
   if (supportHelper) helperRef.current = true;
+  // The page's current answer: false after the latch is the poll's result that the grant is no longer open. While
+  // it still says open, a 4401 is only a close: the server sends it for a failed grant read as well as an ended one.
+  const helperOpenRef = React.useRef(false);
+  helperOpenRef.current = !!supportHelper;
   operatorResolvedRef.current = operatorResolved;
   // Signing out mid-page closes the socket and stops retries and input, but
   // keeps the terminal and what it shows: the same person signing back in
@@ -264,28 +270,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       linkHandler: links.osc8,
       fontFamily: "'JetBrains Mono Terminal', 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
       fontSize: 13,
-      theme: {
-        background: "#0d1117",
-        foreground: "#e6edf3",
-        cursor: "#58a6ff",
-        selectionBackground: "#264f78",
-        black: "#0d1117",
-        red: "#ff7b72",
-        green: "#3fb950",
-        yellow: "#d29922",
-        blue: "#58a6ff",
-        magenta: "#bc8cff",
-        cyan: "#39c5cf",
-        white: "#b1bac4",
-        brightBlack: "#6e7681",
-        brightRed: "#ffa198",
-        brightGreen: "#56d364",
-        brightYellow: "#e3b341",
-        brightBlue: "#79c0ff",
-        brightMagenta: "#d2a8ff",
-        brightCyan: "#56d4dd",
-        brightWhite: "#f0f6fc",
-      },
+      theme: { ...TERMINAL_THEME },
     });
 
     let disposedFont = false;
@@ -625,7 +610,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           }
           setMode(null);
           setConnState("closed");
-          term.writeln(`\r\n\x1b[2m${helperRef.current ? SUPPORT_HELPER.terminalEnded : "[session ended: sign in again to reconnect]"}\x1b[0m`);
+          const line = !helperRef.current
+            ? "[session ended: sign in again to reconnect]"
+            : helperOpenRef.current
+              ? SUPPORT_HELPER.terminalDropped
+              : SUPPORT_HELPER.terminalEnded;
+          term.writeln(`\r\n\x1b[2m${line}\x1b[0m`);
           return;
         }
         // Clean, intentional close (1000) => the run finished / we unmounted.

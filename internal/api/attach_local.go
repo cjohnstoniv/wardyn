@@ -27,7 +27,7 @@ import (
 // is refused exactly where a relay one is (C1). The organisation keeps the holder registry and the
 // writer lease, the recording (the runner copies the output on pty_tee and the recorder here masks
 // it), the audit rows and the ending: every ender closes this socket and resets pty_tee, and the
-// runner then ends the PTY. Off unless WARDYN_ATTACH_LOCAL is on.
+// runner then ends the PTY. On unless WARDYN_ATTACH_LOCAL is set to a value other than on.
 const (
 	attachTransportLocal = "local"
 	// attachLocalGrantFailedCode closes a local socket whose runner did not take the grant (the CLI's
@@ -49,6 +49,9 @@ const (
 	localAttachNotYourRunner = "not_your_runner"
 	localAttachRunnerTooOld  = "runner_too_old"
 	localAttachRunnerOffline = "runner_offline"
+	// localAttachIssuerPortal: an issuer portal's ticket attaches through the organisation only, whose opening is
+	// bounded by the ticket's dispatch time (attachDispatchBy).
+	localAttachIssuerPortal = "issuer_portal"
 )
 
 // localAttachSub is the part of a runner's substrate a local attach uses.
@@ -105,11 +108,16 @@ func (s *Server) localAttachTargetFor(w http.ResponseWriter, r *http.Request, ru
 	return t, false
 }
 
+// localAttachCheck is the local target, or the 409's detail. An issuer portal's ticket is refused before any
+// runner read, so a read that fails here belongs to an ordinary ticket and reads as "not your runner".
 func (s *Server) localAttachCheck(r *http.Request, run types.AgentRun) (localAttachTarget, string) {
 	if !s.cfg.AttachLocal {
 		return localAttachTarget{}, localAttachFlagOff
 	}
 	ta, ok := ticketActorFromContext(r.Context())
+	if ok && issuerPortalPerson(ta.via, ta.principal) {
+		return localAttachTarget{}, localAttachIssuerPortal
+	}
 	if !ok || s.cfg.LocalMode || run.OperatorOwned || ta.actorType != types.ActorHuman || ta.principal == "" ||
 		ta.principal != run.CreatedBy || run.Placement != types.PlacementLocal || run.RunnerID == nil {
 		return localAttachTarget{}, localAttachNotYourRunner
@@ -202,6 +210,12 @@ func (la *localAttach) run(castTee io.Writer) string {
 			_ = sess.Close()
 		}
 		wa.audit("failure", map[string]any{"state": "attaching", "error": errAttachCancelled.Error()})
+		if h.evicted.Load() {
+			// Displaced while the grant was in flight: the displacement closes the socket with its own code and
+			// reason, then cancels ctx (end). Returning first would let the handler's normal close go out ahead
+			// of that frame.
+			<-ctx.Done()
+		}
 		return la.reason("attach cancelled")
 	}
 	if err != nil {
@@ -275,11 +289,10 @@ func (la *localAttach) resetTee() {
 }
 
 // displace is attachHolder.displace for a local socket: pty_tee is reset at once, so the runner
-// ends the PTY without waiting for the close handshake.
+// ends the PTY without waiting for the close handshake. ctx is cancelled only once the close frame
+// is out (end), which is what a grant cancelled by this displacement waits for (run).
 func (la *localAttach) displace(reason string) {
-	la.note(reason)
-	la.resetTee()
-	la.wa.displace(reason)
+	la.end(websocket.StatusPolicyViolation, reason)
 }
 
 // notify is attachHolder.notify for a local socket. A promotion is pushed to the runner (sync); a

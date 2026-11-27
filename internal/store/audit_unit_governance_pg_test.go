@@ -62,7 +62,7 @@ func TestAuditUnitGovernanceArmQueryPG(t *testing.T) {
 		Actor: "carol@corp.example", Action: "governance.unit.write", Target: u1.String(), Outcome: "success",
 		Data: json.RawMessage(`{"unit_id":"` + u1.String() + `"}`)}
 	forged.RowHash = auditRowHash(t, pool, "", forged)
-	if _, err := pg.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditEvent{{AuditEvent: forged, Seq: 1}}); err != nil {
+	if _, err := ingestEvents(ctx, pg, dev.ID, "10.9.9.9", []types.FederatedAuditEvent{{AuditEvent: forged, Seq: 1}}); err != nil {
 		t.Fatalf("a laptop forwarding a governance row: %v", err)
 	}
 	absent["a laptop's forwarded row"] = forged.ID

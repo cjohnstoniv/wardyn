@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/google/uuid"
@@ -96,6 +97,11 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	// unrecorded credential.
 	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
 	mintEv.Data = withSecretScope(mintEv.Data, minted)
+	// Only the workload: this row goes into the chain on the broker's own transaction, which has no sealer, so a
+	// person's name stamped here would stay in clear under full audit sealing. The run's owner is read from its id.
+	if id, ok := audit.RunIdentityFrom(ctx); ok {
+		mintEv.Data = audit.StampRunIdentity(mintEv.Data, audit.RunIdentity{Workload: id.Workload})
+	}
 	if leased {
 		// A lease widens what ONE human decision authorizes, so the stream must
 		// say which mints the human made and which the lease did — B2's own

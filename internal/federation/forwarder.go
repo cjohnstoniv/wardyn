@@ -33,7 +33,7 @@ const AuditActor = "wardyn/federation"
 // Store is the local table the forwarder reads and the durable org_federation
 // row it keeps: the cursor and the revoked mark (store.PG).
 type Store interface {
-	ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error)
+	ListFederatedAuditRowsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditRow, error)
 	GetFederationCursor(ctx context.Context) (seq int64, rowHash string, err error)
 	SetFederationCursor(ctx context.Context, seq int64, rowHash string) error
 	AuditHeadSeq(ctx context.Context) (int64, error)
@@ -68,7 +68,7 @@ type Forwarder struct {
 	audit    audit.Recorder
 	interval time.Duration
 
-	cursor *ackcursor.Cursor[types.FederatedAuditEvent]
+	cursor *ackcursor.Cursor[types.FederatedAuditRow]
 
 	mu      sync.Mutex
 	status  Status
@@ -89,9 +89,9 @@ type Forwarder struct {
 func NewForwarder(c *Client, st Store, cred Credential, rec audit.Recorder) *Forwarder {
 	f := &Forwarder{client: c, store: st, cred: cred, audit: rec, interval: tickInterval,
 		status: Status{DeviceID: cred.DeviceID}, done: make(chan struct{})}
-	f.cursor = &ackcursor.Cursor[types.FederatedAuditEvent]{
+	f.cursor = &ackcursor.Cursor[types.FederatedAuditRow]{
 		Source: auditSource{st}, Sink: pushSink{f}, Store: cursorStore{st}, Batch: batchSize,
-		Key: func(e types.FederatedAuditEvent) ackcursor.Pos { return ackcursor.Pos{Seq: e.Seq, Hash: e.RowHash} },
+		Key: func(e types.FederatedAuditRow) ackcursor.Pos { return ackcursor.Pos{Seq: e.Seq, Hash: e.RowHash} },
 		OnReset: func(p ackcursor.Pos) {
 			slog.Error("federation: the local audit row at the forwarding cursor is gone or changed; the local table was reset, resending from the start",
 				"device_id", cred.DeviceID, "head_seq", f.Status().HeadSeq, "acked_seq", p.Seq)
@@ -218,8 +218,8 @@ func (f *Forwarder) advance(ctx context.Context) (bool, error) {
 // auditSource adapts Store to ackcursor.Source.
 type auditSource struct{ st Store }
 
-func (s auditSource) After(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error) {
-	return s.st.ListAuditEventsAfterSeq(ctx, seq, limit)
+func (s auditSource) After(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditRow, error) {
+	return s.st.ListFederatedAuditRowsAfterSeq(ctx, seq, limit)
 }
 
 // cursorStore adapts Store to ackcursor.Store.
@@ -240,9 +240,9 @@ func (s cursorStore) Set(ctx context.Context, p ackcursor.Pos) error {
 // forwarder only heart-beats.
 type pushSink struct{ f *Forwarder }
 
-func (p pushSink) Deliver(ctx context.Context, rows []types.FederatedAuditEvent) (int64, error) {
+func (p pushSink) Deliver(ctx context.Context, rows []types.FederatedAuditRow) (int64, error) {
 	f := p.f
-	chained := slices.DeleteFunc(slices.Clone(rows), func(e types.FederatedAuditEvent) bool { return e.RowHash == "" })
+	chained := slices.DeleteFunc(slices.Clone(rows), func(e types.FederatedAuditRow) bool { return e.RowHash == "" })
 	switch {
 	case f.halted || len(rows) == 0:
 		_, err := f.client.Heartbeat(ctx, f.cred)

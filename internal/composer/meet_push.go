@@ -12,6 +12,9 @@ const (
 	defaultPushHoldSec    = 120
 )
 
+// DefaultInspectPackMiB is the pack cap a set push_rules naming none is read as; the meet spells it out.
+const DefaultInspectPackMiB = defaultInspectPackMiB
+
 // normPushHold is what push_rules.hold_seconds means at runtime: <= 0 is the
 // default, and a larger value is cut to the proxy's hold ceiling.
 func normPushHold(x int) int {

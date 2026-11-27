@@ -52,3 +52,36 @@ func TestPullImageReportsAnInStreamError(t *testing.T) {
 		t.Fatalf("PullImage = %v, want the in-stream refusal naming the image", err)
 	}
 }
+
+// countingPuller counts the pulls that reach it and answers like fakePuller.
+type countingPuller struct{ calls int }
+
+func (c *countingPuller) ImagePull(ctx context.Context, ref string, o client.ImagePullOptions) (client.ImagePullResponse, error) {
+	c.calls++
+	return fakePuller{}.ImagePull(ctx, ref, o)
+}
+
+// A ref in a namespace Wardyn builds locally is refused before the daemon is asked, in every spelling of the default
+// registry's host; a ref that merely contains the name elsewhere, or sits on another registry, still pulls.
+func TestPullImageRefusesWardynLocalBuildNamespaces(t *testing.T) {
+	for _, ref := range []string{
+		"wardyn-byoi/reuse:abc",
+		"wardyn-devcontainer/run:latest",
+		"wardyn-workspace/w:built",
+		"docker.io/wardyn-byoi/x:1",
+		"index.docker.io/wardyn-workspace/w:1",
+		"registry-1.docker.io/wardyn-devcontainer/x:1",
+	} {
+		p := &countingPuller{}
+		err := PullImage(t.Context(), p, ref, "docker")
+		if err == nil || !strings.Contains(err.Error(), ref) || p.calls != 0 {
+			t.Errorf("PullImage(%q) err=%v calls=%d, want a refusal naming the ref and 0 pulls", ref, err, p.calls)
+		}
+	}
+	for _, ref := range []string{"img:1", "ghcr.io/wardyn-byoi/x:1", "registry.example/wardyn-workspace/w:1", "wardyn-agent:dev"} {
+		p := &countingPuller{}
+		if err := PullImage(t.Context(), p, ref, "docker"); err != nil || p.calls != 1 {
+			t.Errorf("PullImage(%q) err=%v calls=%d, want a pull", ref, err, p.calls)
+		}
+	}
+}

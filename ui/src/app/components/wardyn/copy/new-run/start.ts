@@ -20,6 +20,10 @@ export const NR_START = {
   DOC_BODY: "Edit or import a schema-aware run document and see what the server will allow.",
   DOC_YAML: "YAML",
   DOC_JSON: "JSON",
+  AI_TITLE: "AI composer",
+  AI_BADGE: "Assisted",
+  AI_BODY: "Describe what the run needs. The assistant drafts it with your own model credential; you accept each part and launch it yourself.",
+  AI_FOOT: "Start composing",
   TRUST_LINE: "Policy and availability are checked again when you launch.",
   /** The one muted line for what is not built, on this screen only (#3045). No version number: it would be wrong the day it ships. */
   ROADMAP: "On the roadmap: scheduled runs and multi-agent runs.",

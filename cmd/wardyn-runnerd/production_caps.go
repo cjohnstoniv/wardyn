@@ -111,8 +111,16 @@ func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe,
 	caps.ViaOrgADO = true
 	caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = c.extra.proxySettings(), c.extra.driveRoots, c.extra.localModelPorts
 	caps.LinuxVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.macOSVM.current(), c.hasLocal
+	caps.LocalWindow = c.hasLocal && c.extra.linuxVM != nil
+	if caps.MacOSVM != nil {
+		// A copy: the handle's own caps are shared with every other sender.
+		mac, prior := *caps.MacOSVM, peer.PriorSessions()
+		mac.PriorSessions = &prior
+		caps.MacOSVM = &mac
+	}
 	caps.BoundFolders = c.extra.boundFolders
 	caps.RunsNamespaces = c.extra.runsNamespaces
+	caps.Drives = c.extra.drives
 	if !c.extra.report.fill(ctx, &caps, reprobe) && !always {
 		return nil
 	}

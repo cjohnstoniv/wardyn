@@ -4,6 +4,7 @@
 package identity
 
 import (
+	"context"
 	"crypto/ecdsa"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -18,6 +19,11 @@ type Deps struct {
 	TrustDomain string
 	Revocations RevocationStore // kill-switch denylist (pg-backed in production)
 	Audit       audit.Recorder
+	// Bindings stores each run token's delegation chain by jti, for a provider whose token cannot carry it
+	// (spire); embedded ignores it.
+	Bindings TokenBindingStore
+	// BootCtx bounds a constructor's waits; nil means context.Background(). embedded ignores it.
+	BootCtx context.Context
 }
 
 // Constructor builds a Provider from Deps.

@@ -15,3 +15,13 @@
 # Delete both when Debian 13 ships a fix.
 CVE-2026-34000 exp:2026-12-19
 CVE-2026-34002 exp:2026-12-19
+
+# FFmpeg 7:7.1.5-0+deb13u1 (agent-novnc-signin only): libavcodec61,
+# libavfilter10, libavformat61, libavutil59, libpostproc58, libswresample5 and
+# libswscale8, pulled in by chromium. The flaw is a heap write in the deband
+# filter's runtime command; chromium decodes media through FFmpeg but builds no
+# filter graph, so nothing in the image runs that filter. Debian lists it as
+# fix_deferred. Accepted 2026-11-24 by the owner for 0.10.5, 0.11.0-rc.1 and 0.11.0-rc.2.
+# Next review date 2026-12-24: the id carries trivy's exp: so it lapses then and
+# the scan fails until someone reviews it. Delete it when Debian 13 ships a fix.
+CVE-2026-135736 exp:2026-12-24

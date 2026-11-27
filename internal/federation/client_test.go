@@ -61,12 +61,21 @@ func TestClient_RefusesToFollowARedirect(t *testing.T) {
 	}))
 	defer org.Close()
 
-	_, err := NewClient(org.URL).Push(t.Context(), Credential{DeviceID: uuid.New(), Token: "wdd_secret"}, []types.FederatedAuditEvent{})
+	_, err := NewClient(org.URL).Push(t.Context(), Credential{DeviceID: uuid.New(), Token: "wdd_secret"}, []types.FederatedAuditRow{})
 	var se *StatusError
 	if !errors.As(err, &se) || se.Code != http.StatusTemporaryRedirect {
 		t.Fatalf("Push = %v, want the 307 as a StatusError", err)
 	}
 	if n := targetHits.Load(); n != 0 {
 		t.Fatalf("the redirect target was reached %d times", n)
+	}
+}
+
+// Credential records the shared token digest.
+func TestTokenSHA256IsTheSharedDigest(t *testing.T) {
+	for _, tok := range []string{"", "abc", "wardyn-org-token"} {
+		if got, want := TokenSHA256(tok), types.TokenDigest(tok); got != want {
+			t.Errorf("TokenSHA256(%q) = %s, want %s", tok, got, want)
+		}
 	}
 }

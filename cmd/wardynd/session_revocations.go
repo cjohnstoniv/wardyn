@@ -25,7 +25,8 @@ var (
 )
 
 // sessionRevocationsFor returns the D16 pg-backed revocations store when OIDC
-// is actually configured (authn != nil), else nil — mirrors "OIDC:
+// is actually configured (authn != nil; a pending authenticator, whose
+// provider has not been reached yet, counts as configured), else nil — mirrors "OIDC:
 // feats.authn" on api.Config being nil exactly when OIDC is unconfigured, so
 // the admin revoke-sessions surface never mounts with no session mechanism
 // for it to act on. A second, independent *pgSessionRevocations instance from
@@ -105,6 +106,11 @@ func (r *pgSessionRevocations) IsSessionRevokedSeq(ctx context.Context, sub, ema
 // RevocationSeq is the ordering value a credential issued now records (oidc.RevocationOrder).
 func (r *pgSessionRevocations) RevocationSeq(ctx context.Context) (int64, error) {
 	return store.ReadRevocationSeq(ctx, r.pool)
+}
+
+// RevocationSeqQ reads the sequence on the governance decision's transaction, for an issue minted inside it.
+func (r *pgSessionRevocations) RevocationSeqQ(ctx context.Context, q store.Querier) (int64, error) {
+	return store.ReadRevocationSeqQ(ctx, q)
 }
 
 // SessionStatus is IsSessionRevoked plus the owner's identity rows, in the same statement so the

@@ -240,6 +240,8 @@ var templateRequestRules = []TemplateFieldRule{
 		in(templateSectionHarness, "harness"),
 	carriedField("service", partTools, templateOmitOptional, templateEmptyValue,
 		"The command is not kept running: it runs once and the run ends with it. A present service is a choice to keep it running; its restart, port and health check follow the defaults the server fills."),
+	carriedField("containers", partTools, templateOmitOptional, templateEmptySame,
+		"No extra container runs beside the agent.").sensitive(),
 	carriedField("startup", partTools, templateOmitOptional, templateEmptySame,
 		"Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.").sensitive(),
 	carriedField("start_folder", partRepos, templateOmitBaseline, templateEmptySame,
@@ -322,7 +324,7 @@ var templateNestedCarried = map[string]string{
 	"CLIKubectl":          "server ca_pem service_account namespaces access approve_each",
 	"CLIServiceAccount":   "namespace name",
 	"ComponentCLI":        "kind azure aws github kubectl",
-	"ComponentDefinition": "description hosts secrets config cli mcp",
+	"ComponentDefinition": "description hosts secrets config cli mcp image",
 	"ComponentDelivery":   "mode host header format plain_http var file",
 	"ComponentMCP":        "url transport launch gateway_audience",
 	"ComponentMCPLaunch":  "command args",
@@ -354,10 +356,13 @@ var templateNestedCarried = map[string]string{
 	"StartFolder":        "kind attachment repo drive_id subpath",
 	"SecretOverride":     "secret_name host header format",
 	"ToolRule":           "tool effect",
-	"UIApp":              "name port path inbound callers",
+	"UIApp":              "name port path inbound callers kind",
 	"WorkspaceMount":     "source target read_only",
 	"WorkspaceRepo":      "repo target ref",
 	"WorkspaceSelection": "workspace_id enabled_optional read_only target repos",
+	// A run's extra containers (CreateRunRequest.Containers).
+	"RunContainer":          "name image command ports resources",
+	"RunContainerResources": "cpu_millis memory_mib",
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{

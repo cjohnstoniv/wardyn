@@ -287,7 +287,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		s.auditIngestFailure(r, d, "invalid_body", 0)
 		return
 	}
-	var rows []types.FederatedAuditEvent
+	var rows []types.FederatedAuditRow
 	// The rows are counted before any is decoded: a megabyte of empty rows would otherwise decode
 	// to hundreds of megabytes before the count refused it.
 	err := types.DecodeOneJSONRows(bytes.NewReader(body), &rows, true, "", maxDeviceIngestRows)
@@ -363,7 +363,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 // CHECK constraints accept — otherwise the INSERT fails as a 500 the forwarder
 // retries forever. The row must also be storable so the device's claim
 // re-checks from it (store.FederatedRowProblem, which the store enforces too).
-func invalidFederatedRow(rows []types.FederatedAuditEvent) string {
+func invalidFederatedRow(rows []types.FederatedAuditRow) string {
 	var prev int64
 	for i, e := range rows {
 		switch {

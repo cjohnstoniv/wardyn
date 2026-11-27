@@ -272,10 +272,15 @@ func (a *AuditSpool) endsUnterminated() bool {
 //     `SET LOCAL lock_timeout` (db.AuditChainLockTimeoutSQL); the event was
 //     never evaluated.
 //   - 57014 query_canceled — statement_timeout or an admin cancel: aborted.
+//   - store.ErrAuditAppendBusy — every request-path append slot stayed taken for the chain lock's whole wait
+//     bound; the event was never sent.
 //
 // Read via a `SQLState() string` method, not *pgconn.PgError, so internal/api
 // never imports the driver and any store's wrapped error classifies (errors.As).
 func auditWriteTimedOut(err error) bool {
+	if errors.Is(err, store.ErrAuditAppendBusy) {
+		return true // every append slot stayed taken: a wait, as a lock timeout is, never a judgement on the event
+	}
 	var coded interface{ SQLState() string }
 	if !errors.As(err, &coded) {
 		return false

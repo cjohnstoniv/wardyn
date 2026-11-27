@@ -146,7 +146,29 @@ func TestReplaceProxyUsesTheNewSecretAndLabels(t *testing.T) {
 	}
 }
 
+// Every server run has a Service now, so the run here is a kept one whose Service is gone: kept-ness alone does not let
+// a replace start.
 func TestReplaceProxyNoServiceIsUnsupported(t *testing.T) {
+	k, cs, dyn, ref := keptRun(t)
+	runID, err := runIDFromAgentPodName(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Tracker().Delete(corev1.SchemeGroupVersion.WithResource("services"), testNamespace, keepServiceName(runID)); err != nil {
+		t.Fatalf("remove the run's Service: %v", err)
+	}
+	order := writesInOrder(cs, dyn)
+	if err := k.ReplaceProxy(context.Background(), ref, replaceCfg); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Fatalf("ReplaceProxy of a run with no Service = %v, want ErrReviveUnsupported", err)
+	}
+	if len(*order) != 0 {
+		t.Errorf("writes = %v, want none", *order)
+	}
+}
+
+// A server run that is not kept has its own Service like every server run, and is still no run a replace may touch: it
+// answers revive_unsupported and nothing is written, so its proxy pod, and with it the agent, stays.
+func TestReplaceProxyRefusesANotKeptRunWithItsService(t *testing.T) {
 	d, cs, dyn := keepRig(t, Config{AgentSandboxKeep: true})
 	spec := keptSpec()
 	spec.Drives = nil
@@ -154,9 +176,16 @@ func TestReplaceProxyNoServiceIsUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
+	if _, err := cs.CoreV1().Services(testNamespace).Get(context.Background(), keepServiceName(spec.RunID), metav1.GetOptions{}); err != nil {
+		t.Fatalf("the run's Service: %v, want it made", err)
+	}
+	k := &keepDriver{Driver: d}
 	order := writesInOrder(cs, dyn)
-	if err := (&keepDriver{Driver: d}).ReplaceProxy(context.Background(), sb.Ref, replaceCfg); !errors.Is(err, runner.ErrReviveUnsupported) {
-		t.Fatalf("ReplaceProxy of a run with no Service = %v, want ErrReviveUnsupported", err)
+	if err := k.CanReplaceProxy(context.Background(), sb.Ref); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("CanReplaceProxy of a run not kept, with its Service = %v, want ErrReviveUnsupported", err)
+	}
+	if err := k.ReplaceProxy(context.Background(), sb.Ref, replaceCfg); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ReplaceProxy of a run not kept, with its Service = %v, want ErrReviveUnsupported", err)
 	}
 	if len(*order) != 0 {
 		t.Errorf("writes = %v, want none", *order)

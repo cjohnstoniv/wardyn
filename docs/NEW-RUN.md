@@ -59,6 +59,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 - **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
 - **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
 - **Keep it running** (a background automation on a container) restarts the command on failure and checks a port: [Services](SERVICES.md#start-a-service).
+  - Its ports are optional, and only a port [callable from outside](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port) can be reached: a background run's page has no Open.
 - An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
   - Each port opens from the run page through the web app gateway. Only people who may enter the run can open it, unless the port is [callable from outside](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). Review holds Launch when the gateway is off.
   - **Callable from outside the run** lets the callers under **Who can call it** (people, groups, service identities; **Add a caller**) reach that port through the gateway with no terminal open. It needs inbound access turned on for you.
@@ -201,7 +202,7 @@ The **Templates** screen lists saved starting points at `/templates` (User view)
 |---|---|---|
 | **Use** | Anyone who can read the row | Opens New run at Review, on the listed revision |
 | **Rename**, **Delete** | The owner of a personal template; an organisation admin for an organisation one; the group's template managers for a group one | `template_scope_forbidden`, `template_group_unverified` |
-| **Publish to organization** | An organisation admin, in the Admin view only | Copies the current revision to the organisation |
+| **Publish to organization** | An organisation admin, in the Admin view only | Copies the revision the row shows to the organisation. If the template was saved since, the server answers `template_revision_conflict` and publishes nothing |
 | **Save as template**, **Save as policy** (Review) | You, to **Only me** or a group you manage | Never the organisation from Review |
 
 - [`internal/types/template.go#TemplateAuthorize`](../internal/types/template.go) decides authority. A template you cannot read answers `template_not_found`, like a missing one.
@@ -240,7 +241,7 @@ The `wardyn template` commands are listed in [Run templates](sdk.md#run-template
 - A refusal shows the server's sentence, and what you typed stays.
 - A launch the run's Azure DevOps token refused adds a note. Either connect again with **Connect Azure DevOps**, after which the dialog checks once more, or read that your organisation restricts who can create personal access tokens.
 
-The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds while the run is starting or waiting.
+The Launched screen opens at `?launched=<run id>`. While the run is starting or waiting, the screen updates as soon as the run changes, and also refreshes every 4 seconds.
 
 | Badge | Run state | Shows |
 |---|---|---|

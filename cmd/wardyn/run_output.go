@@ -113,8 +113,8 @@ func runOutputNotice(o sdk.RunOutput) string {
 	return "note: " + strings.Join(parts, "; ")
 }
 
-// escapeControls writes ESC, C1 controls, other C0 controls (not \n, \r, \t)
-// and bytes that are not valid UTF-8 as \xNN, so a terminal never interprets
+// escapeControls writes ESC, C1 controls, other C0 controls (not \n, \r, \t),
+// DEL and bytes that are not valid UTF-8 as \xNN, so a terminal never interprets
 // them.
 func escapeControls(s string) string {
 	var b strings.Builder
@@ -123,7 +123,7 @@ func escapeControls(s string) string {
 		switch {
 		case r == utf8.RuneError && n == 1:
 			fmt.Fprintf(&b, `\x%02x`, s[i])
-		case r < 0x20 && r != '\n' && r != '\r' && r != '\t', r >= 0x80 && r <= 0x9f:
+		case r < 0x20 && r != '\n' && r != '\r' && r != '\t', r == 0x7f, r >= 0x80 && r <= 0x9f:
 			b.WriteString(`\x` + strconv.FormatInt(int64(r)+0x100, 16)[1:])
 		default:
 			b.WriteString(s[i : i+n])

@@ -45,7 +45,6 @@ export const NR_TOOLS = {
   SUB_STARTS: "Starts with the run",
   SUB_AVAILABLE: "Available inside the sandbox",
   SUB_COMMAND: "Runs on its own; no harness",
-  SUB_NO_CREDENTIAL: "No credential",
   SUB_SAVED: "Saved to your components",
   SUB_RUN_ONLY: "This run only",
   NOTE_COMMAND: "Package registry access comes from your organisation's default policy.",
@@ -54,11 +53,9 @@ export const NR_TOOLS = {
   REPO_SUB: "Via Wardyn's git broker · this run's repositories only",
   STATUS_NEEDS_SETUP: "Needs setup",
   STATUS_READY: "Ready",
-  STATUS_HELD: "Held for approval",
   DETAILS_FOR: (name: string | number) => `Details for ${name}`,
   DETAIL_NETWORK: "Network",
   DETAIL_CREDENTIAL: "Credential",
-  DETAIL_APPROVAL: "Approval",
   DETAIL_MCP: "MCP",
   DETAIL_IMAGE: "Image",
   DETAIL_NOTE: "Note",
@@ -308,9 +305,6 @@ export const NR_TOOLS = {
   SETUP_SIGN_IN_TO: (provider: string | number) => `Sign in to ${provider}`,
   /** pending W-54: a stored sign-in's door, the recommended text until the owner answers. */
   SETUP_SIGN_IN_AGAIN: "Sign in again",
-  SIGN_IN_INTRO:
-    "You'll sign in with your own account in a new window. Wardyn keeps a refresh grant and issues the run a short-lived credential when it starts. The sandbox never sees your sign-in.",
-  SIGN_IN_CONFIRM: "Continue to sign in",
   SIGNED_IN: "Signed in. The credential is issued when the run starts.",
   TOKEN_INTRO:
     "Paste the token once. It's stored encrypted as one of your secrets, and the proxy adds it to requests, so the sandbox never holds it.",

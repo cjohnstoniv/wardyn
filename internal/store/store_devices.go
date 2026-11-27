@@ -45,8 +45,9 @@ type DeviceStore interface {
 	TouchDevice(ctx context.Context, id uuid.UUID, now time.Time) error
 	ListDevices(ctx context.Context) ([]types.Device, error)
 	RevokeDevice(ctx context.Context, id uuid.UUID, now time.Time) (types.Device, error)
-	IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditEvent) (DeviceIngestResult, error)
+	IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditRow) (DeviceIngestResult, error)
 	ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error)
+	ListFederatedAuditRowsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditRow, error)
 	GetFederationCursor(ctx context.Context) (seq int64, rowHash string, err error)
 	SetFederationCursor(ctx context.Context, seq int64, rowHash string) error
 }
@@ -222,7 +223,15 @@ var ErrFederatedRowInvalid = errors.New("store: federated row cannot be stored a
 // marker), JSON null, or absent; target must be one CapAuditTarget leaves unchanged; device_id is
 // this organisation's to derive, never the device's to claim. Exported so the API refuses with a 400
 // before any database work.
-func FederatedRowProblem(r types.FederatedAuditEvent) string {
+func FederatedRowProblem(r types.FederatedAuditRow) string {
+	switch {
+	case r.HashFormat != 0 && r.HashFormat != 1 && r.HashFormat != 2:
+		return "hash_format must be 1 or 2"
+	case r.HashFormat == 2 && !federatedSaltOK(r.HashSalt):
+		return "a format 2 row needs a hash_salt of 64 lowercase hex characters"
+	case r.HashFormat != 2 && r.HashSalt != "":
+		return "hash_salt is set on a format 1 row"
+	}
 	if r.DeviceID != nil {
 		return "device_id is set by this organisation, not claimed"
 	}
@@ -240,6 +249,19 @@ func FederatedRowProblem(r types.FederatedAuditEvent) string {
 		return "data carries a device_origin key"
 	}
 	return ""
+}
+
+// federatedSaltOK reports whether s is 64 lowercase hex characters, the form audit_append stores.
+func federatedSaltOK(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func isJSONNull(data json.RawMessage) bool {
@@ -275,7 +297,7 @@ func isJSONNull(data json.RawMessage) bool {
 //
 // Any refusal refuses the entire batch, never a verified prefix: it's the retry unit, and a partial
 // accept would leave the cursor mid-batch with no way to tell the caller which rows to resend.
-func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditEvent) (DeviceIngestResult, error) {
+func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditRow) (DeviceIngestResult, error) {
 	if len(rows) == 0 {
 		return DeviceIngestResult{}, nil
 	}
@@ -358,6 +380,13 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 		if err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: merge device origin: %w", err)
 		}
+		if r.HashFormat == 2 {
+			// The device's salt is kept only to re-check its claim; audit_append stores it as claim_salt, clears
+			// the setting after the row, and gives the row its own fresh salt.
+			if _, err := tx.Exec(ctx, `SELECT pg_catalog.set_config('wardyn.audit_claim_salt', $1, true)`, r.HashSalt); err != nil {
+				return DeviceIngestResult{}, fmt.Errorf("store: set the claim salt: %w", err)
+			}
+		}
 		var appended int64
 		if err := tx.QueryRow(ctx, insertQ,
 			r.ID, r.Time, r.RunID, string(r.ActorType), FederatedActor(deviceID, r.Actor), r.Action,
@@ -385,7 +414,7 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 // laptop table reset (TRUNCATE...RESTART IDENTITY, a restore) reuses seqs — so matching on seq alone
 // would silently drop a new chain's rows as re-sends. Rows for one device are written only under its
 // row lock, held by the caller, so this read can't race an ingest.
-func heldPrefix(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, lastSeq int64, rows []types.FederatedAuditEvent) (int, error) {
+func heldPrefix(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, lastSeq int64, rows []types.FederatedAuditRow) (int, error) {
 	var seqs []string
 	for _, r := range rows {
 		if r.Seq > lastSeq {
@@ -423,13 +452,20 @@ func heldPrefix(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, lastSeq int6
 // PrevHash, in one statement — never re-marshalled in Go (json.Marshal on a round-tripped value
 // reorders keys, changing the digest). Data and uuid columns travel as text for the same
 // canonicalization the device's own trigger applied.
-func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAuditEvent) error {
+func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAuditRow) error {
 	n := len(rows)
 	prev, ids, actorTypes, actors, actions := make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n)
 	targets, outcomes, sourceIPs := make([]string, n), make([]string, n), make([]string, n)
 	times := make([]time.Time, n)
 	runIDs, data := make([]*string, n), make([]*string, n)
+	formats, salts := make([]int16, n), make([]*string, n)
 	for i, r := range rows {
+		formats[i] = 1 // a row with no format is a format 1 claim
+		if r.HashFormat == 2 {
+			formats[i] = 2
+			salt := r.HashSalt
+			salts[i] = &salt
+		}
 		prev[i], ids[i], times[i] = r.PrevHash, r.ID.String(), r.Time
 		actorTypes[i], actors[i], actions[i] = string(r.ActorType), r.Actor, r.Action
 		targets[i], outcomes[i], sourceIPs[i] = r.Target, r.Outcome, r.SourceIP
@@ -443,14 +479,14 @@ func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAudit
 		}
 	}
 	const q = `
-		SELECT audit_row_hash(u.prev, u.id::uuid, u.at, u.run_id::uuid, u.actor_type, u.actor,
-		                      u.action, u.target, u.outcome, u.source_ip, u.data::jsonb)
+		SELECT audit_row_hash_any(u.fmt, u.salt, u.prev, u.id::uuid, u.at, u.run_id::uuid, u.actor_type, u.actor,
+		                          u.action, u.target, u.outcome, u.source_ip, u.data::jsonb)
 		FROM unnest($1::text[], $2::text[], $3::timestamptz[], $4::text[], $5::text[], $6::text[],
-		            $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
-		     WITH ORDINALITY AS u(prev, id, at, run_id, actor_type, actor, action, target, outcome, source_ip, data, n)
+		            $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::smallint[], $13::text[])
+		     WITH ORDINALITY AS u(prev, id, at, run_id, actor_type, actor, action, target, outcome, source_ip, data, fmt, salt, n)
 		ORDER BY u.n`
 	got, err := collect(ctx, s.Pool, "recompute", "federated audit row hashes", q,
-		[]any{prev, ids, times, runIDs, actorTypes, actors, actions, targets, outcomes, sourceIPs, data},
+		[]any{prev, ids, times, runIDs, actorTypes, actors, actions, targets, outcomes, sourceIPs, data, formats, salts},
 		func(row pgx.Row) (string, error) {
 			var h string
 			return h, row.Scan(&h)
@@ -475,8 +511,9 @@ func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAudit
 }
 
 // refuseOrgRuns answers ErrFederatedOrgRun when any row's run_id names a run in this organisation's
-// agent_runs (audit_events.run_id has no foreign key, so nothing else would stop it).
-func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEvent) error {
+// agent_runs, or one the run-history retention sweep deleted (audit_events.run_id has no foreign key,
+// so nothing else would stop it).
+func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditRow) error {
 	var ids []string
 	for _, r := range rows {
 		if r.RunID != nil {
@@ -487,7 +524,7 @@ func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEv
 		return nil
 	}
 	var hit bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = ANY($1::uuid[]))`, ids).Scan(&hit); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = ANY($1::uuid[])) OR EXISTS (SELECT 1 FROM run_history_tombstones WHERE run_id = ANY($1::uuid[]))`, ids).Scan(&hit); err != nil {
 		return fmt.Errorf("store: check federated run ids: %w", err)
 	}
 	if hit {
@@ -500,7 +537,8 @@ func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEv
 // claimed for it: equals e.data->'device_origin'->>'row_hash' for every row IngestDeviceAudit
 // accepts. Claimed actor/source_ip/prev_hash live in device_origin; the claimed object is stored data
 // minus that key; a data-less claim is named by device_origin.data_null ("json" for JSON null, "sql" for absent).
-const FederatedClaimHashSQL = `audit_row_hash(e.data->'device_origin'->>'prev_hash', e.id, e.time, e.run_id,
+const FederatedClaimHashSQL = `audit_row_hash_any(COALESCE((e.data->'device_origin'->>'hash_format')::smallint, 1::smallint), e.claim_salt,
+	e.data->'device_origin'->>'prev_hash', e.id, e.time, e.run_id,
 	e.actor_type, e.data->'device_origin'->>'actor', e.action, e.target, e.outcome, e.data->'device_origin'->>'source_ip',
 	CASE e.data->'device_origin'->>'data_null' WHEN 'json' THEN 'null'::jsonb WHEN 'sql' THEN NULL
 	     ELSE e.data - 'device_origin' END)`
@@ -547,7 +585,7 @@ const federatedRowSQL = db.FederatedRowSQL
 // The claimed object's members are carried as raw JSON, never decoded, so they survive byte-for-byte
 // (a float64 round trip would rewrite a large integer); FederatedRowProblem already refused every
 // other shape. That's what keeps the claim re-checkable from the stored row (FederatedClaimHashSQL).
-func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditEvent, proxyPeer string) (json.RawMessage, error) {
+func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditRow, proxyPeer string) (json.RawMessage, error) {
 	origin := map[string]any{
 		"device_id": deviceID,
 		"seq":       r.Seq,
@@ -555,6 +593,9 @@ func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditEvent, proxyPee
 		"prev_hash": r.PrevHash,
 		"actor":     r.Actor,
 		"source_ip": r.SourceIP,
+	}
+	if r.HashFormat == 2 { // a format 1 claim keeps the shape it always had
+		origin["hash_format"] = 2
 	}
 	// A proxied row's TCP peer goes here, not top-level like audit.StampProxyPeer:
 	// FederatedClaimHashSQL strips only device_origin from the claimed object.
@@ -597,6 +638,24 @@ func (s PG) ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) (
 	return collect(ctx, s.Pool, "list", "federated audit events", q, []any{seq, limit}, scanFederatedAuditEvent)
 }
 
+// ListFederatedAuditRowsAfterSeq is ListAuditEventsAfterSeq plus each row's hash format and salt, for the
+// forwarder only: the organisation needs the salt to recompute the hash the device claims. A format 1 row
+// comes back with HashFormat 0 and no salt, so its push is the one a format 1 device always sent.
+func (s PG) ListFederatedAuditRowsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditRow, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	const q = `
+		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data,
+		       COALESCE(prev_hash,''), COALESCE(row_hash,''), seq,
+		       CASE WHEN hash_format = 2 THEN 2 ELSE 0 END, CASE WHEN hash_format = 2 THEN hash_salt END
+		FROM audit_events
+		WHERE seq > $1
+		ORDER BY seq
+		LIMIT $2`
+	return collect(ctx, s.Pool, "list", "federated audit rows", q, []any{seq, limit}, scanFederatedAuditRow)
+}
+
 // AuditHeadSeq is this deployment's newest audit_events seq, 0 on an empty table: the head the
 // forwarder measures lag against, read every tick whether or not a push succeeds.
 func (s PG) AuditHeadSeq(ctx context.Context) (int64, error) {
@@ -619,6 +678,24 @@ func scanFederatedAuditEvent(row pgx.Row) (types.FederatedAuditEvent, error) {
 	e.ActorType = types.ActorType(actorType)
 	e.Data = dataRaw
 	return e, nil
+}
+
+func scanFederatedAuditRow(row pgx.Row) (types.FederatedAuditRow, error) {
+	var r types.FederatedAuditRow
+	var actorType string
+	var dataRaw []byte
+	var salt *string
+	err := row.Scan(&r.ID, &r.Time, &r.RunID, &actorType, &r.Actor, &r.Action, &r.Target, &r.Outcome, &r.SourceIP, &dataRaw,
+		&r.PrevHash, &r.RowHash, &r.Seq, &r.HashFormat, &salt)
+	if err != nil {
+		return types.FederatedAuditRow{}, fmt.Errorf("store: scan federated audit row: %w", err)
+	}
+	r.ActorType = types.ActorType(actorType)
+	r.Data = dataRaw
+	if salt != nil {
+		r.HashSalt = *salt
+	}
+	return r, nil
 }
 
 // GetFederationCursor returns how far this deployment's forwarder has pushed audit_events upward,

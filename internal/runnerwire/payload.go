@@ -30,6 +30,9 @@ type (
 		Version  int     `json:"version"`
 		Sig      []byte  `json:"sig"`
 		Resume   *Resume `json:"resume,omitempty"`
+		// StreamWindow is the per-stream window the runner offers to receive (StreamWindowLarge). Absent (an
+		// older runner): the organisation keeps StreamWindow; an older organisation ignores the field.
+		StreamWindow uint32 `json:"stream_window,omitempty"`
 	}
 	Resume struct {
 		SessionID string `json:"session_id"`
@@ -49,6 +52,9 @@ type (
 		// to a run over the runner's local socket. Absent (an older organisation) or false: the runner
 		// opens no socket; an older runner ignores the field.
 		LocalAttach bool `json:"local_attach,omitempty"`
+		// LocalWindow says the organisation allows a window onto a Linux VM run over the local socket;
+		// true only while its site switch is on. An older runner ignores it.
+		LocalWindow bool `json:"local_window,omitempty"`
 		// PerRunCPUMillis and PerRunMemoryMiB are the most CPU (milli-CPU) and memory (MiB) one run may
 		// take on this runner, from the limits its owner or administrator declared (wardyn runner set), so
 		// a runner can size what it builds for one run (a macOS VM). Re-sent on every connect; 0 or absent
@@ -56,6 +62,14 @@ type (
 		// runner ignores them.
 		PerRunCPUMillis int64 `json:"per_run_cpu_millis,omitempty"`
 		PerRunMemoryMiB int64 `json:"per_run_memory_mib,omitempty"`
+		// StreamWindow is the per-stream window both sides use on this connection: the runner's offer, at most
+		// StreamWindowLarge. 0 or absent (an older organisation, or a runner that offered none) means
+		// StreamWindow and ConnWindow; an older runner ignores the field.
+		StreamWindow uint32 `json:"stream_window,omitempty"`
+		// DeviceCert says the organisation has an MDM device CA set, so a Mac runner presents its MDM device
+		// identities (EventDeviceCert). Re-sent on every connect; absent or false (no CA, or an older
+		// organisation) means the runner reads no keychain; an older runner ignores it.
+		DeviceCert bool `json:"device_cert,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
@@ -90,10 +104,13 @@ const (
 	// EventMacWindowUnexpected carries a MacWindowUnexpected: a window opened on a macOS VM run through
 	// its helper's control socket, not through a mac_window call. Event.RunID is the run.
 	EventMacWindowUnexpected = "mac_window_unexpected"
+	// EventDeviceCert carries a DeviceCertReport: the MDM device certificates a Mac presents, each with a
+	// signature by its key over a message that names this runner's key. Only a Mac runner sends it.
+	EventDeviceCert = "device_cert"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected, EventDeviceCert}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -168,6 +185,9 @@ type Caps struct {
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// LocalWindow says the runner serves MethodLocalWindow: it shows a Linux VM run's display to a CLI
+	// on its local socket. The org sends it only to a runner that says so.
+	LocalWindow bool `json:"local_window,omitempty"`
 	// BoundFolders says the runner binds a member's workspace folder bound to it (runner.Mount.BoundRunner):
 	// it binds such a folder only when it is bound to this runner, holds it to its owner's --drive-root,
 	// and binds a writable one only under a writable ceiling. The org places a run with such a folder only
@@ -196,6 +216,10 @@ type Caps struct {
 	// pool member pinned to a namespace is eligible only on such a runner. Absent (an older runner,
 	// or a runner on another substrate) says nothing: the runner serves its one namespace as before.
 	RunsNamespaces []string `json:"runs_namespaces,omitempty"`
+	// Drives says a Kubernetes runner mounts a drive an administrator keeps on it: a pre-provisioned claim in one of
+	// its runs namespaces (0.11 on, its operator's drives.enabled). Absent (an older runner, or drives off), the org
+	// sends it no such drive.
+	Drives bool `json:"drives,omitempty"`
 }
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
@@ -235,6 +259,9 @@ const (
 	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
 	// such a runner is refused a run that has rules.
 	ProxySettingHostRules = "host_rules"
+	// ProxySettingPushHoldRemovals is push_hold_removals. Dropped, the run's proxy would forward a push
+	// that removes a review path, so such a runner is refused a run that sets it.
+	ProxySettingPushHoldRemovals = "push_hold_removals"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -261,7 +288,7 @@ var ProxySettings = []string{
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
 	ProxySettingMCPSendOnce, ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
-	ProxySettingHostRules,
+	ProxySettingHostRules, ProxySettingPushHoldRemovals,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -275,7 +302,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
 		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
-		len(pc.Policy.HostRules) != 0} {
+		len(pc.Policy.HostRules) != 0,
+		pc.PushHoldRemovals} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
@@ -332,12 +360,21 @@ type MacVMCaps struct {
 	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
 	// never sent a macOS VM run with one.
 	DiskDrives bool `json:"disk_drives,omitempty"`
+	// PriorSessions is how many sessions this runner process had completed with an organisation (AUTH_OK received)
+	// before the one these caps are sent on, counted from the process's start. 0 on a fresh session says the process
+	// is new: no earlier process's delete can still be running on this Mac. Absent from a runner that does not
+	// count, and never taken as evidence.
+	PriorSessions *int `json:"prior_sessions,omitempty"`
 	// Window says the runner serves mac_window: it opens an attended window onto a macOS VM run it holds.
 	// A runner without it (older) is never sent the call.
 	Window bool `json:"window,omitempty"`
 	// KeptMachines says the runner keeps a person's kept machines (SandboxSpec.KeptMachine) and deletes
 	// them (kept_machine). A runner without it is never sent a macOS VM run with one.
 	KeptMachines bool `json:"kept_machines,omitempty"`
+	// KeptConditionalDelete says the runner executes kept_machine's delete_expired op, which rechecks the
+	// machine's own deadline under its lock. The organisation starts no expiry-driven delete on a runner
+	// that does not say so; such a Mac still removes its own expired machines in its sweep.
+	KeptConditionalDelete bool `json:"kept_conditional_delete,omitempty"`
 	// Kept is the Mac's kept machines and the disk they may take; nil when the runner keeps none or has
 	// not counted yet.
 	Kept *MacVMKept `json:"kept,omitempty"`
@@ -382,6 +419,17 @@ type MacVMKeptMachine struct {
 	// not in use. The org releases a machine only from the run it names, so an older snapshot cannot
 	// release a newer run's hold.
 	RunID string `json:"run_id,omitempty"`
+	// StopRunID is the run whose stop wrote this machine's current deadline and scrub state, from the
+	// Mac's own record. Absent from a runner that does not record it: such a report is unversioned, and
+	// never settles a newer use.
+	StopRunID string `json:"stop_run_id,omitempty"`
+}
+
+// ObservesStopOf reports whether this idle report was produced by the stop of run: only then does it say
+// what that run left behind. A report of an older stop, or an unversioned one, is a view of a use that
+// may since have been replaced, and settles nothing.
+func (k MacVMKeptMachine) ObservesStopOf(run string) bool {
+	return !k.InUse && run != "" && k.StopRunID == run
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.
@@ -697,6 +745,11 @@ const (
 	// first the runner writes one MacWindowEnd line and half-closes it; the org ends the window by
 	// resetting or closing it.
 	KindMacWindow = "mac_window"
+	// KindLocalWindow is the stream of one local window onto a Linux VM run. It is opened only by the
+	// runner, only as the reply stream of a local_window call, and lives as long as the window. It
+	// carries no display bytes: when the window ends first the runner writes one LocalWindowEnd line and
+	// half-closes it; the org ends the window by resetting or closing it.
+	KindLocalWindow = "local_window"
 )
 
 // MacWindowUnexpected is the mac_window_unexpected event's data: Grant is the grant id the helper's window
@@ -712,6 +765,27 @@ type MacWindowUnexpected struct {
 type MacWindowEnd struct {
 	Reason string `json:"reason"`
 }
+
+// LocalWindowEnd is the one line a local_window stream carries, written by the runner when the window
+// ends before the org ended it. Reason is LocalWindowEnd*. RefusalKind is what the display filter
+// refused, in its fixed words, or LocalWindowNotRFB; it never quotes the stream. CutTextDropped counts
+// the cut-text messages the filter dropped.
+type LocalWindowEnd struct {
+	Reason         string `json:"reason"`
+	RefusalKind    string `json:"refusal_kind,omitempty"`
+	CutTextDropped int    `json:"cut_text_dropped,omitempty"`
+}
+
+// The reasons a LocalWindowEnd carries. An organisation reads any other reason as the link lost.
+const (
+	LocalWindowEndPerson       = "person"        // the person closed the window
+	LocalWindowEndRunEnded     = "run_ended"     // the VM's display closed
+	LocalWindowEndRefused      = "refused"       // the display filter refused the stream (RefusalKind)
+	LocalWindowEndHelperFailed = "helper_failed" // the viewer broke the local socket's protocol
+)
+
+// LocalWindowNotRFB is the RefusalKind of a display that never spoke RFB.
+const LocalWindowNotRFB = "not_rfb"
 
 // MacWindowOpenSentence is the refusal for a second window on a run that has one open: the helper, the
 // runner and the organisation use these words (macvm.WindowAlreadyOpenSentence), so a person reads the
@@ -747,7 +821,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow, KindLocalWindow:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

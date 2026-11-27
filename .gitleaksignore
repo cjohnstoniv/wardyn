@@ -177,3 +177,7 @@ c2450be019d75f32f496890ed983465c3294528b:ui/src/app/components/screens/approvals
 fbfc044a5bd06512fff0ffba8c4317d44a254285:ui/src/app/components/screens/approvals-waiting.test.tsx:generic-api-key:349
 79fdeb3a4b8ef8909e59be51fc0a20ddb364689d:ui/src/app/components/screens/governance/deny-list-strip.test.tsx:generic-api-key:59
 9ec9656a8fa108712b15e985626ac6733d83abdd:internal/rfbfilter/clientframes_test.go:generic-api-key:62
+# The portal fetch test's body-cap marker (a made-up string the test asserts is never logged) and the token-response
+# test's canned JSON (made-up token values for a stubbed endpoint). Test fixtures, never credentials.
+02e832f6c07809c9d1089001031f3cbff27a2af3:internal/auth/oidc/portal_fetch_test.go:generic-api-key:341
+da41fe4070c69541c0210cae1145a0c869448586:internal/api/provider_service_grant_review_test.go:generic-api-key:513

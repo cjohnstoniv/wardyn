@@ -64,8 +64,9 @@ func (s *Server) handleUnbindIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.As(err, &inUse):
 		writeErrorReason(w, http.StatusConflict, reasonIdentityPrincipalInUse, fmt.Sprintf(
-			"the principal still holds %d API token(s), %d SSH key(s), %d active run(s), %d claimed runner(s) and %d unspent runner registration token(s), sponsors %d service identity(ies) and is the target of %d pending invitation(s); revoke, end, retire or hand over each first, because after the unbind nothing sweeps them",
-			inUse.APITokens, inUse.SSHKeys, inUse.ActiveRuns, inUse.Runners, inUse.RunnerTokens, inUse.Sponsored, inUse.PendingInvitations))
+			"the principal still holds %d API token(s), %d SSH key(s), %d active run(s), %d claimed runner(s), %d unspent runner registration token(s) and %d capability deny(ies) keyed on it, "+
+				"sponsors %d service identity(ies) and is the target of %d pending invitation(s); revoke, end, retire or hand over each first, and move a deny to the person's email, because after the unbind nothing sweeps them",
+			inUse.APITokens, inUse.SSHKeys, inUse.ActiveRuns, inUse.Runners, inUse.RunnerTokens, inUse.CapabilityDenies, inUse.Sponsored, inUse.PendingInvitations))
 		return
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrIdentityRebound):
 		writeErrorReason(w, http.StatusConflict, reasonIdentityNotBound, "the identity changed while it was being unbound; read it again")

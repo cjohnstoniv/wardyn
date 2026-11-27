@@ -430,6 +430,8 @@ type runtimeExtras struct {
 	boundFolders bool
 	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
 	runsNamespaces []string
+	// drives: a k8s runner's WARDYN_RUNNERD_DRIVES, advertised as its drives.
+	drives bool
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
 	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
 	// netPolWatch, set by the k8s runner (the driver's OnNetPolChange), takes the hook a canary re-check
@@ -523,6 +525,14 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if !extra.noPosture {
 		reporter = posture.NewReporter()
 	}
+	// A Mac presents the MDM device identities its helper reads from the System keychain, only while the
+	// organisation asks (hooks.DeviceCert); with no helper beside this runner (no macOS VM support) it presents nothing.
+	var deviceCerts *posture.DeviceCertSender
+	if runtime.GOOS == "darwin" {
+		if helper, err := macVMHelperPath(); err == nil {
+			deviceCerts = posture.NewDeviceCertSender(helper, stateDir, identity.OrgURLSHA256)
+		}
+	}
 	if err := manager.SetOptions(extra.options); err != nil {
 		return runnerRuntime{}, err
 	}
@@ -550,6 +560,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	// A restart keeps each run it can vouch for until its saved lapse time, then contains the rest. The k8s
+	// runner gave its runs theirs in started, after listing its proxies; this call adds none there.
+	manager.ProvisionalDeadlines()
 	checkLapsesAtStartup(ctx, manager)
 	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
 	if extra.netPolWatch != nil {
@@ -595,10 +608,17 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
 			}
+			// The device certificate report waits on the Mac's keychain, so it runs beside the session, not on
+			// the way to READY: Watch sends at once, then every 6 hours.
+			if deviceCerts != nil {
+				go deviceCerts.Watch(peer)
+			}
 		},
 		LocalAttach: local.Set,
 		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
 		PerRunLimits: extra.macOSVM.setPerRunLimits,
+		// Whether the organisation has an MDM device CA set, on every connect: a Mac reads its keychain only then.
+		DeviceCert: deviceCerts.SetWanted,
 		StreamOffline: func(peer *runnerwire.Peer) {
 			caps.online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)

@@ -34,9 +34,11 @@ const (
 
 // proxyDialer dials the proxy with TCP keepalive on, so a tunnel whose proxy
 // side has gone away without a FIN ends instead of holding its slot. It sets
-// the same probe timing as the guest leg.
+// the same probe timing as the guest leg. Its resolver is a zero Resolver, which
+// behaves as net.DefaultResolver does until something swaps that global; a
+// Dialer with no Resolver reads the global on every dial, which races a swap.
 func proxyDialer() *net.Dialer {
-	return &net.Dialer{Timeout: dialBudget, KeepAliveConfig: net.KeepAliveConfig{
+	return &net.Dialer{Timeout: dialBudget, Resolver: &net.Resolver{}, KeepAliveConfig: net.KeepAliveConfig{
 		Enable: true, Idle: keepaliveIdle, Interval: keepaliveInterval, Count: keepaliveCount,
 	}}
 }

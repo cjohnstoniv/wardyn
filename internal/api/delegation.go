@@ -83,6 +83,10 @@ const delegationRefusal = "A delegated token cannot reach this action — the pe
 func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
+		// A grant an issuer portal minted lives in portal_grants, which the lookup below never reads.
+		if ok && strings.HasPrefix(tok, delegatedTokenPrefix) && s.servePortalGrant(w, r, tok, next, fallback) {
+			return
+		}
 		ds, isDS := s.cfg.Store.(store.DelegateStore)
 		if !ok || !strings.HasPrefix(tok, delegatedTokenPrefix) || !isDS {
 			fallback.ServeHTTP(w, r)
@@ -165,5 +169,6 @@ func neverOperator(ctx context.Context) bool {
 	_, isSCIM := scimCallerSlot(ctx)                   // the identity provider's connector removes access, and never acts as the admin token
 	_, _, isService := serviceIdentityFromContext(ctx) // automation: member reach, whatever role its context was published with
 	_, isPolicy := policyDeciderFrom(ctx)              // an approval rule's context holds no human, which would read as the admin token
-	return isDevice || delegated || isSCIM || isService || isPolicy
+	// An assistant context with no human is a bug that lost the person: it reads as a member, never the admin token.
+	return isDevice || delegated || isSCIM || isService || isPolicy || (assistantActorFromContext(ctx) && oidcHumanFromContext(ctx) == "")
 }

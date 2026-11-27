@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 
@@ -53,6 +55,62 @@ func resolveExecContainer(pod *corev1.Pod) string {
 		}
 	}
 	return mainContainerName
+}
+
+// execStreamContainer is ExecStream's target: resolveExecContainer's, except for an exec confined to one folder of
+// the agent's (agentDir) once the agent's exec container has ended, which the kubelet no longer runs anything in. That
+// exec runs in the pod's main container, which mounts the same volumes, when the folder is on one of them. Anywhere
+// else the main container shows its own filesystem, not the agent's, so the exec is refused.
+func execStreamContainer(pod *corev1.Pod, agentDir string) (string, error) {
+	container := resolveExecContainer(pod)
+	if container != execContainerName || agentDir == "" || !agentContainerEnded(pod) {
+		return container, nil
+	}
+	if !sharedWithMain(pod, agentDir) {
+		return "", runner.ErrAgentDirUnshared
+	}
+	return mainContainerName, nil
+}
+
+// agentContainerEnded reports whether the agent's exec container has terminated.
+func agentContainerEnded(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.EphemeralContainerStatuses {
+		if cs.Name == execContainerName {
+			return cs.State.Terminated != nil
+		}
+	}
+	return false
+}
+
+// sharedWithMain reports whether dir, as the agent's exec container sees it, is on a volume the main container
+// mounts at the same path: the deepest of the agent container's mounts that holds dir is also the main container's.
+// A dir on none of them is the agent container's own filesystem, which no other container sees.
+func sharedWithMain(pod *corev1.Pod, dir string) bool {
+	dir = path.Clean(dir)
+	if !path.IsAbs(dir) {
+		return false
+	}
+	var deepest *corev1.VolumeMount
+	for i := range pod.Spec.EphemeralContainers {
+		ec := &pod.Spec.EphemeralContainers[i]
+		if ec.Name != execContainerName {
+			continue
+		}
+		for j := range ec.VolumeMounts {
+			m := &ec.VolumeMounts[j]
+			mp := path.Clean(m.MountPath)
+			if (dir == mp || strings.HasPrefix(dir, mp+"/")) && (deepest == nil || len(mp) > len(path.Clean(deepest.MountPath))) {
+				deepest = m
+			}
+		}
+	}
+	main, ok := findContainer(pod.Spec.Containers, mainContainerName)
+	if deepest == nil || !ok {
+		return false
+	}
+	return slices.ContainsFunc(main.VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == deepest.Name && path.Clean(m.MountPath) == path.Clean(deepest.MountPath)
+	})
 }
 
 // Attach opens a new interactive exec (attachShellScript, via the exec
@@ -138,7 +196,10 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 	if err != nil {
 		return nil, sandboxGoneErr(fmt.Errorf("k8s: exec stream: get pod %q: %w", ref, err))
 	}
-	container := resolveExecContainer(pod)
+	container, err := execStreamContainer(pod, spec.AgentDir)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: exec stream: %w", err)
+	}
 
 	cmd := spec.Argv
 	if len(spec.Env) > 0 {

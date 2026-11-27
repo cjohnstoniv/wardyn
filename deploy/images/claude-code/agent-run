@@ -78,6 +78,7 @@ set -euo pipefail
 # provision_git_helper_secret, clone_one, dispatch_repo_clones,
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
+held_seed_adopt
 wait_for_proxy
 
 # The two lines this image's boot pane prints while it waits (BOOT_SEED_PREPARING,
@@ -728,6 +729,8 @@ maybe_exec_task_mode "$task"
 ANTHROPIC_MODE=""
 apply_anthropic_mode
 echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
+# The governed assistant run: the relay replaces this script, after the auth mode above has set its env.
+if [[ "${WARDYN_ASSISTANT:-}" == "1" ]]; then exec wardyn-assist relay; fi
 
 # Tool-approval HOLD mode (tool_approvals=hold): instead of skipping claude's
 # per-tool approvals, every gated tool call is parked on a Wardyn approval an

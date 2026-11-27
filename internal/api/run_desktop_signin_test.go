@@ -22,7 +22,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretspresent"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -1011,56 +1010,5 @@ func TestSigninSite(t *testing.T) {
 		if got, ok := signinSite(bad); ok {
 			t.Errorf("signinSite(%q) = %q, want refused", bad, got)
 		}
-	}
-}
-
-// TestSecretsPresent_Gatherer: each source counts, a begun sign-in counts
-// for good, and an unreadable source fails closed.
-func TestSecretsPresent_Gatherer(t *testing.T) {
-	f := newSigninFixture(t)
-	ctx := context.Background()
-	stub := takeoverHappened
-	takeoverHappened = func(context.Context, *Server, uuid.UUID) (bool, error) { return false, nil }
-	t.Cleanup(func() { takeoverHappened = stub })
-	if present, why := f.srv.secretsPresent(ctx, f.run.ID); present {
-		t.Fatalf("a plain run = %v", why)
-	}
-	f.begin(t)
-	if _, why := f.srv.secretsPresent(ctx, f.run.ID); !slices.Equal(why, []secretspresent.Reason{secretspresent.SigninStore}) {
-		t.Fatalf("after a sign-in = %v", why)
-	}
-	f.st.grants = []types.CredentialGrant{{Spec: types.GrantSpec{Kind: types.GrantSSHKey}}}
-	if _, why := f.srv.secretsPresent(ctx, f.run.ID); !slices.Contains(why, secretspresent.ResidentGrant) {
-		t.Fatalf("an ssh_key grant = %v", why)
-	}
-	f.st.readErr = errors.New("down")
-	if _, why := f.srv.secretsPresent(ctx, f.run.ID); !slices.Contains(why, secretspresent.Unknown) {
-		t.Fatalf("unreadable = %v, want unknown", why)
-	}
-	for _, tc := range []struct {
-		action, data string
-		want         bool
-	}{
-		{"run.bedrock.configure", `{"mode":"bearer"}`, false},
-		{"run.bedrock.configure", `{"mode":"sso-inject-proxy"}`, true},
-		{"run.component.attach", `{"kind":"custom","source":"inline","secrets":[{"delivery":"header"}]}`, false},
-		{"run.component.attach", `{"kind":"custom","source":"self","secrets":[{"delivery":"file"}]}`, true},
-		{"run.component.attach", `{"kind":"custom","source":"org","secrets":[]}`, true},
-		{"run.component.attach", `{"kind":"git_provider","source":"org"}`, false},
-	} {
-		if got := residentByAudit(types.AuditEvent{Action: tc.action, Outcome: "success", Data: json.RawMessage(tc.data)}); got != tc.want {
-			t.Errorf("%s %s = %v, want %v", tc.action, tc.data, got, tc.want)
-		}
-	}
-}
-
-// TestSecretsPresent_TakeoverStubFailsClosed: until DSK-B's takeover holder
-// lands, takeoverHappened cannot answer, so even a plain run is Unknown and
-// a snapshot is refused; the rule never reads the stub as "no takeover".
-func TestSecretsPresent_TakeoverStubFailsClosed(t *testing.T) {
-	f := newSigninFixture(t)
-	present, why := f.srv.secretsPresent(context.Background(), f.run.ID)
-	if !present || !slices.Equal(why, []secretspresent.Reason{secretspresent.Unknown}) {
-		t.Fatalf("a plain run with the takeover stub = %v %v, want present (refused) for [%s]", present, why, secretspresent.Unknown)
 	}
 }

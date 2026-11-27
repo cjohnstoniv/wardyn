@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -354,8 +355,11 @@ func TestCreateSandbox_NoNetworkRefusedBeforeAnyObject(t *testing.T) {
 	}
 	t.Run("runner without runnerd's peer", func(t *testing.T) {
 		h := newNoNetworkRunnerHarness(t, nil)
+		self := uuid.New()
+		h.d.cfg.RunnerID, h.d.cfg.Drives = self.String(), true
 		h.cs.ClearActions()
-		spec := withDrive(noNetworkSpec("https://" + host + ":8443"))
+		spec := noNetworkSpec("https://" + host + ":8443")
+		spec.Drives = []types.DriveMount{keptDrive(self, testNamespace)}
 		spec.RunID = h.runID
 		_, err := h.d.CreateSandbox(context.Background(), spec)
 		want := "k8s: a No network run on a runner needs the runner's own pods as its proxy's only peer; the run was not started"

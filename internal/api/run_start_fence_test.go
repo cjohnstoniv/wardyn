@@ -94,14 +94,44 @@ func TestStartFence_SFTPFencesAPersonsChannelNotAFolderPass(t *testing.T) {
 	fr, execs := countingExecs()
 	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Runner: fr})
 	l := startEndsRun(srv, run.ID, func() { st.putRun(endedRun(run)) })
-	if _, reason, err := srv.execSFTPServer(t.Context(), run, true, "-d", "%d"); err == nil || reason != "sftp unavailable: the sandbox is gone" || execs.Load() != 0 {
+	if _, reason, err := srv.execSFTPServer(t.Context(), run, &sshLiveRunWords, "-d", "%d"); err == nil || reason != "sftp unavailable: the sandbox is gone" || execs.Load() != 0 {
 		t.Fatalf("a person's channel = %q %v after %d execs, want the gone sandbox's words and none", reason, err, execs.Load())
 	}
-	if sess, reason, err := srv.execSFTPServer(t.Context(), endedRun(run), false, "-d", "/home/agent/work"); err != nil || sess == nil || execs.Load() != 1 {
+	if sess, reason, err := srv.execSFTPServer(t.Context(), endedRun(run), nil, "-d", "/home/agent/work"); err != nil || sess == nil || execs.Load() != 1 {
 		t.Fatalf("a folder pass = %q %v after %d execs, want one started", reason, err, execs.Load())
 	}
 	if asked := l.asked.Load(); asked != 1 {
 		t.Fatalf("start lock waits = %d, want one (the person's channel only)", asked)
+	}
+}
+
+// A computer folder's pass names its folder to the substrate (runner.ExecSpec.AgentDir), so a Kubernetes sandbox whose
+// agent container has ended can serve it from the pod's main container; its argv is unchanged. A substrate's refusal of
+// that folder reads as itself, not as a missing sftp-server.
+func TestExecSFTPServer_AFolderPassNamesItsFolder(t *testing.T) {
+	st, run, _ := sshOwnedRunningRun(t)
+	var got []runner.ExecSpec
+	var refuse atomic.Bool
+	fr := &sshFakeRunner{execFn: func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+		got = append(got, spec)
+		if refuse.Load() {
+			return nil, fmt.Errorf("k8s: exec stream: %w", runner.ErrAgentDirUnshared)
+		}
+		return fakeEchoExecSession(), nil
+	}}
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Runner: fr})
+	if _, reason, err := srv.execSFTPServer(t.Context(), endedRun(run), nil, "-d", "/home/agent/work"); err != nil {
+		t.Fatalf("a folder pass = %q %v, want one started", reason, err)
+	}
+	if len(got) != 1 || got[0].AgentDir != "/home/agent/work" ||
+		!slices.Equal(got[0].Argv, []string{sftpServerPath, "-e", "-d", "/home/agent/work"}) {
+		t.Fatalf("the folder pass's exec = %+v, want AgentDir /home/agent/work and argv %s -e -d /home/agent/work", got, sftpServerPath)
+	}
+	refuse.Store(true)
+	_, reason, err := srv.execSFTPServer(t.Context(), endedRun(run), nil, "-d", "/home/agent/work")
+	if !errors.Is(err, runner.ErrAgentDirUnshared) ||
+		reason != "sftp unavailable: the agent's container has ended, and the folder is on no volume the sandbox's main container shares with it" {
+		t.Fatalf("a refused folder pass = %q %v, want the substrate's refusal in its own words", reason, err)
 	}
 }
 

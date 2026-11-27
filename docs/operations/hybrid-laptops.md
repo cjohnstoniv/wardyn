@@ -98,6 +98,17 @@ Not checked: an MDM device certificate, Apple Managed Device Attestation, or a T
 
 `runners.require_managed_device` (super admin: `PUT /api/v1/runners/settings {"require_managed_device": true}`) refuses a new local run unless the pool has a `managed_device` or `org_cluster` runner. A pool of only `personal` runners answers `runner_trust_required`. Off by default, so an install that does not set it places as before. Runs already started keep their runner.
 
+#### Machine kinds by trust class
+
+`runners.machine_kind_denials` (super admin, `PUT /api/v1/runners/settings`, API only) lists pairs of a trust class and a machine kind (`container`, `linux_vm`, `macos_vm`) that a new local run on a registered runner may not use.
+
+- The list only denies. It never admits what a built-in rule refuses.
+- It is judged for a new run at create, at the queue's start and at dispatch, never at revive.
+- A pool places the run on a class that admits it. Denied everywhere, the answer is `placement_denied`.
+- With a list set, a runner of no known trust class takes no new run.
+- A macOS VM needs `managed_device` whatever the list says.
+- The list covers local runs on registered runners only. The server's Docker, which runs containers only, is not judged.
+
 The switch is only as strong as the mark: review marked runners against your MDM inventory, and unmark (`wardyn runner trust <runner-id> personal --reason "<why>"`) a laptop that leaves management.
 
 ### bedrock_sso on a laptop runner
@@ -272,8 +283,8 @@ Drive roots:
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
-| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (the helper runs on Apple silicon only); unused unless [macOS VMs](macos-vms.md) are turned on |
-| `/Users/Shared/Wardyn/` | the shared macOS VM ledger the package creates, root-owned: see [The shared ledger](macos-vms.md#the-shared-ledger) |
+| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (it runs on Apple silicon only). An Apple silicon install runs it once to set up the shared ledger; it is otherwise unused unless [macOS VMs](macos-vms.md) are turned on |
+| `/Users/Shared/Wardyn/` | the shared macOS VM ledger, root-owned: Apple silicon installs make it at install time, Intel installs have none (that is not damage). See [The shared ledger](macos-vms.md#the-shared-ledger) |
 
 1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
@@ -364,10 +375,24 @@ What happens:
   them out.
 - On filesystems that cannot sync a directory, and for read-only files on Windows, a power loss can drop a
   just-written change; Wardyn logs a warning and continues.
-- Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
-  [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
-- Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its
-  network for up to about 2 minutes after the run ends, while the first pass back runs (its timeout).
+- Before a pass back, Wardyn stops the agent and cuts its egress. A krun run is refused at start.
+- A lease end stops the sandbox and keeps its files for
+  [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace). When the run is finally stopped, a task sandbox on the
+  server's Docker is started again with no network and nothing running but its idle process, for the pass back, and
+  is then stopped.
+- An interactive run's sandbox, a sandbox on a runner and a virtual machine are not started again: no pass runs, and
+  the run says its changes were not brought back.
+- Known limit: on a virtual machine sandbox, the agent can stay running with its network for up to about 2 minutes
+  after the run ends, while the first pass back runs (its timeout).
+- On a Kubernetes runner, or a runner older than 0.10.0, Wardyn stops the sandbox's proxy before the first pass back
+  instead. The agent has no network, but it is left running and can still change files while the pass runs. If the
+  proxy can't be stopped, no pass runs.
+- On Kubernetes in server mode, no pass back runs while the agent is still running: the sandbox is stopped and the
+  run records that its changes were not brought back. A pass back runs only after the agent has exited.
+- On Kubernetes, a pass back after the agent has exited reads the folder from the sandbox's main container. That
+  container sees the folder only on a volume it shares with the agent, such as the work folder (`/home/agent/work`)
+  of a run with a disk size (`disk_mib`), or a drive. Anywhere else no pass runs, and the run records why.
+- A Kubernetes runner older than 0.11.0 sends that pass to the agent's ended container, where it does not start.
 - `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
   back. Only you can do it.
 
@@ -425,7 +450,7 @@ A workspace folder can live on your computer: the `local_dir` source names your 
 - An older runner, without `bound_folders` in its caps, is refused the run until updated.
 - If the runner is revoked or removed, or the workspace changes owner, runs are refused (`workspace_source_runner_unavailable`); add a new workspace.
 - Record and verify refuse such a folder. The workspace scan and env-as-code skip it, and a scan of the source itself is refused (`source_scan_runner_bound`).
-- A `write:` requirement is checked against the server's own files, so one that names such a folder can be refused. Make the folder writable with the source's `--writable` instead.
+- A policy mount of the folder, on a run that attaches the workspace, and a `write:` requirement on the folder or on a path inside it are checked by their text too.
 
 ## Offline and revocation
 
@@ -436,7 +461,7 @@ A workspace folder can live on your computer: the `local_dir` source names your 
 | Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 5 s, then answers a retryable `503` naming the runner's link |
 | A Linux VM sandbox's audit spool fills | The runner ends the VM, powered down and kept. A container keeps the hold and `503` above |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
-| The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
+| The runner process restarts | Each run keeps its network until the lapse time saved from its last lease, at most 65 minutes after the restart; a fresh lease continues it. A run past that time, or failed or half-created, is cut off until revived |
 | The control plane restarts, or answers `503` while it starts | The runner reconnects once the organisation answers; live runs keep running. A teardown of a run it keeps only for containment is refused, so it cannot hold the connection; the next restart kills that agent instead. Nothing needs resetting |
 | The computer is registered again under a new identity | At first start `serve` stops the old registration's run proxies, then moves `offline/`, `spools/` and `output/` into `previous/` (Docker; spooled decisions are kept, not delivered). If one cannot be stopped, it exits naming the fix and retries next start |
 | Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |

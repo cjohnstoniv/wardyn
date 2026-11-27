@@ -13,17 +13,18 @@ import { Download, Loader2, Pause, Play } from "lucide-react";
 import { recordings, type DesktopPlayback } from "../../../lib/api/recordings";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { clockTime } from "../../../lib/format";
-import type { AuditEvent } from "../../../lib/types";
+import type { AuditEvent, RunDetail } from "../../../lib/types";
 import { advance, gapAt, pct, replayActions, replayDuration, replayGaps, seekKey } from "../../../lib/desktop-replay-timeline";
 import { decodeFrames, PlaybackSocket, ReplayFeed } from "../../../lib/desktop-replay-feed";
 import { Button } from "../../ui/button";
+import { DesktopWatermark, WatermarkControl } from "../../wardyn/desktop-watermark";
 import { RECORDING_REPLAY as C, gapDuration } from "../../wardyn/copy/recording-level";
 import { ReplayActionLog, ReplayChain } from "./desktop-replay-panels";
 
 const TICK_MS = 250;
 const SPEEDS = [1, 2, 4] as const;
 
-export function DesktopReplay({ runId, recKey, audit, onGoAudit }: { runId: string; recKey: string; audit: AuditEvent[]; onGoAudit?: () => void }) {
+export function DesktopReplay({ runId, recKey, audit, onGoAudit, watermark }: { runId: string; recKey: string; audit: AuditEvent[]; onGoAudit?: () => void; watermark?: RunDetail["desktop_watermark"] }) {
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
   const [doc, setDoc] = React.useState<{ playback: DesktopPlayback; raw: string } | undefined>();
   const [attempt, setAttempt] = React.useState(0);
@@ -70,15 +71,16 @@ export function DesktopReplay({ runId, recKey, audit, onGoAudit }: { runId: stri
       </div>
     );
   }
-  return <Player runId={runId} recKey={recKey} doc={doc} audit={[...audit, ...moves]} onGoAudit={onGoAudit} />;
+  return <Player runId={runId} recKey={recKey} doc={doc} audit={[...audit, ...moves]} onGoAudit={onGoAudit} watermark={watermark} />;
 }
 
-function Player({ runId, recKey, doc, audit, onGoAudit }: {
+function Player({ runId, recKey, doc, audit, onGoAudit, watermark }: {
   runId: string;
   recKey: string;
   doc: { playback: DesktopPlayback; raw: string };
   audit: AuditEvent[];
   onGoAudit?: () => void;
+  watermark?: RunDetail["desktop_watermark"];
 }) {
   const pb = doc.playback;
   const written = audit.find((e) => e.action === "desktop.recording.write" && e.target === recKey);
@@ -95,6 +97,9 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
   const msNow = React.useRef(ms);
   msNow.current = ms;
   const [screenFailed, setScreenFailed] = React.useState(false);
+  // Optional means a per-view choice, off to start and not stored; required is always on.
+  const [markOn, setMarkOn] = React.useState(false);
+  const showMark = !!watermark && (watermark.required || markOn);
   const frames = React.useMemo(() => decodeFrames(pb.frames), [pb.frames]);
   // A decoder that throws (a stream or a browser noVNC refuses) drops the screen, never the replay:
   // the feed goes, so no later seek can throw again inside an effect.
@@ -172,10 +177,17 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
           <span className="text-body font-medium">{C.SCREEN}</span>
-          <Button size="sm" variant="outline" className="ml-auto" onClick={download}>
-            <Download className="size-3.5" aria-hidden />
-            {C.DOWNLOAD}
-          </Button>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            {watermark && (
+              <span className="text-meta">
+                <WatermarkControl required={watermark.required} on={markOn} onToggle={() => setMarkOn((on) => !on)} />
+              </span>
+            )}
+            <Button size="sm" variant="outline" onClick={download}>
+              <Download className="size-3.5" aria-hidden />
+              {C.DOWNLOAD}
+            </Button>
+          </div>
         </div>
         {stoppedMs !== undefined && (
           <p role="status" className="border-b border-border px-3.5 py-2 text-meta text-muted-foreground" data-testid="desktop-replay-stopped">
@@ -184,6 +196,8 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
         )}
         <div className="relative p-3.5">
           <div ref={screen} className="h-[400px] overflow-hidden rounded-lg border border-border bg-background" data-testid="desktop-replay-screen" />
+          {/* A sibling of the screen box, never inside it: noVNC empties that box on every load and seek. */}
+          {showMark && <DesktopWatermark className="absolute inset-3.5 rounded-lg" who={watermark.who} run={watermark.run} />}
           {screenFailed && (
             <p role="alert" className="absolute inset-x-3.5 top-3.5 p-6 text-center text-meta text-muted-foreground">
               {C.SCREEN_FAILED}
@@ -226,7 +240,7 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
                 }}
                 data-testid="desktop-replay-gap-mark"
               >
-                <span className="absolute left-0 top-[18px] whitespace-nowrap text-[11px] text-warning">{C.GAP(gapDuration(g.endMs - g.startMs))}</span>
+                <span className="absolute left-0 top-[18px] whitespace-nowrap text-meta text-warning">{C.GAP(gapDuration(g.endMs - g.startMs))}</span>
               </button>
             ))}
             {actions.map((a) => (
