@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.11.0-rc.5] — 2026-11-27
+
 ### Added
 
 - Repeating scheduled runs (daily, weekdays, weekly) and a Schedules screen, behind `WARDYN_SCHEDULED_RUNS` (#3458). A person's `run_tasks` or `credentials` erasure, and a leaver purge, delete their schedules.
