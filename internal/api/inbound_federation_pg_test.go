@@ -25,6 +25,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -807,14 +808,19 @@ func TestPG_InboundFederation_HeldApprovalNeedsPerson(t *testing.T) {
 	tok := decodeToken(t, e.mintPersonal(t, e.sec2, `{"name":"ci"}`)).Token
 	for _, id := range []uuid.UUID{on.ID, create.ID} {
 		path := "/api/v1/governance/changes/" + id.String() + "/approve"
-		for who, w := range map[string]*httptest.ResponseRecorder{
-			"API token":   e.as(t, tok, http.MethodPost, path, ""),
-			"admin token": do(t, e.h.srv, http.MethodPost, path, adminToken, ""),
-			"delegated": direct(secDelegatedCtx("sec2", "sec2@corp.example"), e.h.srv.handleApproveGovernanceChange,
-				http.MethodPost, path, "", "id", id.String()),
+		for who, c := range map[string]struct {
+			w      *httptest.ResponseRecorder
+			reason string
+		}{
+			"API token":   {e.as(t, tok, http.MethodPost, path, ""), reasonInboundFederationNeedsPerson},
+			"admin token": {do(t, e.h.srv, http.MethodPost, path, adminToken, ""), reasonInboundFederationNeedsPerson},
+			// A delegated request is never an approver (neverOperator), so the approver tier refuses it before the
+			// person check is reached.
+			"delegated": {direct(secDelegatedCtx("sec2", "sec2@corp.example"), e.h.srv.handleApproveGovernanceChange,
+				http.MethodPost, path, "", "id", id.String()), string(authz.ReasonSecurityAdminSurface)},
 		} {
-			if w.Code != http.StatusForbidden || respReason(w) != reasonInboundFederationNeedsPerson {
-				t.Errorf("%s approving %s: %d %s, want 403 %s", who, id, w.Code, w.Body.String(), reasonInboundFederationNeedsPerson)
+			if c.w.Code != http.StatusForbidden || respReason(c.w) != c.reason {
+				t.Errorf("%s approving %s: %d %s, want 403 %s", who, id, c.w.Code, c.w.Body.String(), c.reason)
 			}
 		}
 		if st := e.changeState(t, id); st != types.GovernanceChangePending {
@@ -1298,6 +1304,10 @@ func TestPG_ServiceIdentityUpdate_AuditCountsTrustsRemoved(t *testing.T) {
 type negativeSeqRevocations struct{ *pgTestRevocations }
 
 func (negativeSeqRevocations) RevocationSeq(context.Context) (int64, error) { return -1, nil }
+
+func (negativeSeqRevocations) RevocationSeqQ(context.Context, store.Querier) (int64, error) {
+	return -1, nil
+}
 
 // TestPG_InboundTrust_NegativeSeqRefused: a revocation sequence read below zero creates no trust: the direct create
 // answers 503, and a held create's approval answers 503 and rolls back, leaving the change pending.

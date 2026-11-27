@@ -484,9 +484,10 @@ func writeConfirmNewTrustError(w http.ResponseWriter, r *http.Request, err error
 // confirmNewTrust sets where a new trust starts against its sponsor's revocations: the current sequence (the request
 // never speaks for the service principal) at now, confirmed by its creator. A revoke of the sponsor that commits
 // after this read stops the trust; one before it does not, as for any token the sponsor holds. A negative sequence
-// is errInboundSeqUnreadable.
-func (s *Server) confirmNewTrust(r *http.Request, t *types.InboundTrust, by string, now time.Time) error {
-	issue, err := s.mintIssue(r.Context(), types.ServicePrincipalPrefix+t.ServiceIdentity, now)
+// is errInboundSeqUnreadable. q is the transaction the trust is created on, when it is created inside one (an approved
+// hold), and nil otherwise.
+func (s *Server) confirmNewTrust(r *http.Request, q store.Querier, t *types.InboundTrust, by string, now time.Time) error {
+	issue, err := s.mintIssueQ(r.Context(), q, types.ServicePrincipalPrefix+t.ServiceIdentity, now)
 	if err != nil {
 		return err
 	}
@@ -549,7 +550,7 @@ func (s *Server) handleCreateInboundTrust(w http.ResponseWriter, r *http.Request
 		s.holdInboundTrustCreate(w, r, t, now)
 		return
 	}
-	if err := s.confirmNewTrust(r, &t, principalFromRequest(r), now); err != nil {
+	if err := s.confirmNewTrust(r, nil, &t, principalFromRequest(r), now); err != nil {
 		writeConfirmNewTrustError(w, r, err)
 		return
 	}

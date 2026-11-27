@@ -51,7 +51,7 @@ func (s *Server) holdInboundFederationOn(w http.ResponseWriter, r *http.Request,
 // direct write's own refusal and is never held.
 func (s *Server) holdInboundTrustCreate(w http.ResponseWriter, r *http.Request, t types.InboundTrust, now time.Time) {
 	dry := t
-	if err := s.confirmNewTrust(r, &dry, principalFromRequest(r), now); err != nil {
+	if err := s.confirmNewTrust(r, nil, &dry, principalFromRequest(r), now); err != nil {
 		writeConfirmNewTrustError(w, r, err)
 		return
 	}
@@ -112,7 +112,7 @@ func applyInboundTrustCreate(s *Server, r *http.Request, q store.Querier, ch typ
 	if reason != "" {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
-	if err := s.confirmNewTrust(r, &t, ch.ProposedBy, s.cfg.Now().UTC()); errors.Is(err, errInboundSeqUnreadable) {
+	if err := s.confirmNewTrust(r, q, &t, ch.ProposedBy, s.cfg.Now().UTC()); errors.Is(err, errInboundSeqUnreadable) {
 		return govApplied{}, &govRefusal{why: "revocation sequence unreadable", write: func(w http.ResponseWriter, _ *http.Request) {
 			writeInboundSeqUnreadable(w)
 		}}

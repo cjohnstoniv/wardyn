@@ -108,6 +108,11 @@ func (r *pgSessionRevocations) RevocationSeq(ctx context.Context) (int64, error)
 	return store.ReadRevocationSeq(ctx, r.pool)
 }
 
+// RevocationSeqQ reads the sequence on the governance decision's transaction, for an issue minted inside it.
+func (r *pgSessionRevocations) RevocationSeqQ(ctx context.Context, q store.Querier) (int64, error) {
+	return store.ReadRevocationSeqQ(ctx, q)
+}
+
 // SessionStatus is IsSessionRevoked plus the owner's identity rows, in the same statement so the
 // check adds no round trip (oidc.IdentityRevocations): sub's identity rows refuse when one is
 // deactivated or purged, or, for epoch >= 0, when its authority epoch is past the one the

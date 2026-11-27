@@ -41,6 +41,20 @@ func ReadRevocationSeq(ctx context.Context, q batcher) (int64, error) {
 	return seq, nil
 }
 
+// ReadRevocationSeqQ is ReadRevocationSeq on q, a transaction, for a credential issued inside it: the shared
+// lock is held until q commits, as CreateCLISession holds it, so a cut the read does not cover waits for that
+// commit. The read is its own statement, so its snapshot is taken after the lock is granted.
+func ReadRevocationSeqQ(ctx context.Context, q Querier) (int64, error) {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass); err != nil {
+		return 0, fmt.Errorf("store: lock revocation order: %w", err)
+	}
+	var seq int64
+	if err := q.QueryRow(ctx, `SELECT oidc_revocation_position()`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("store: read revocation seq: %w", err)
+	}
+	return seq, nil
+}
+
 // LockRevocationOrder takes the exclusive revocation-order lock for the rest of tx, which must contain the
 // cut write it protects. tx must be a pgx.Tx.
 func LockRevocationOrder(ctx context.Context, tx Querier) error {
