@@ -119,6 +119,7 @@ func TestSweepHealth_DefaultInstallRegistersItsSweepsAtDefaultIntervals(t *testi
 		sweephealth.RunSecret:        15 * time.Minute,
 		sweephealth.CredentialExpiry: 24 * time.Hour,
 		sweephealth.RunWatcher:       time.Minute,
+		sweephealth.RunMove:          time.Minute,
 		sweephealth.OrphanedBuild:    30 * time.Minute,
 		sweephealth.RunOutput:        time.Minute,
 		sweephealth.RunQueue:         10 * time.Second,

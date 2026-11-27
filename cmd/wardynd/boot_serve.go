@@ -270,6 +270,11 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if run != nil {
 		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval, ticks)
 	}
+	// The move sweep (failed and orphaned moves, a moved run's source, the second revoke) on the sweeper leader
+	// only, under the runner condition its health sweep registers under.
+	if run != nil {
+		leaderGo(rootCtx, leader, "run_move.sweeper", srv.RunMoveSweeper)
+	}
 
 	// D28: re-apply decided `always`-scoped egress decisions onto their
 	// workspaces, healing any allow/deny the non-atomic post-Decide write-back

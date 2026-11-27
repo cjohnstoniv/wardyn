@@ -223,14 +223,15 @@ func (s *Server) writeSubstrateGauges(ctx context.Context, w io.Writer) {
 }
 
 // HealthSweeps returns the background sweeps this package owns whose start
-// condition holds on this install: the run watcher needs a runner, and the
+// condition holds on this install: the run watcher and the move sweep need a runner, and the
 // orphaned build sweep needs an image builder that can sweep. cmd/wardynd
 // registers them with its own, on every replica, whether or not it holds the
 // sweeper lock.
 func (s *Server) HealthSweeps() []sweephealth.Sweep {
 	var out []sweephealth.Sweep
 	if s.cfg.Runner != nil {
-		out = append(out, sweephealth.Sweep{Name: sweephealth.RunWatcher, Interval: watcherSweepInterval})
+		out = append(out, sweephealth.Sweep{Name: sweephealth.RunWatcher, Interval: watcherSweepInterval},
+			sweephealth.Sweep{Name: sweephealth.RunMove, Interval: moveSweepInterval})
 	}
 	if _, ok := s.cfg.ImageBuilder.(ImageBuildSweeper); ok {
 		out = append(out, sweephealth.Sweep{Name: sweephealth.OrphanedBuild, Interval: buildSweepInterval})

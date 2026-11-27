@@ -295,6 +295,46 @@ func TestPG_RunSandboxSpecs_SealedRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPG_RunMoves_CommitRewritesSandboxSpec: a commit that carries a sealed spec writes it over the run's record
+// in its transaction; a refused commit leaves the record.
+func TestPG_RunMoves_CommitRewritesSandboxSpec(t *testing.T) {
+	g := newMoveRig(t)
+	ctx := t.Context()
+	if err := g.st.PutRunSandboxSpec(ctx, g.run.ID, []byte("origin")); err != nil {
+		t.Fatal(err)
+	}
+	record := func() string {
+		b, err := g.st.GetRunSandboxSpec(ctx, g.run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	stale, err := g.admit(g.src, g.dst, g.ref, g.gen+1, store.RunMoveLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale = g.importing(stale, "runner:"+g.dst.ID.String()+"/stale", "jti-stale")
+	err = g.st.CommitRunMove(ctx, store.RunMoveCommit{MoveID: stale.ID, RunID: g.run.ID, PlacementFilled: true, SandboxSpec: []byte("stale")})
+	if !errors.Is(err, store.ErrRunMovePauseChanged) || record() != "origin" {
+		t.Fatalf("a refused commit: %v, record %q; want ErrRunMovePauseChanged and the record kept", err, record())
+	}
+	if ok, err := g.st.EndRunMove(ctx, stale.ID, types.MoveFailed, "move_pause_changed", types.MoveCleanupNone); err != nil || !ok {
+		t.Fatalf("end: %v %v", ok, err)
+	}
+	mv, err := g.admit(g.src, g.dst, g.ref, g.gen, store.RunMoveLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mv = g.importing(mv, "runner:"+g.dst.ID.String()+"/moved", "jti-"+mv.ID.String())
+	if err := g.st.CommitRunMove(ctx, store.RunMoveCommit{MoveID: mv.ID, RunID: g.run.ID, PlacementFilled: true, SandboxSpec: []byte("moved")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := record(); got != "moved" {
+		t.Errorf("record after the commit = %q, want the destination's", got)
+	}
+}
+
 func TestPG_RunnerStateIntake_IgnoresMovedRunRows(t *testing.T) {
 	g := newMoveRig(t)
 	row := runnerwire.RunState{RunID: g.run.ID, Ref: g.ref, SandboxPresent: true}

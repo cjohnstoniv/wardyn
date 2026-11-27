@@ -37,6 +37,14 @@ func (p movePort[A, T]) call(ctx context.Context, a A) (T, error) {
 	return p(ctx, a)
 }
 
+// moveKeepArgs is a run and the drives its sandbox mounts where the keep of its stopped sandbox is judged: the
+// recorded drives at the source, the destination spec's drives at the destination (a Kubernetes destination keeps
+// only a run whose work folder is on a drive).
+type moveKeepArgs struct {
+	Run    types.AgentRun
+	Drives []types.DriveMount
+}
+
 // moveStopArgs is who stops the run for a move.
 type moveStopArgs struct {
 	Run                  types.AgentRun
@@ -93,7 +101,7 @@ type moveResumeArgs struct {
 
 // The twelve ports, none set outside tests.
 var (
-	movePortStopRefusal       movePort[types.AgentRun, string]
+	movePortStopRefusal       movePort[moveKeepArgs, string]
 	movePortPauseGen          movePort[types.AgentRun, int64]
 	movePortPauseStop         movePort[moveStopArgs, movePauseReceipt]
 	movePortRevokeFor         movePort[moveGenArgs, moveRevokeState]

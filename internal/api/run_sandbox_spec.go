@@ -137,15 +137,24 @@ func (s *Server) storeRunSandboxSpec(ctx context.Context, runID uuid.UUID, rec r
 	if !ok {
 		return nil // as the run's proxy config: a deployment that keeps none records nothing, and its runs never move
 	}
+	sealed, err := s.sealRunSandboxSpec(runID, rec)
+	if err != nil {
+		return err
+	}
+	return st.PutRunSandboxSpec(ctx, runID, sealed)
+}
+
+// sealRunSandboxSpec is rec encoded and sealed to runID, as the record is stored.
+func (s *Server) sealRunSandboxSpec(runID uuid.UUID, rec runSandboxSpecRecord) ([]byte, error) {
 	plain, err := json.Marshal(rec)
 	if err != nil {
-		return fmt.Errorf("encode sandbox spec: %w", err)
+		return nil, fmt.Errorf("encode sandbox spec: %w", err)
 	}
 	sealed, err := kek.Seal(s.cfg.RunConfigKey, plain, runSandboxSpecAAD(runID))
 	if err != nil {
-		return fmt.Errorf("seal sandbox spec: %w", err)
+		return nil, fmt.Errorf("seal sandbox spec: %w", err)
 	}
-	return st.PutRunSandboxSpec(ctx, runID, sealed)
+	return sealed, nil
 }
 
 // loadRunSandboxSpec reads and opens runID's record: store.ErrNotFound when it has none, errRunSandboxSpecNotKept
