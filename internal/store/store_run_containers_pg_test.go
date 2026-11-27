@@ -64,7 +64,7 @@ func TestPG_RunContainersRoundTrip(t *testing.T) {
 
 // TestPG_CreateRunUnderCapWritesContainers: the capped insert writes the extras in its own transaction.
 func TestPG_CreateRunUnderCapWritesContainers(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t) // the cap counts every live run in the database
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	r := newRun(types.RunPending)
@@ -162,7 +162,7 @@ func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
 	if got, err := pg.RunContainers(ctx, r.ID); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
 		t.Errorf("read without any grant = %+v, %v; want an error with code 42501", got, err)
 	}
-	exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends, run_harnesses TO ` + role)
+	exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends, run_harnesses, run_support_grants TO ` + role)
 	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); !errors.As(err, &pgErr) || pgErr.Code != "42501" ||
 		!strings.Contains(err.Error(), "extra container commands") {
 		t.Errorf("erasure blank without access to run_containers: %v; want it to fail on the extra container commands with code 42501", err)
