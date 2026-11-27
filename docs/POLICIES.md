@@ -1214,12 +1214,13 @@ Walls for folders from a person's computer (#2990): `wardyn sync` folders and co
 - Each wall names the layer that set it, so two walls of one run can name two layers: the boundary, a unit by name, or the run's own policy.
 - The walls are kept on the run when it starts, so audit retention removing its policy records does not change them. A wall change reaches runs started after it.
 
-| Wall | What it closes |
-|---|---|
-| `deny_remote: true` | A computer folder, and a `wardyn sync` folder unless the run is placed on the person's own computer (`--placement local`) and every runner it can land on is theirs. The sync channel checks the runner again |
-| `deny_pull: true` | A computer folder that syncs back, the pass back and the bring-back (403 `local_folder_walled`), and `wardyn sync --pull`, refused before it connects. Every sync session and computer-folder pass starts read-closed |
-| `max_push_mib`, `max_pull_mib` | 1 to 1048576 MiB sent in, or brought back, in one session or pass. The server ends a sync session at the limit with exit status 3 |
-| `deny` | Patterns `wardyn sync` and the runner skip, added to the deployment's `WARDYN_SYNC_DENY` |
+| Wall | Type | Default | What it closes |
+|---|---|---|---|
+| `deny_remote` | bool | `false` | When `true`: A computer folder, and a `wardyn sync` folder unless the run is placed on the person's own computer (`--placement local`) and every runner it can land on is theirs. The sync channel checks the runner again |
+| `deny_pull` | bool | `false` | When `true`: A computer folder that syncs back, the pass back and the bring-back (403 `local_folder_walled`), and `wardyn sync --pull`, refused before it connects. Every sync session and computer-folder pass starts read-closed |
+| `max_push_mib` | int | `0`, no cap | 1 to 1048576 MiB sent in, in one session or pass. The server ends a sync session at the limit with exit status 3 |
+| `max_pull_mib` | int | `0`, no cap | 1 to 1048576 MiB brought back, in one session or pass. The server ends a sync session at the limit with exit status 3 |
+| `deny` | []string | none | Patterns `wardyn sync` and the runner skip, added to the deployment's `WARDYN_SYNC_DENY` |
 
 - `deny_remote` closes Wardyn's folder doors: `wardyn sync` and folders from your computer. It does not stop `sftp`, `scp` or a command that copies files into a remote run; use `data_out` and the run's SSH access for those.
 - `deny_pull` closes the sync doors back to your computer. Plain `sftp`, commands and port forwards are [`data_out`](#data_out)'s.
