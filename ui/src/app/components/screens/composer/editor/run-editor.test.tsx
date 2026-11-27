@@ -387,12 +387,49 @@ describe("accepting, discarding and editing", () => {
   });
 
   it("reports a failed last post when a caller waits for the session's edits, and nothing once a later one is taken", async () => {
-    edits.mockRejectedValueOnce(new Error("The session could not take that edit."));
+    edits.mockRejectedValue(new Error("The session could not take that edit."));
     editor();
     accept("allowed_domains");
     await expect(flushEdits(SESSION())).resolves.toBe("The session could not take that edit.");
+    edits.mockResolvedValue({ seq: 1 });
     accept("eligible_grants");
     await expect(flushEdits(SESSION())).resolves.toBeNull();
+  });
+
+  it("sends a failed final discard again when a caller waits, so the chat is not stranded", async () => {
+    edits.mockReset().mockResolvedValueOnce({ seq: 1 }).mockRejectedValueOnce(new Error("The session could not take that edit.")).mockResolvedValue({ seq: 1 });
+    editor({ proposal: { parts: [HOSTS], dropped: [] } });
+    accept("allowed_domains");
+    await settle();
+    fireEvent.click(within(card("allowed_domains"), T.PART_DISCARD));
+    await settle();
+    expect(screen.queryByTestId("composer-part")).toBeNull();
+    await expect(flushEdits(SESSION())).resolves.toBeNull();
+    expect(edits).toHaveBeenCalledTimes(3);
+    expect(edits.mock.calls[2][1]).toEqual({ draft: {}, changed: [{ field: "allowed_domains", value: "null" }] });
+  });
+
+  it("retries a refused carry post when a caller waits for the new session's edits", async () => {
+    const from = SESSION();
+    const to = `${from}-retried`;
+    const first = editor();
+    accept("allowed_domains");
+    await settle();
+    first.unmount();
+    edits.mockReset().mockRejectedValueOnce(new Error("refused")).mockResolvedValue({ seq: 1 });
+    carryKept(from, to);
+    await expect(flushEdits(to)).resolves.toBeNull();
+    expect(edits).toHaveBeenCalledTimes(2);
+    expect(edits.mock.calls[1]).toEqual([to, { draft: { allowed_domains: HOSTS.value }, changed: [{ field: "allowed_domains", value: JSON.stringify(HOSTS.value) }] }]);
+  });
+
+  it("holds Review for a dropped entry it has no rule for, as it would for any new code", async () => {
+    checks.mockResolvedValue({ ...CHECKS, dropped: [{ field: "allowed_domains", code: "a_future_code", admin_change_approvals: 0 }] });
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
+    expect(screen.getByText(T.REVIEW_HELD_FIELD(sectionLabel("allowed_domains")))).toBeInTheDocument();
   });
 
   it("shows a refused carry post to the editor that opens for the session", async () => {
@@ -538,9 +575,14 @@ describe("build-file parts and left-out hosts", () => {
     expect(card("allowed_domains")).toContainElement(screen.getByText(T.PART_FROM_BUILD_FILE));
   });
 
+  it("prefers the current check's code over the proposal's row for the same field", () => {
+    const merged = mergeDropped([{ field: "first_use_approval", unit: "Payments" }], [{ field: "first_use_approval", unit: "Payments", code: "clamped", admin_change_approvals: 2 }]);
+    expect(merged).toEqual([{ field: "first_use_approval", unit: "Payments", code: "clamped", admin_change_approvals: 2 }]);
+  });
+
   it("uses the checks' count for a left-out host when the proposal carried none", () => {
     const merged = mergeDropped([{ host: "x.example", unit: "Payments" }], [{ host: "x.example", unit: "Payments", code: "c", admin_change_approvals: 2 }]);
-    expect(merged).toEqual([{ host: "x.example", unit: "Payments", admin_change_approvals: 2 }]);
+    expect(merged).toEqual([{ host: "x.example", unit: "Payments", code: "c", admin_change_approvals: 2 }]);
   });
 
   it("never says the draft is within the ceiling while a host was left out, even for a verdict that would", async () => {

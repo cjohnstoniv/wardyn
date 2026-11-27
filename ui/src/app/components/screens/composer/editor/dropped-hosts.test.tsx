@@ -42,6 +42,9 @@ describe("DroppedHosts", () => {
     render(<DroppedHosts items={[{ field: "first_use_approval", code: "clamped", unit: "Payments", admin_change_approvals: 2, filled: true }]} />);
     expect(screen.getByText(T.DEFAULT_FILLED("Any other host"))).toBeInTheDocument();
     expect(screen.queryByText(T.LEFT_OUT("first_use_approval", "Payments"))).toBeNull();
+    // Information, not a warning.
+    expect(screen.getByTestId("composer-left-out").className).toContain("border-info");
+    expect(screen.getByTestId("composer-left-out").className).not.toContain("warning");
   });
 
   it("offers no note for a left-out field, which no admin can add to a ceiling", () => {

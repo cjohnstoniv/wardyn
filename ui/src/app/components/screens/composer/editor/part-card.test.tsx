@@ -104,6 +104,8 @@ describe("parsePartText", () => {
     expect(twice).toBeTruthy();
     expect(parsePartText("allowed_domains", '["github.com","github.com"]')).toEqual({ error: twice });
     expect(parsePartText("denied_domains", '["a.example","b.example","a.example"]')).toEqual({ error: hostListError(["a.example", "b.example", "a.example"]) });
+    // The proxy lowercases an entry, so a spelling in another case is the same host.
+    expect(parsePartText("allowed_domains", '["GitHub.com","github.com"]')).toEqual({ error: hostListError(["github.com", "github.com"]) });
     // Entries are read trimmed, so a spelling with spaces is the same host.
     expect(parsePartText("allowed_domains", '["github.com"," github.com "]')).toEqual({ error: hostListError(["github.com", "github.com"]) });
     const many = Array.from({ length: 60 }, (_, i) => `h${i}.example`);

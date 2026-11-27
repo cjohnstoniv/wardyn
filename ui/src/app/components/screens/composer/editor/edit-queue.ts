@@ -19,6 +19,8 @@ interface Line {
   next: Pending | null;
   /** The sentence for the last post that failed, until a later one is taken; whichever editor is open for the session shows it. */
   failure: string | null;
+  /** The draft of the post that failed, sent again when a caller waits for the session's edits. */
+  retry: Pending | null;
   listeners: Set<(failure: string | null) => void>;
   /** Settles when nothing is in flight and nothing waits. */
   drained: Promise<void>;
@@ -26,6 +28,11 @@ interface Line {
 }
 
 const lines = new Map<string, Line>();
+
+/** The session is over: its queue, with any failure it holds, goes with it. */
+export function releaseEdits(id: string): void {
+  lines.delete(id);
+}
 
 /** Whether the session has a line: one that is posting, waiting, holding a failure or watched. */
 export const hasLine = (id: string): boolean => lines.has(id);
@@ -42,18 +49,27 @@ function settle(line: Line, failure: string | null): void {
 function lineOf(id: string): Line {
   let line = lines.get(id);
   if (!line) {
-    line = { busy: false, next: null, failure: null, listeners: new Set(), drained: Promise.resolve(), drain: () => undefined };
+    line = { busy: false, next: null, failure: null, retry: null, listeners: new Set(), drained: Promise.resolve(), drain: () => undefined };
     lines.set(id, line);
   }
   return line;
 }
 
-function send(id: string, line: Line, p: Pending): void {
+function send(id: string, line: Line, queued: Pending): void {
+  // A field whose post failed is named again by the next post, until a post that names it is taken: the server builds
+  // the assistant's next turn from the fields a taken post names.
+  const p: Pending = { draft: queued.draft, changed: new Map([...(line.retry?.changed ?? []), ...queued.changed]) };
   line.busy = true;
   assistant
     .postEdits(id, { draft: p.draft, changed: [...p.changed].map(([field, value]) => ({ field, value })) })
-    .then(() => settle(line, null))
-    .catch((e: unknown) => settle(line, getErrorMessage(e)))
+    .then(() => {
+      line.retry = null;
+      settle(line, null);
+    })
+    .catch((e: unknown) => {
+      line.retry = p;
+      settle(line, getErrorMessage(e));
+    })
     .finally(() => {
       const next = line.next;
       line.next = null;
@@ -91,11 +107,30 @@ export function onEditFailure(id: string, listener: (failure: string | null) => 
 
 /**
  * Resolves once every edit the session has been given is posted, with the sentence for the last post's failure, or
- * null when it was taken (or none was made). A caller that must not act on an unsaved draft stops on a sentence.
+ * null when it was taken (or none was made). A post that had failed is sent again, once, and the answer is that
+ * attempt's: a refusal that has passed does not stop the caller, and one that has not is said.
  */
 export async function flushEdits(id: string): Promise<string | null> {
   const line = lines.get(id);
   if (!line) return null;
   await line.drained;
+  if (line.failure && line.retry) {
+    const again = line.retry;
+    postEdit(id, again.draft, again.changed);
+    await line.drained;
+  }
   return line.failure;
+}
+
+/**
+ * Runs `job` (the chat's post) once the session's edits are settled, and in the same turn as the check that the line
+ * is idle, so no edit can slip in between: one made meanwhile is waited for first. Resolves with the failure, and
+ * runs nothing, when the draft could not be saved.
+ */
+export async function afterEdits<T>(id: string, job: () => Promise<T>): Promise<{ failure: string } | { value: T }> {
+  for (;;) {
+    const failure = await flushEdits(id);
+    if (failure) return { failure };
+    if (!lines.get(id)?.busy) return { value: await job() };
+  }
 }

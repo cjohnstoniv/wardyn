@@ -21,7 +21,8 @@ import { Chip } from "../../wardyn/primitives";
 import { usePrincipal } from "../../wardyn/operator-context";
 import { ComposerChat } from "./composer-chat";
 import { ComposerDraftPanel, draftLines } from "./composer-draft-panel";
-import { carryKept, flushEdits } from "./editor/run-editor";
+import { afterEdits, releaseEdits } from "./editor/edit-queue";
+import { carryKept } from "./editor/run-editor";
 import { PhoneDraftBar, PhoneDraftSheet, useIsPhone } from "./composer-phone";
 import { ComposerPreview, kindLabel } from "./composer-preview";
 import { ComposerStarting } from "./composer-starting";
@@ -117,6 +118,7 @@ export function ComposerScreen() {
       const mine = gen.current;
       stopStream();
       // A session that ended is not ended again by leaving; the next Start makes its own.
+      if (live.current) releaseEdits(live.current);
       live.current = null;
       setFold(carry);
       setPollEnded(false);
@@ -154,7 +156,10 @@ export function ComposerScreen() {
       // Leaving the screen ends the session; the person's own End did that already.
       const id = live.current;
       live.current = null;
-      if (id) void assistant.endSession(id).catch(() => undefined);
+      if (id) {
+        releaseEdits(id);
+        void assistant.endSession(id).catch(() => undefined);
+      }
     };
     // The route reads its target once per URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,11 +210,12 @@ export function ComposerScreen() {
     setChatError(null);
     try {
       // The person's edits to the draft go first, so the assistant's next turn reads the draft they are looking at; a
-      // draft the session could not take is said, and the message stays in the box.
-      const unsaved = await flushEdits(id);
-      if (live.current !== id) throw new Error("");
-      if (unsaved) throw new Error(unsaved);
-      await assistant.postMessage(id, text);
+      // draft the session could not take (after one more try) is said, and the message stays in the box.
+      const sent = await afterEdits(id, async () => {
+        if (live.current !== id) throw new Error("");
+        await assistant.postMessage(id, text);
+      });
+      if ("failure" in sent) throw new Error(sent.failure);
     } catch (e) {
       // The session ended or was replaced while the message waited: nothing here belongs to the one now on screen.
       if (live.current !== id) throw e;
@@ -219,6 +225,7 @@ export function ComposerScreen() {
         // reason when it has one, else the server's sentence, in place of the ended wording; the draft stays as it was.
         stopStream();
         live.current = null;
+        releaseEdits(id);
         const why = unavailableFrom(e, target);
         const note = why || e.reason === "assistant_session_not_found" ? null : e.message || null;
         setPhase({ ...phase, endedBy: why, note, closed: true });
@@ -242,6 +249,7 @@ export function ComposerScreen() {
     }
     stopStream();
     live.current = null;
+    releaseEdits(id);
     setPhase((p) => (p.name === "session" ? { ...p, closed: true } : p));
   };
 
@@ -256,6 +264,13 @@ export function ComposerScreen() {
   React.useEffect(() => {
     if (stopped) stopStream();
   }, [stopped, stopStream]);
+  // A session the stream or the poll reports as ended is over: a message still waiting for its edits is not sent to it.
+  const endedId = phase.name === "session" && (fold.ended || pollEnded) ? phase.session.id : null;
+  React.useEffect(() => {
+    if (!endedId || live.current !== endedId) return;
+    live.current = null;
+    releaseEdits(endedId);
+  }, [endedId]);
 
   const over = phase.name === "session" && (phase.closed || phase.endedBy !== null || fold.ended || pollEnded || fold.toolsUnavailable || fold.providerError);
   const title = (

@@ -102,7 +102,8 @@ export function mergeDropped(proposed: readonly DroppedItem[], fromChecks: reado
   for (const d of proposed) {
     const match = checked.find((c) => key(c) === key(d));
     seen.add(key(d));
-    out.push(d.admin_change_approvals === undefined && match ? { ...d, admin_change_approvals: match.admin_change_approvals } : d);
+    // The current check's code is the one that counts, and its count fills in a proposal that carried none.
+    out.push(match ? { ...d, code: match.code, ...(d.admin_change_approvals === undefined ? { admin_change_approvals: match.admin_change_approvals } : {}) } : d);
   }
   for (const c of checked) if (!seen.has(key(c))) out.push(c);
   return out;
@@ -213,12 +214,11 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
 
   // New run gets only what the person saw checked: the checks of this very draft answered valid and left nothing out.
   // The answer carries no clamped policy to hand on instead, so a draft with a left-out host waits for the person.
-  // What the person must act on: a host the ceiling refused, a field their grants leave out or the server refuses, and a
-  // field they set that the server narrowed. A clamped field the draft does not set is the server filling in a default:
-  // shown, never held. (Codes: internal/assistant/dropped.go.)
-  const heldBy = (checks?.dropped ?? []).filter((d) => !!d.host || d.code === "not_granted" || d.code === "invalid" || d.code === "unknown_section" || (d.code === "clamped" && setBy(d.field)));
+  // Everything the checks dropped holds Review but one thing: a clamped field the draft does not set, which is the
+  // server filling in a default, shown and never held. A code this does not know holds too. (Codes: internal/assistant/dropped.go.)
+  const heldBy = (checks?.dropped ?? []).filter((d) => !(d.code === "clamped" && !setBy(d.field)));
   const checkedLeftOut = heldBy.some((d) => !!d.host);
-  const heldFields = [...new Set(heldBy.filter((d) => !d.host).map((d) => sectionLabel(d.field ?? "")))];
+  const heldFields = [...new Set(heldBy.filter((d) => !d.host).map((d) => sectionLabel(d.field ?? d.code)))];
   const reviewable = checks?.valid === true && heldBy.length === 0;
 
   const checkAgain = () => {

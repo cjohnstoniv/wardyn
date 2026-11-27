@@ -28,7 +28,10 @@ function Dropped({ item }: { item: DroppedItem }) {
   const unit = item.unit ?? "";
   const askable = !!item.host && typeof item.admin_change_approvals === "number";
   return (
-    <div data-testid="composer-left-out" className="space-y-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2.5 py-2">
+    <div
+      data-testid="composer-left-out"
+      className={`space-y-1.5 rounded-lg border px-2.5 py-2 ${item.filled ? "border-info/35 bg-info-subtle/40" : "border-warning/35 bg-warning-subtle"}`}
+    >
       <p className="text-body text-foreground">{item.filled ? T.DEFAULT_FILLED(sectionLabel(item.field ?? "")) : T.LEFT_OUT(item.host ?? item.field ?? "", unit)}</p>
       {askable && (
         <>

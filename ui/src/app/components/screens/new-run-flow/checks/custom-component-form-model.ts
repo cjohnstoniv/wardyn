@@ -130,8 +130,8 @@ export function hostError(entry: string): string | null {
  */
 export function hostListError(hosts: readonly string[], judge: (entry: string) => string | null = hostError): string | null {
   for (let i = 0; i < hosts.length; i++) {
-    // Entries are read trimmed, so " a.example" and "a.example" are one host.
-    const e = judge(hosts[i]) ?? (hosts.findIndex((h) => h.trim() === hosts[i].trim()) < i ? T.ERR.HOST_TWICE(hosts[i].trim()) : null);
+    // Entries are read trimmed and lower-cased (the proxy lowercases them), so " A.example" and "a.example" are one host.
+    const e = judge(hosts[i]) ?? (hosts.findIndex((h) => h.trim().toLowerCase() === hosts[i].trim().toLowerCase()) < i ? T.ERR.HOST_TWICE(hosts[i].trim()) : null);
     if (e) return e;
   }
   return null;
