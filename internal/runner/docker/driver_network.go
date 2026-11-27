@@ -53,7 +53,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	// Resolve confinement runtime FIRST and fail closed before creating
 	// anything if the demanded class cannot be enforced (invariant 5).
-	runtimeName, _, err := resolveRuntime(spec.ConfinementClass, info, d.cfg.ConfinementRuntimes)
+	runtimeName, err := d.resolveAgentRuntime(spec, info)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -68,10 +68,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// Class-less floor for direct driver callers only: every wardynd dispatch path resolves a
 		// concrete class from the policy's min_confinement_class before reaching here.
 		enforced = types.CC1
-	}
-
-	if err := d.gpuAdmits(spec.Resources.GPU, runtimeName, info); err != nil {
-		return runner.Sandbox{}, err
 	}
 
 	if err := d.preflightSpec(spec); err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -108,6 +109,16 @@ func (d *Driver) gpuByClass(info system.Info) map[types.ConfinementClass][]types
 		return nil
 	}
 	return map[types.ConfinementClass][]types.GPUKind{types.CC1: offered}
+}
+
+// resolveAgentRuntime is the runtime the run's class resolves to, refused (before anything is created) when the
+// run asks for a GPU the host does not offer on it.
+func (d *Driver) resolveAgentRuntime(spec runner.SandboxSpec, info system.Info) (string, error) {
+	runtimeName, _, err := resolveRuntime(spec.ConfinementClass, info, d.cfg.ConfinementRuntimes)
+	if err != nil {
+		return "", err
+	}
+	return runtimeName, d.gpuAdmits(spec.Resources.GPU, runtimeName, info)
 }
 
 // gpuAdmits refuses, before anything is created, a GPU the host does not offer to a run on runtimeName.
