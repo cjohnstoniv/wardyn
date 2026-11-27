@@ -17,6 +17,7 @@ const (
 	reasonMoveKeptMachine            = "move_kept_machine"             // 409: a run that keeps its machine does not move
 	reasonMoveHarnessLogin           = "move_harness_login"            // 409: a run someone signed in to a harness inside does not move
 	reasonMoveMachineKindUnsupported = "move_machine_kind_unsupported" // 409: a macOS, Linux VM or Windows VM run
+	reasonMoveExtraContainers        = "move_extra_containers"         // 409: a run with extra containers does not move
 	reasonMoveSpecUnrecorded         = "move_spec_unrecorded"          // 409: the run has no recorded sandbox spec
 	reasonMovePauseRefused           = "move_pause_refused"            // 409, and a failure: the run cannot be stopped, or its pause's revoke is not complete
 	reasonMoveLocallyContained       = "move_locally_contained"        // 409, and a failure: the run is held contained on its runner

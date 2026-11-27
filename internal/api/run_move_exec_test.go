@@ -455,6 +455,12 @@ func TestMoveAdmit_StepOneRefusals(t *testing.T) {
 		{"not interactive", "org", reasonMoveNotInteractive, http.StatusConflict, func(_ *testing.T, f *moveFixture) { f.ms.run.Interactive = false }},
 		{"provider sign-in", "org", reasonMoveHarnessLogin, http.StatusConflict, func(_ *testing.T, f *moveFixture) { f.ms.run.Task = harnessLoginTask }},
 		{"kept machine", "org", reasonMoveKeptMachine, http.StatusConflict, func(_ *testing.T, f *moveFixture) { f.ms.kept = true }},
+		{"extra containers", "org", reasonMoveExtraContainers, http.StatusConflict, func(_ *testing.T, f *moveFixture) {
+			f.ms.extras = []types.RunExtraContainer{{Name: "db", Image: "postgres:16"}}
+		}},
+		{"extra containers unreadable", "org", reasonMovePolicyUnreadable, http.StatusServiceUnavailable, func(_ *testing.T, f *moveFixture) {
+			f.ms.extrasErr = errors.New("read failed")
+		}},
 		{"unrecorded", "org", reasonMoveSpecUnrecorded, http.StatusConflict, func(_ *testing.T, f *moveFixture) { delete(f.ms.specs, f.run.ID) }},
 		{"resident value", "org", reasonMoveResidentCredential, http.StatusForbidden, func(t *testing.T, f *moveFixture) {
 			f.record(t, runSandboxSpecRecord{Image: "img", Interactive: true, Resident: true})

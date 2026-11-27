@@ -1479,6 +1479,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `move_not_running` | `409` on `POST /runs/{id}/move`: the run is not running, a Resume holds it, or it is still stopped where a move left it. |
 | `move_not_interactive` | `409` on `POST /runs/{id}/move`: only an interactive run moves. |
 | `move_kept_machine` | `409` on `POST /runs/{id}/move`: a run that keeps its machine does not move. |
+| `move_extra_containers` | `409` on `POST /runs/{id}/move`: a run with extra containers does not move. |
 | `move_harness_login` | `409` on `POST /runs/{id}/move`: a run someone signed in to a harness inside does not move. |
 | `move_machine_kind_unsupported` | `409` on `POST /runs/{id}/move`: a macOS, Linux VM or Windows VM run. |
 | `move_spec_unrecorded` | `409` on `POST /runs/{id}/move`: the run has no recorded sandbox spec. |

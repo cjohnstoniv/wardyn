@@ -154,7 +154,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | Organisation components | MCP servers and APIs your admin published, marked **From your organisation** |
 | **Add a secret** | One of your saved secrets as **Request header** (preferred), **Environment variable** or **File** |
 | **Allow a host** | One more host with no credential. Your organisation's ceiling still applies |
-| **Add an MCP server** | A remote server by HTTPS URL with an optional token. With [`WARDYN_MCP_LOCAL_SERVERS`](ENV.md#wardyn_mcp_local_servers) on, the dialog also offers **Runs in a sandbox**, a command that runs in this run's sandbox |
+| **Add an MCP server** | A remote server by HTTPS URL with an optional token. With [`WARDYN_MCP_OWN_SANDBOX`](ENV.md#wardyn_mcp_own_sandbox) and the organisation's Local MCP servers setting on, the dialog also offers **Runs in a sandbox**, a command that runs in a sandbox of its own |
 | **Custom component** | Hosts and a secret bundled for reuse. Disabled when your organisation does not let you define components |
 
 - Your admin can turn off environment-variable and file delivery (`resident_off`); use a request header then.

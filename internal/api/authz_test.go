@@ -2074,9 +2074,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/previews and DELETE .../previews/{port} (tierSecurity) and
 		// PUT .../previews/{port} (tierEntry); 61 since 0.11 added POST
 		// /runs/{id}/desktop/local-window (tierEntry); 63 since 0.11 added POST
-		// /runs/{id}/move and GET /runs/{id}/placements (tierSuper, as resume).
-		if probed != 63 {
-			t.Errorf("probed %d classOwner routes, want 63 — a route that left classOwner takes its tier "+
+		// /runs/{id}/move and GET /runs/{id}/placements (tierSuper, as resume); 64
+		// since rc.5 added GET /runs/{id}/clones (tierSecurity).
+		if probed != 64 {
+			t.Errorf("probed %d classOwner routes, want 64 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

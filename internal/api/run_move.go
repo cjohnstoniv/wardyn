@@ -279,7 +279,8 @@ func moveHeldRefusal(ctx context.Context, ms store.RunMoveStore, runID uuid.UUID
 }
 
 // moveRunRefusal is step 1's terms on the run itself: RUNNING and not claimed by a Resume, interactive, keeping no
-// machine, not a provider sign-in, and a container.
+// machine, not a provider sign-in, and a container with no extra containers. The destination's sandbox spec does not
+// carry extras, so a run with any would lose them; a read of them that fails refuses the move.
 func (s *Server) moveRunRefusal(ctx context.Context, run types.AgentRun) (*moveRefusal, error) {
 	switch {
 	case run.State != types.RunRunning || run.PausedReason == movePauseResuming:
@@ -290,6 +291,11 @@ func (s *Server) moveRunRefusal(ctx context.Context, run types.AgentRun) (*moveR
 		return refuseMove(http.StatusConflict, reasonMoveHarnessLogin, "A provider sign-in run is never moved."), nil
 	case run.MachineKind != "" && run.MachineKind != types.MachineContainer:
 		return refuseMove(http.StatusConflict, reasonMoveMachineKindUnsupported, "Only a container run can be moved; a VM run cannot."), nil
+	}
+	if extras, err := s.dispatchContainers(ctx, run.ID); err != nil {
+		return nil, err
+	} else if len(extras) > 0 {
+		return refuseMove(http.StatusConflict, reasonMoveExtraContainers, "A run with extra containers cannot be moved."), nil
 	}
 	ks, ok := s.cfg.Store.(interface {
 		GetKeptMachineByRun(context.Context, uuid.UUID) (types.KeptMachine, error)

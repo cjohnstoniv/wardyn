@@ -309,7 +309,10 @@ type moveStore struct {
 	runners    map[uuid.UUID]types.Runner
 	kept       bool
 	keptErr    error
-	trust      types.RunnerTrustClass
+	// extras and extrasErr answer RunContainers: the run's extra containers, or a failed read of them.
+	extras    []types.RunExtraContainer
+	extrasErr error
+	trust     types.RunnerTrustClass
 	// skew is added to the moves' clock: a hold made stale.
 	skew time.Duration
 	// beforeCommit runs at the top of CommitRunMove.
@@ -366,6 +369,10 @@ func (s *moveStore) GetKeptMachineByRun(context.Context, uuid.UUID) (types.KeptM
 		return types.KeptMachine{}, nil
 	}
 	return types.KeptMachine{}, store.ErrNotFound
+}
+
+func (s *moveStore) RunContainers(context.Context, uuid.UUID) ([]types.RunExtraContainer, error) {
+	return s.extras, s.extrasErr
 }
 
 func (s *moveStore) SetRunRunnerTrustClass(_ context.Context, _ uuid.UUID, c types.RunnerTrustClass) error {

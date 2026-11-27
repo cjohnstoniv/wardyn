@@ -2915,7 +2915,7 @@ These risks are **not closed by v1 Wardyn**.
       - Revive and extend re-check the owner's `workspace_provider` permission. They do not notice a repository that is no longer admitted, a provider row whose GitHub App lane was turned off, or a provider row that was removed.
     - (r) **A local MCP server runs inside the sandbox with the agent's own access [0.10.0, off by default].**
       - A component whose `mcp` block has `transport: stdio` names a launch command, not a URL. It runs only in a sandbox of its own, never in the agent's (`mcpGateSteps`, [`internal/api/run_mcp_sandbox_gate.go`](../internal/api/run_mcp_sandbox_gate.go)).
-      - It is off by default. Until an admin sets `WARDYN_MCP_LOCAL_SERVERS`, saving such a component and attaching one already saved are both refused (`mcpLocalOffProblem`, called by `componentSaveRefusal` and `componentDefinitionProblem`).
+      - It is off by default. Until an admin sets [`WARDYN_MCP_OWN_SANDBOX`](../docs/ENV.md#wardyn_mcp_own_sandbox) and the organisation's Local MCP servers setting is on, saving such a component and attaching one already saved are both refused (`mcpSaveProblem` and `mcpAdmissionRefusal`, both reading `mcpOwnSandboxOff`).
       - An env or file secret given to it is readable by any process in the sandbox, the agent included. Only a request header the proxy adds to one of its hosts stays out of the sandbox.
       - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress (so the agent can reach them too), with no broker route in front of them (`rawEgressHosts`).
       - The broker never sees its tool calls, so the harness applies the run's rules to them, and the in-sandbox relay that asks is cooperative.
