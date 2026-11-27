@@ -1778,6 +1778,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`), the egress baseline, a runner pool's use policy and a remote-hosted runner's people policy are held the same way.
 - So is adding a remote-hosted runner to an organization pool while another pool holds it under a use policy, or removing it from a pool with one; only a super admin approves those.
 - A service identity's create (`POST /service-identities`) and any `PATCH /service-identities/{name}` that changes its sponsor are held the same way; the PATCH is held whole, so its description or suspend part applies only with it. A description or suspend `PATCH`, unsuspend and retire apply directly.
+- Turning inbound federation on (`PUT /inbound-federation`) and adding a trust (`POST /inbound-trusts`) are held the same way. They need a signed-in person, never an API token, to propose and to approve. Turning it off and deleting a trust apply directly and take any admin credential; turning it off cancels a pending turn-on ([Inbound federation](operations/inbound-federation.md)).
 - A role-mapping change is approved by a super admin only (a security admin is refused `admin_surface`).
 - Distinct means a different principal AND a different mailbox (case-folded), so one person holding an SSO session and an API token is not two humans.
 - The proposer may reject their own change.

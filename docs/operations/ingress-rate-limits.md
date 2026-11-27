@@ -6,15 +6,16 @@ The rate limits on the routes open to callers with no credential, and `WARDYN_TR
 
 ## Rate limits
 
-Three routes are open to callers with no credential yet. Each has its own rate-limit bucket per client address: 10 attempts, then one every 10 seconds. The address is the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists that peer, so without it every caller behind a shared ingress, internet traffic included, shares the ingress's bucket.
+Four routes are open to callers with no credential yet. Each has its own rate-limit bucket per client address: 10 attempts, then one every 10 seconds. The address is the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists that peer, so without it every caller behind a shared ingress, internet traffic included, shares the ingress's bucket.
 
 | Route | Refusal when the bucket is empty |
 | --- | --- |
 | `/api/v1/runners/{id}/stream` | `429` `runner_stream_rate_limited` |
 | `/api/v1/runners/register` | `429` `runner_registration_rate_limited` |
 | `/api/v1/devices/enrol` | `429` `device_enrol_rate_limited` |
+| `/api/v1/inbound/exchange` | `429` `inbound_exchange_rate_limited` |
 
-- The runner stream charges its bucket only when a handshake ends unproved; a registration that redeems a valid token is refunded. Failed and abandoned attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
+- The runner stream charges its bucket only when a handshake ends unproved; a registration that redeems a valid token, and an exchange that mints one, are refunded. Failed and abandoned attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
 - Reconnecting runners stay reliable only if you do one of these. Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket. Or allow-list your runners' source networks on `/api/v1/runners/*/stream` and the other two paths. Or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
 - The buckets are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
 
