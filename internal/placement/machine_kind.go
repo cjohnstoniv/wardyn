@@ -30,8 +30,12 @@ func labelOr[K comparable](labels map[K]string, k K, fallback string) string {
 //   - With the organisation's runners.machine_kind_denials set, a class Wardyn does not know is refused
 //     for every kind: the list cannot be judged at it, and a refusal is the safe answer.
 //   - Then the list: a kind it denies at this class is refused.
+//
+// Only the entries that hold at the plan's site are read (types.MachineKindDenialsAt): an entry keyed to a
+// site holds only for a runner whose pool is at it, so it can take a target away and never add one.
 func machineKindRefusal(p LocalPlan) *Refusal {
 	kind := p.MachineKind.Normalize()
+	denials := types.MachineKindDenialsAt(p.MachineKindDenials, p.SiteID)
 	var r *Refusal
 	switch {
 	case kind.IsMacOSVM() && p.Trust != types.RunnerTrustManagedDevice && p.MacOSHostGateLater:
@@ -39,15 +43,27 @@ func machineKindRefusal(p LocalPlan) *Refusal {
 	case kind.IsMacOSVM() && p.Trust != types.RunnerTrustManagedDevice:
 		r = refuse(ReasonRunnerTrustRequired, "machine_kind",
 			"A macOS VM sandbox runs only on a Mac marked as company-managed. Ask a security admin to mark it as a managed device.")
-	case len(p.MachineKindDenials) > 0 && !p.Trust.Valid():
+	case len(denials) > 0 && !p.Trust.Valid():
 		r = refuse(ReasonRunnerTrustRequired, "machine_kind",
 			"Your organisation limits machine kinds by runner trust class, and this runner has no trust class Wardyn knows. Ask a security admin to set it.")
-	case types.DeniesMachineKind(p.MachineKindDenials, p.Trust, kind):
+	case types.DeniesMachineKind(denials, p.Trust, kind):
 		r = refuse(ReasonPlacementDenied, "machine_kind", "Your organisation does not allow "+
-			labelOr(machineKindLabels, kind, string(kind))+" sandboxes on "+labelOr(trustClassLabels, p.Trust, string(p.Trust))+" runners.")
+			labelOr(machineKindLabels, kind, string(kind))+" sandboxes on "+labelOr(trustClassLabels, p.Trust, string(p.Trust))+" runners"+siteClause(p, denials, kind)+".")
 	default:
 		return nil
 	}
 	r.named = true
 	return r
+}
+
+// siteClause names the plan's site in a denial's sentence when only an entry keyed to that site denies the
+// kind; an entry that holds at every site needs no site named.
+func siteClause(p LocalPlan, denials []types.MachineKindDenial, kind types.MachineKind) string {
+	if types.DeniesMachineKind(types.MachineKindDenialsAt(denials, nil), p.Trust, kind) {
+		return ""
+	}
+	if p.SiteName == "" {
+		return " at this run's site"
+	}
+	return " at " + p.SiteName
 }

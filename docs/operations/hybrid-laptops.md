@@ -106,6 +106,7 @@ Not checked: an MDM device certificate, Apple Managed Device Attestation, or a T
 - It is judged for a new run at create, at the queue's start and at dispatch, never at revive.
 - A pool places the run on a class that admits it. Denied everywhere, the answer is `placement_denied`.
 - With a list set, a runner of no known trust class takes no new run.
+- An entry with a `site_id` holds only on runners whose pool is at that [site](sites.md), and only while sites are on; its refusal names the site. Elsewhere it counts as not listed.
 - A macOS VM needs `managed_device` whatever the list says.
 - The list covers local runs on registered runners only. The server's Docker, which runs containers only, is not judged.
 

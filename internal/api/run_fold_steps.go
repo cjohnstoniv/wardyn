@@ -759,7 +759,7 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
-	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), trustOwners(f.place.eligible), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.place.pool, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), trustOwners(f.place.eligible), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 	if f.place.remoteOffered {
 		refusal.addRemoteInstead(f.place.pool.Name)
 	}
@@ -779,7 +779,7 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	// refuse here, ending a run that was accepted to wait.
 	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
 		req.Placement = types.PlacementLocal
-		_, local := s.localPlacementRefusal(f.r, req, true, waitingLocalTrusts(), nil, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+		_, local := s.localPlacementRefusal(f.r, req, true, f.place.pool, waitingLocalTrusts(), nil, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 		// A read that failed answers nothing (a server error carries its error, not a status): the launch
 		// then behaves as one with nothing recorded.
 		failed := local != nil && (local.err != nil || local.status >= http.StatusInternalServerError)

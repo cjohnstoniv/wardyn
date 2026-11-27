@@ -4,11 +4,13 @@
 package placement
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 var (
@@ -163,5 +165,90 @@ func TestLocalEligibility_AdmitsAPlainLocalRun(t *testing.T) {
 	plain.MachineKindDenials = []types.MachineKindDenial{{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineLinuxVM}}
 	if _, r := LocalEligibility(plain); r != nil {
 		t.Fatalf("a container plan with a list denying another kind: %v", r)
+	}
+}
+
+// I11: a denial keyed to a site only takes targets away. Over every trust class (an unknown one included),
+// kind and site of the target, with and without the create's deferred macOS gate, adding one site-keyed
+// denial to a list never admits a plan the list alone refused, and any plan it newly refuses is at its site.
+// A site on the plan never admits what the same plan at no site is refused.
+func TestSitePlaceRuleOnlyRemovesTargets(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	sites := []*uuid.UUID{nil, &a, &b}
+	classes := append([]types.RunnerTrustClass{""}, trustClasses...)
+	bases := [][]types.MachineKindDenial{nil}
+	for _, c := range trustClasses {
+		for _, k := range machineKinds {
+			bases = append(bases, []types.MachineKindDenial{{Trust: c, MachineKind: k}})
+		}
+	}
+	for _, rc := range trustClasses {
+		for _, rk := range machineKinds {
+			for _, rs := range []*uuid.UUID{&a, &b} {
+				rule := types.MachineKindDenial{Trust: rc, MachineKind: rk, SiteID: rs.String()}
+				for _, base := range bases {
+					with := append(slices.Clone(base), rule)
+					for _, c := range classes {
+						for _, k := range machineKinds {
+							for _, site := range sites {
+								for _, later := range []bool{false, true} {
+									plan := kindPlan(c, k, base...)
+									plan.MacOSHostGateLater = later
+									unsited := machineKindRefusal(plan)
+									plan.SiteID, plan.SiteName = site, "Office"
+									before := machineKindRefusal(plan)
+									if unsited != nil && before == nil {
+										t.Fatalf("a site admitted %s/%q at %v that %v refused at no site: %v", c, k, site, base, unsited)
+									}
+									plan.MachineKindDenials = with
+									after := machineKindRefusal(plan)
+									if before != nil && after == nil {
+										t.Fatalf("rule %v admitted %s/%q at %v that %v refused: %v", rule, c, k, site, base, before)
+									}
+									if before == nil && after != nil && (site == nil || *site != *rs) {
+										t.Fatalf("rule %v at %s refused %s/%q at %v, off its site: %v", rule, rs, c, k, site, after)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// A denial keyed to a site refuses its cell at that site, naming the site, and nowhere else; an unkeyed denial
+// of the same cell keeps its sentence, with no site named.
+func TestMachineKindRefusal_SiteRuleNamesTheSite(t *testing.T) {
+	office, branch := uuid.New(), uuid.New()
+	rule := types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineLinuxVM, SiteID: office.String()}
+	plan := func(site *uuid.UUID, name string, ds ...types.MachineKindDenial) LocalPlan {
+		p := kindPlan(types.RunnerTrustPersonal, types.MachineLinuxVM, ds...)
+		p.SiteID, p.SiteName = site, name
+		return p
+	}
+	r := machineKindRefusal(plan(&office, "Leeds office", rule))
+	if want := "Your organisation does not allow Linux VM sandboxes on personal runners at Leeds office."; r == nil || r.Reason != ReasonPlacementDenied || r.Sentence() != want {
+		t.Fatalf("at the rule's site: %v, want placement_denied %q", r, want)
+	}
+	if r := machineKindRefusal(plan(&office, "", rule)); r == nil || !strings.HasSuffix(r.Sentence(), " at this run's site.") {
+		t.Fatalf("at the rule's site with no name read: %v", r)
+	}
+	if r := machineKindRefusal(plan(&branch, "Branch", rule)); r != nil {
+		t.Fatalf("at another site: %v, want admitted", r)
+	}
+	if r := machineKindRefusal(plan(nil, "", rule)); r != nil {
+		t.Fatalf("with no site: %v, want admitted", r)
+	}
+	everywhere := types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineLinuxVM}
+	if r := machineKindRefusal(plan(&office, "Leeds office", everywhere, rule)); r == nil || r.Sentence() != "Your organisation does not allow Linux VM sandboxes on personal runners." {
+		t.Fatalf("an unkeyed denial of the same cell at the site: %v", r)
+	}
+	// An unknown class at another site is not refused by a list that holds only at the rule's site.
+	unknown := plan(&branch, "Branch", rule)
+	unknown.Trust = ""
+	if r := machineKindRefusal(unknown); r != nil {
+		t.Fatalf("an unknown class off the rule's site: %v, want admitted", r)
 	}
 }

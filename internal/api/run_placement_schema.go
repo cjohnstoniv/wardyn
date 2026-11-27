@@ -90,7 +90,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	// no credential, and not sent to runners. MachineKindDenials are trust class and kind pairs: no credential, judged by the server
 	// and not sent to runners either.
 	reflect.TypeFor[types.RunnerSettings]():    strings.Fields("Enabled RequireManagedDevice MDMDeviceCAPEM MDMDeviceCRLURL MachineKindDenials"),
-	reflect.TypeFor[types.MachineKindDenial](): strings.Fields("Trust MachineKind"), // a trust class and a machine kind; no credential
+	reflect.TypeFor[types.MachineKindDenial](): strings.Fields("Trust MachineKind SiteID"), // a trust class, a machine kind and a site id; no credential
 	reflect.TypeFor[types.SiteBranding]():      strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners Assistant UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy EgressRedirects ScmHosts Integrations InternalHosts Egress " +
 		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images Sessions FeatureSwitches DesktopWatermark OutageAllowanceMinutes"),

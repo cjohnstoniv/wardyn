@@ -34,7 +34,7 @@ func TestLocalPlacement_GatewayMCPServerRefusedBeforeTheRun(t *testing.T) {
 	org := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{ComponentID: &id, Name: "Tools", Version: 3, Definition: def}}}}
 	self := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{SelfDefined: true, Owner: "sub-owner", Name: "Tools", Definition: def}}}}
 	judge := func(p types.Placement, ceiling governanceCeiling, comps runComponents) *runRefusal {
-		_, ref := f.srv.localPlacementRefusal(r, createRunRequest{Placement: p}, true, nil, nil, types.RunPolicySpec{}, ceiling, comps, nil, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, createRunRequest{Placement: p}, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, ceiling, comps, nil, nil, composer.Baseline{})
 		return ref
 	}
 	ref := judge(placement.Local, governanceCeiling{}, org)
@@ -118,7 +118,7 @@ func TestLocalPlacement_GatewayBedrockProviderRefusedAtCreate(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 	req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
-	_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 	want := `The model provider "corp-gw" sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners. ` +
 		"Remove it from this run, or run this on a remote-hosted runner."
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != want {
@@ -144,7 +144,7 @@ func TestLocalPlacement_GatewayKeyProviderRefusedAtCreate(t *testing.T) {
 			}
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 			req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
-			_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+			_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 			want := `The model provider "corp-gw" sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners. ` +
 				"Remove it from this run, or run this on a remote-hosted runner."
 			if ref == nil || ref.status != placement.ReasonPlacementCredential.Status() || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != want {
