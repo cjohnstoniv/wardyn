@@ -97,6 +97,7 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"model_provider.service_grant.secret_write":  {[]string{"base_host"}, keepGrant},
 	"model_provider.write":                       {[]string{"base_url_changed"}, "a boolean"},
 	"policy.inline.apply":                        {[]string{"workspace_mounts"}, "a count of mounts, never a path"},
+	"preview.deny":                               {[]string{"request"}, "the refused request's kind, create or ticket (denyPreview's callers pass only these)"},
 	"remote_runner.people_policy.delete":         {[]string{"after", "before"}, keepValues},
 	"remote_runner.people_policy.set":            {[]string{"after", "before"}, keepValues},
 	"run.artifact.redirect":                      {[]string{"host"}, keepEgress},

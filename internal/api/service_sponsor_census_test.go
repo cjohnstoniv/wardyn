@@ -143,7 +143,10 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	// (uiEnterCommon's, moved there beside the inbound caller's ticket, which never takes this arm).
 	// inboundCaller redeems an inbound token, with no role (superAdmin false); a portal's delegated token
 	// cannot mint one (mintGuards' delegation refusal, on both token mints), so the portal refusal holds there too.
-	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "inboundCaller": 1}
+	// previewTicketCaller is a preview ticket's mint, which asks the entry rule as an app's ticket does (superAdmin
+	// false, never a role) and stamps the ticket member, so uiTicketMayEnter asks the same rule at the enter; a
+	// portal's delegated token cannot reach the route (delegationAllowed does not list it), so the portal refusal holds.
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "inboundCaller": 1, "previewTicketCaller": 1}
 	if !maps.Equal(redeem, wantRedeem) {
 		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
 	}

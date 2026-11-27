@@ -101,6 +101,7 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 
 	// The wrappers' callers. Each carries its wrapper's guard; a caller with a stronger guard of its own may name
 	// that instead.
+	{"internal/api/run_held_seed.go", "Server.releaseHeldSeed", "stopSandboxOrAudit"}:                                {1, "unguarded: K11, K12"},
 	{"internal/api/run_kept_stop_forced.go", "Server.retryForcedStop", "stopSandboxOrAudit"}:                         {1, "unguarded: K11, K12"},
 	{"internal/api/run_local_folder.go", "Server.failLocalFolderRun", "stopSandboxOrAudit"}:                          {1, "unguarded: K11, K12"},
 	{"internal/api/run_proxy_readback.go", "Server.abortUnconfirmedSandbox", "stopSandboxOrAudit"}:                   {1, "unguarded: K11, K12"},
