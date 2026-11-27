@@ -83,7 +83,17 @@ func TestReviveImageAdmission_ExtraContainersAreRechecked(t *testing.T) {
 		if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonReviveOwnerAuthorityUnreadable) {
 			t.Fatalf("revive = %d %s, want 503 %s", code, body, reasonReviveOwnerAuthorityUnreadable)
 		}
-		f.assertReviveRefused(t, reasonReviveOwnerAuthorityUnreadable)
+		// Unreadable refuses nothing for good, so, as every other re-check that could not be made, it writes no
+		// denied row; the run is left as it was.
+		if strings.Contains(body, "permission denied") {
+			t.Errorf("revive body carries the store's error text: %s", body)
+		}
+		if len(f.rr.replaced) != 0 {
+			t.Error("a revive that could not read the run's extra containers replaced the proxy")
+		}
+		if lostAt, _ := f.st.lost(); lostAt == nil {
+			t.Error("a refused revive cleared the lost mark")
+		}
 	})
 	t.Run("audit", func(t *testing.T) {
 		a := &fakeAdmitter{}
