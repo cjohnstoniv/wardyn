@@ -121,6 +121,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A web terminal opened with a sign-in or a ticket (outside an issuer portal) whose sign-in stopped authorizing it, or whose writer seat was taken over, while its session was still opening, now always closes with its code (4401, or the take-over's) instead of sometimes dropping without one, which the console read as a lost link to reconnect on.
 - The VM network relay no longer reads the process-wide DNS resolver setting each time it dials the run's proxy, so a test that swaps that setting no longer races a dial still in flight.
 - An interactive run set to open in the agent, with no repository or start folder, now starts the agent only once the sandbox has finished preparing it. On the server's Kubernetes cluster the agent container starts beside its proxy and waits for it, so the first terminal could open before that preparation and start Claude Code on its first-run theme picker, without the run's AWS sign-in profile or proxy certificate. The terminal now says it is preparing the sandbox and starts the agent when that is done.
+- Approving a held inbound trust no longer takes a second database connection while the approval holds one: the trust's starting point against its sponsor's revocations is read on the approval's own transaction.
 
 ### Before you upgrade
 

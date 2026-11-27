@@ -257,18 +257,19 @@ func TestAssistantNewUnitNeedsTheUnitTier_PG(t *testing.T) {
 	wantReason(t, a.tool(s, run, types.AssistantToolValidate, assistantDraftArgs(types.AssistantTargetUnit, assistantUnitDraft("ua-new", a.a.ID))),
 		http.StatusForbidden, "unit_scope_denied")
 	for _, c := range []struct {
-		name, person, key string
-		parent            uuid.UUID
-		valid             bool
+		name, person, key, unit string
+		parent                  uuid.UUID
+		valid                   bool
 	}{
-		{"new unit under a parent outside the caller's units", uaSubAdminA1, "", a.b.ID, false},
-		{"new unit under a parent the caller governs", uaSubAdminA, "", a.a1.ID, true},
-		{"an existing unit moved outside the caller's units", uaSubAdminA1, a.a1.ID.String(), a.b.ID, false},
+		// A new unit takes a name no unit holds; the moved unit keeps its own.
+		{"new unit under a parent outside the caller's units", uaSubAdminA1, "", "ua-new", a.b.ID, false},
+		{"new unit under a parent the caller governs", uaSubAdminA, "", "ua-new", a.a1.ID, true},
+		{"an existing unit moved outside the caller's units", uaSubAdminA1, a.a1.ID.String(), "ua-a1", a.b.ID, false},
 	} {
 		s, run := a.session(c.person, oidc.RoleUser, types.UserTypeStandard, types.AssistantCompose, types.AssistantTargetUnit, c.key)
 		var v validation
 		assistantDecode(t, a.tool(s, run, types.AssistantToolValidate, assistantDraftArgs(types.AssistantTargetUnit,
-			assistantUnitDraft("ua-a1", c.parent, "pypi.org"))), &v)
+			assistantUnitDraft(c.unit, c.parent, "pypi.org"))), &v)
 		if v.Valid != c.valid {
 			t.Errorf("%s: valid = %v (%+v), want %v", c.name, v.Valid, v.Errors, c.valid)
 		}
@@ -365,7 +366,14 @@ func TestAssistantUnitAdminHeldWithTheSwitchOff_PG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wantRaw, _ := json.Marshal(want); string(got.Review) != string(wantRaw) {
+	// A tool's answer is re-encoded from its decoded tree (assistantToolResult), so its keys come sorted: reviewFor's
+	// review is compared in that encoding.
+	wantRaw, _ := json.Marshal(want)
+	var tree any
+	if err := json.Unmarshal(wantRaw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	if wantRaw, _ = json.Marshal(tree); string(got.Review) != string(wantRaw) {
 		t.Errorf("explain's review = %s, want reviewFor's %s", got.Review, wantRaw)
 	}
 }

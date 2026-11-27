@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -550,8 +549,8 @@ func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
 }
 
 // TestDriveSeed_PostCreateCheckEndsRun_PG: a created run whose grants are not exactly the own-token git_pat is ended
-// KILLED and answered 422 with the run id, audited refused with that run; a kill whose teardown fails answers the
-// kill route's 500 with the run id and writes its run.revoke failure row.
+// KILLED and answered 422 with the run id, audited refused with that run; a kill one of whose teardown or revocation
+// steps fails answers the kill route's 500 with the run id and writes its run.revoke failure row.
 func TestDriveSeed_PostCreateCheckEndsRun_PG(t *testing.T) {
 	t.Run("the fold dropped the grant", func(t *testing.T) {
 		f := newFillPG(t)
@@ -571,9 +570,11 @@ func TestDriveSeed_PostCreateCheckEndsRun_PG(t *testing.T) {
 			t.Errorf("drive.seed rows = %+v, want one refused with the run %s", rows, id)
 		}
 	})
-	t.Run("the teardown fails", func(t *testing.T) {
+	t.Run("a revocation step fails", func(t *testing.T) {
 		f := newFillPG(t)
-		f.h.srv.cfg.Runner = &failTeardownRunner{fillPGRunner: f.rn}
+		// The create answers before its launch makes a sandbox, so the kill usually finds none to tear down: the
+		// failing step is the broker's revoke, which every kill runs.
+		f.h.srv.cfg.Broker = revokeFailBroker{&fakeBroker{}}
 		defer func() { driveFillBeforeCreate = func() {} }()
 		driveFillBeforeCreate = f.dropGitOnReadBack()
 		w := f.fill()
@@ -618,14 +619,4 @@ func (s readBackDropsGit) ListGrantsByRun(ctx context.Context, runID uuid.UUID) 
 // dropGitOnReadBack is the seam that puts readBackDropsGit under the fill's create.
 func (f *fillPG) dropGitOnReadBack() func() {
 	return func() { f.h.srv.cfg.Store = readBackDropsGit{PG: f.h.srv.cfg.Store.(store.PG), srv: f.h.srv} }
-}
-
-// failTeardownRunner cannot stop or kill a sandbox.
-type failTeardownRunner struct{ *fillPGRunner }
-
-func (failTeardownRunner) StopSandbox(context.Context, string) error {
-	return errors.New("teardown failed")
-}
-func (failTeardownRunner) KillSandbox(context.Context, string) error {
-	return errors.New("teardown failed")
 }

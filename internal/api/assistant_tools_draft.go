@@ -203,10 +203,20 @@ func (s *Server) assistantAssembleDraft(sub assistantSubject, parts []types.Assi
 	return raw, refused
 }
 
-// assistantPartFits decodes one part as its kind's save body, refusing a field the body does not name.
+// assistantPartFits decodes one part as its kind's save body, refusing a field the body does not name. A unit body
+// needs a name (finishGovernanceUnitRequest), so a unit part that is not the name is judged with a stand-in one: the
+// assembled draft's own name is the validator's to judge.
 func assistantPartFits(sub assistantSubject, one json.RawMessage) error {
 	switch {
 	case sub.govKind == govKindUnit:
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(one, &fields); err != nil {
+			return err
+		}
+		if _, named := fields["name"]; !named && fields != nil {
+			fields["name"] = json.RawMessage(`"part"`)
+			one, _ = json.Marshal(fields)
+		}
 		if _, msg := unitRequestFromPayload(one); msg != "" {
 			return errors.New(msg)
 		}
