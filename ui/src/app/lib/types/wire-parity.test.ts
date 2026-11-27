@@ -113,6 +113,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+  const runCapacityTs = readFileSync(join(root, "ui/src/app/lib/types/run-capacity.ts"), "utf8");
   const approvalsTs = readFileSync(join(root, "ui/src/app/lib/types/approvals.ts"), "utf8");
 
   it("SetupStatus: every Go tag is mirrored, and every TS key besides the UI-only `unreachable` is a Go tag", () => {
@@ -245,14 +246,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   ])("%s (GET /admin/runs/capacity): full parity with the TS mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/store/store_run_capacity.go"), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(1);
-    expect(new Set(tsInterfaceTopKeys(runsTs, tsName))).toEqual(new Set(goTags));
+    expect(new Set(tsInterfaceTopKeys(runCapacityTs, tsName))).toEqual(new Set(goTags));
   });
 
   it("RunCapacityResponse (GET /admin/runs/capacity): the handler adds generated_at and basis to RunCapacity", () => {
     const handlerGo = readFileSync(join(root, "internal/api/runs_capacity.go"), "utf8");
     expect(handlerGo).toMatch(/GeneratedAt time\.Time\s+`json:"generated_at"`/);
     expect(handlerGo).toMatch(/Basis\s+string\s+`json:"basis"`\n\t\tstore\.RunCapacity\n/);
-    expect(new Set(tsInterfaceTopKeys(runsTs, "RunCapacityResponse"))).toEqual(new Set(["generated_at", "basis"]));
+    expect(new Set(tsInterfaceTopKeys(runCapacityTs, "RunCapacityResponse"))).toEqual(new Set(["generated_at", "basis"]));
   });
 
   // #1215: GET /branding/settings is the public subset (brandingPublic, embedded)
