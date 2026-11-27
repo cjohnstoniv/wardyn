@@ -159,6 +159,10 @@ func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 			t.Fatalf("with the slice naming the proxy, a lookup at the ClusterIP was not answered REFUSED, so a failure below would prove nothing:\n%s", out)
 		}
 		endpointsAre(t, nil)
+		// The cluster's Service routing takes up a slice write after it is stored, as SliceIsTheOnlyRoute waits for.
+		keepWaitFor(t, runServiceGoneWait, "the agent's connect to wardyn-proxy failing once the slice is empty", func() bool {
+			return !keepProxyReachable(ctx, t, r, sb.Ref)
+		})
 		for i := range 3 {
 			if keepProxyReachable(ctx, t, r, sb.Ref) {
 				t.Errorf("try %d: a connect to wardyn-proxy succeeded with the run's EndpointSlice empty", i+1)

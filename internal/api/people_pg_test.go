@@ -37,10 +37,7 @@ const (
 func newPeoplePG(t *testing.T) peoplePG {
 	t.Helper()
 	e := newOwnerOnlyPG(t)
-	e.h.srv.cfg.OIDC = newAccessAuth(t, map[string]string{
-		"root@corp.example": oidc.RoleAdmin, "boss@corp.example": oidc.RoleAdmin,
-		"sec@corp.example": oidc.RoleSecurityAdmin, "sec2@corp.example": oidc.RoleSecurityAdmin,
-	}, oidc.RoleUser, nil, nil)
+	e.h.srv.cfg.OIDC = newPeopleAuth(t)
 	e.h.srv.cfg.RunnerTarget = "docker"
 	e.h.srv.router = e.h.srv.routes()
 	e.admin = accessSession(t, "root", "root@corp.example", oidc.RoleAdmin, []string{})
@@ -51,6 +48,15 @@ func newPeoplePG(t *testing.T) peoplePG {
 		sec:         accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{}),
 		mem:         accessSession(t, "mem", "mem@corp.example", oidc.RoleUser, []string{}),
 	}
+}
+
+// newPeopleAuth is peoplePG's authenticator: the role map keys on email; opts change its config.
+func newPeopleAuth(t *testing.T, opts ...func(*oidc.Config)) *oidc.Authenticator {
+	t.Helper()
+	return newAccessAuth(t, map[string]string{
+		"root@corp.example": oidc.RoleAdmin, "boss@corp.example": oidc.RoleAdmin,
+		"sec@corp.example": oidc.RoleSecurityAdmin, "sec2@corp.example": oidc.RoleSecurityAdmin,
+	}, oidc.RoleUser, nil, nil, opts...)
 }
 
 func (e peoplePG) createPerson(t *testing.T, as *http.Cookie, principal, email string) *httptest.ResponseRecorder {

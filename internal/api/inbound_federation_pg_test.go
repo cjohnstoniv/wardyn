@@ -71,6 +71,10 @@ func newInbEnv(t *testing.T) *inbEnv {
 	e.fake.set(oidc.PortalRefusal{}, time.Now().Add(2*time.Hour))
 	e.h.srv.cfg.PortalIssuers = e.fake
 	e.h.srv.cfg.RunnerOrgURL = inboundTestOrigin
+	// The authenticator reads the server's revocation store, as cmd/wardynd wires it, so a cookie from before a
+	// revoke is refused at its next request.
+	e.h.srv.cfg.OIDC = newPeopleAuth(t, func(c *oidc.Config) { c.Revocations = e.rev })
+	e.h.srv.router = e.h.srv.routes()
 	return e
 }
 

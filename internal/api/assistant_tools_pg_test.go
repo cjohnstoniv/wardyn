@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -41,6 +42,8 @@ func newAssistantPGEnv(t *testing.T, e *unitAdminEnv) *assistantPGEnv {
 	if _, err := e.pg.PutSiteConfig(context.Background(), site); err != nil {
 		t.Fatalf("seed the assistant settings: %v", err)
 	}
+	// The audit chain marks a dry run's rows, as cmd/wardynd's does.
+	e.srv.cfg.Audit = audit.DryRunRecorder{Inner: e.h.audit}
 	return &assistantPGEnv{unitAdminEnv: e, bind: bind}
 }
 
@@ -55,7 +58,7 @@ func (a *assistantPGEnv) session(person, role, userType string, purpose types.As
 		}
 	}
 	run, err := a.pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: person, Agent: "claude-code",
-		Task: "assistant", ConfinementClass: types.CC2, State: types.RunRunning})
+		Task: "assistant", ConfinementClass: types.CC2, State: types.RunRunning, RunnerTarget: "docker"})
 	if err != nil {
 		a.t.Fatalf("seed the assistant's run: %v", err)
 	}
