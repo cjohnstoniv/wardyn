@@ -195,6 +195,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Policy", Path: "HarnessInnerWalls", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "Desktop", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "DataOut", Class: ClassExempt, Rule: RuleExempt, Variant: "enforced by the control plane's doors, not the sidecar"},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "LocalFolders", Class: ClassExempt, Rule: RuleExempt, Variant: "enforced by the control plane's doors, not the sidecar"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "Recording", Class: ClassExempt, Rule: RuleExempt, Variant: "never sent: sidecarPolicy clears it"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "Outage", Class: ClassExempt, Rule: RuleExempt, Variant: "never sent: sidecarPolicy clears it, and the proxy reads the run's terms from its own outage key; no credential"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection", Class: ClassExempt, Rule: RuleExempt, Variant: "the rest of LLMInspection; its resolved secret names are the strip row above"},

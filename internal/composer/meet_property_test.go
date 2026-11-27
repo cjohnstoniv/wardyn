@@ -104,6 +104,10 @@ func genAuthority(r *rand.Rand) composer.Authority {
 	if r.Intn(3) == 0 {
 		c.AzureDevOpsCapabilities = subset(r, genCaps)
 	}
+	if r.Intn(2) == 0 {
+		c.LocalFolders = &types.LocalFolderRules{DenyRemote: r.Intn(3) == 0, DenyPull: r.Intn(3) == 0,
+			MaxPushMiB: smallInt(r, 0, 10, 100), MaxPullMiB: smallInt(r, 0, 10, 100), Deny: subset(r, genPaths)}
+	}
 	if r.Intn(4) == 0 {
 		rw := r.Intn(2) == 0
 		c.WorkspaceMounts = []types.WorkspaceMount{{Source: "/a", Target: "/w/a", ReadOnly: &rw}, {Source: "/b", Target: "/w/b"}}[:r.Intn(3)]
@@ -162,6 +166,10 @@ func genOverlay(r *rand.Rand, withGrants bool) composer.Overlay {
 	if r.Intn(2) == 0 {
 		c.PushRules = &types.PushRulesOverlay{DenyPaths: some(r, subset(r, genPaths)), RequireReviewPaths: some(r, subset(r, genPaths)),
 			MaxInspectPackMiB: some(r, smallInt(r, 0, 8, 32, 64)), HoldSeconds: some(r, smallInt(r, 0, 30, 300, 900)), MaxFileSizeMiB: some(r, smallInt(r, 0, 5, 50))}
+	}
+	if r.Intn(3) == 0 {
+		c.LocalFolders = &types.LocalFolderRules{DenyRemote: r.Intn(2) == 0, DenyPull: r.Intn(2) == 0,
+			MaxPushMiB: smallInt(r, 0, 5, 20), MaxPullMiB: smallInt(r, 0, 5, 20), Deny: []string{"*.pem"}[:r.Intn(2)]}
 	}
 	if withGrants && r.Intn(3) == 0 {
 		c.EligibleGrants = &[]types.GrantSpec{{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.vendor.example"}`)}}

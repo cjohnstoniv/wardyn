@@ -182,6 +182,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	warns = clampPushRules(&out, ceiling, warns)
 	warns = clampDataOut(&out, ceiling, warns)
+	warns = clampLocalFolders(&out, ceiling.LocalFolders, warns)
 	warns = clampGitHubCapabilities(&out, ceiling, warns)
 
 	return out, warns
@@ -337,8 +338,8 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 // unionPaths is union's exact-string counterpart for deny_paths: union's case-folding would let a
 // member's re-typed rule silently displace the ceiling's spelling, weakening it. Dedupe by exact byte string only.
 func unionPaths(a, b []string) []string {
-	seen := make(map[string]bool, len(a)+len(b))
-	out := make([]string, 0, len(a)+len(b))
+	seen := make(map[string]bool, len(a))
+	out := make([]string, 0, len(a))
 	for _, lists := range [][]string{a, b} {
 		for _, s := range lists {
 			if !seen[s] {
@@ -866,7 +867,7 @@ func clampToolRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		}
 		return warns
 	}
-	kept := make([]types.ToolRule, 0, len(out.ToolRules)+len(ceiling.ToolRules))
+	kept := make([]types.ToolRule, 0, len(out.ToolRules))
 	seen := map[string]bool{}
 	for _, r := range out.ToolRules {
 		if floor := ceilingToolEffect(ceiling, r.Tool); toolStrictness(r.Effect) < toolStrictness(floor) {

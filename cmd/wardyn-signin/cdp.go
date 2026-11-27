@@ -17,56 +17,137 @@ import (
 
 // cdp speaks the DevTools protocol over --remote-debugging-pipe: the browser
 // reads fd 3 and writes fd 4, one JSON message per NUL. Never a debugging
-// port: loopback is shared with the agent.
+// port: loopback is shared with the agent. One reader hands each reply to the
+// call waiting on its id, so a command the browser never answers costs only
+// its own caller (cdpCallTimeout), never the calls after it.
 type cdp struct {
-	mu   sync.Mutex
+	wmu  sync.Mutex // serialises writes and id allocation
 	w    io.Writer
-	r    *bufio.Reader
 	next int
+
+	mu      sync.Mutex // guards waiting and readErr
+	waiting map[int]chan cdpMessage
+	readErr error
 }
 
+// cdpCallTimeout is how long one command waits for its reply: the control
+// socket's own deadline, so a caller never waits on a reply it can no longer
+// pass on. Tests shorten it.
+var cdpCallTimeout = 30 * time.Second
+
 func newCDP(w io.Writer, r io.Reader) *cdp {
-	return &cdp{w: w, r: bufio.NewReaderSize(r, 1<<16)}
+	c := &cdp{w: w, waiting: map[int]chan cdpMessage{}}
+	go c.read(bufio.NewReaderSize(r, 1<<16))
+	return c
+}
+
+// read hands each reply to the call waiting on its id until the pipe ends,
+// then fails every waiting and later call with the pipe's error. Events, and
+// a reply whose caller gave up, are dropped.
+func (c *cdp) read(r *bufio.Reader) {
+	for {
+		line, err := readNUL(r)
+		if err != nil {
+			c.mu.Lock()
+			c.readErr = err
+			for id, ch := range c.waiting {
+				close(ch)
+				delete(c.waiting, id)
+			}
+			c.mu.Unlock()
+			return
+		}
+		var in cdpMessage
+		if json.Unmarshal(line, &in) != nil || in.ID == 0 {
+			continue
+		}
+		c.mu.Lock()
+		ch, ok := c.waiting[in.ID]
+		delete(c.waiting, in.ID)
+		c.mu.Unlock()
+		if ok {
+			ch <- in
+		}
+	}
 }
 
 // maxCDPMessage bounds one message read from the browser.
 const maxCDPMessage = 16 << 20
 
 type cdpMessage struct {
-	ID     int             `json:"id,omitempty"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  json.RawMessage `json:"error,omitempty"`
+	ID        int             `json:"id,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"`
+	Method    string          `json:"method,omitempty"`
+	Params    json.RawMessage `json:"params,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Error     json.RawMessage `json:"error,omitempty"`
 }
 
-// call sends one browser-level command and returns its result, skipping events.
+// call sends one browser-level command (no session).
 func (c *cdp) call(method string, params json.RawMessage) (json.RawMessage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return c.callIn("", method, params)
+}
+
+// callIn sends one command, in session (a page's sessionId) or browser-level when session is empty,
+// and returns its result, or an error once cdpCallTimeout passes with no reply. A browser that stops
+// reading its pipe fails the write by the same deadline, where the writer can take one.
+func (c *cdp) callIn(session, method string, params json.RawMessage) (json.RawMessage, error) {
+	deadline := time.Now().Add(cdpCallTimeout)
+	ch := make(chan cdpMessage, 1)
+	c.wmu.Lock()
 	c.next++
 	id := c.next
-	msg, err := json.Marshal(cdpMessage{ID: id, Method: method, Params: params})
+	msg, err := json.Marshal(cdpMessage{ID: id, SessionID: session, Method: method, Params: params})
 	if err != nil {
+		c.wmu.Unlock()
 		return nil, err
 	}
-	if _, err := c.w.Write(append(msg, 0)); err != nil {
+	c.mu.Lock()
+	if c.readErr != nil {
+		err := c.readErr
+		c.mu.Unlock()
+		c.wmu.Unlock()
 		return nil, err
 	}
-	for {
-		line, err := readNUL(c.r)
-		if err != nil {
-			return nil, err
-		}
-		var in cdpMessage
-		if json.Unmarshal(line, &in) != nil || in.ID != id {
-			continue
+	c.waiting[id] = ch
+	c.mu.Unlock()
+	wd, canDeadline := c.w.(interface{ SetWriteDeadline(time.Time) error })
+	if canDeadline {
+		_ = wd.SetWriteDeadline(deadline)
+	}
+	_, err = c.w.Write(append(msg, 0))
+	if canDeadline {
+		_ = wd.SetWriteDeadline(time.Time{})
+	}
+	c.wmu.Unlock()
+	if err != nil {
+		c.forget(id)
+		return nil, err
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case in, ok := <-ch:
+		if !ok {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			return nil, c.readErr
 		}
 		if len(in.Error) > 0 {
 			return nil, fmt.Errorf("%s: %s", method, in.Error)
 		}
 		return in.Result, nil
+	case <-timer.C:
+		c.forget(id)
+		return nil, fmt.Errorf("%s: the browser did not answer within %s", method, cdpCallTimeout)
 	}
+}
+
+// forget drops the call waiting on id; a reply that comes later is dropped too.
+func (c *cdp) forget(id int) {
+	c.mu.Lock()
+	delete(c.waiting, id)
+	c.mu.Unlock()
 }
 
 func readNUL(r *bufio.Reader) ([]byte, error) {
@@ -86,10 +167,11 @@ func readNUL(r *bufio.Reader) ([]byte, error) {
 	}
 }
 
-// ctlRequest is one line on a control socket: a browser-level CDP command.
+// ctlRequest is one line on a control socket: a CDP command, browser-level unless the socket takes sessions.
 type ctlRequest struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params,omitempty"`
+	Method    string          `json:"method"`
+	Params    json.RawMessage `json:"params,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
 }
 
 type ctlReply struct {
@@ -98,8 +180,11 @@ type ctlReply struct {
 }
 
 // serveCtl answers ctlRequests on sock (mode 0600, inside a 0700 directory)
-// until the listener closes.
-func serveCtl(ln net.Listener, c *cdp) {
+// until the listener closes. The agent's socket also takes session-level
+// commands (a sessionId from Target.attachToTarget with flatten), so an agent
+// automates its pages here and never over a port (#2970); the person's stays
+// browser-level.
+func serveCtl(ln net.Listener, c *cdp, sessions bool) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -112,7 +197,11 @@ func serveCtl(ln net.Listener, c *cdp) {
 			if err := json.NewDecoder(io.LimitReader(conn, 1<<20)).Decode(&req); err != nil {
 				return
 			}
-			res, err := c.call(req.Method, req.Params)
+			if req.SessionID != "" && !sessions {
+				_ = json.NewEncoder(conn).Encode(ctlReply{Error: "this control socket takes browser-level commands only"})
+				return
+			}
+			res, err := c.callIn(req.SessionID, req.Method, req.Params)
 			rep := ctlReply{Result: res}
 			if err != nil {
 				rep.Error = err.Error()
@@ -135,15 +224,20 @@ func listenCtl(sock string) (net.Listener, error) {
 	return ln, nil
 }
 
-// ctlCall sends one command to the control socket at sock.
+// ctlCall sends one browser-level command to the control socket at sock.
 func ctlCall(sock, method string, params json.RawMessage) (json.RawMessage, error) {
+	return ctlCallIn(sock, "", method, params)
+}
+
+// ctlCallIn sends one command to the control socket at sock, in session when it is not empty.
+func ctlCallIn(sock, session, method string, params json.RawMessage) (json.RawMessage, error) {
 	conn, err := net.DialTimeout("unix", sock, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("the browser is not running: %w", err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-	if err := json.NewEncoder(conn).Encode(ctlRequest{Method: method, Params: params}); err != nil {
+	if err := json.NewEncoder(conn).Encode(ctlRequest{Method: method, Params: params, SessionID: session}); err != nil {
 		return nil, err
 	}
 	var rep ctlReply
@@ -158,18 +252,20 @@ func ctlCall(sock, method string, params json.RawMessage) (json.RawMessage, erro
 
 // cmdCDP sends one browser-level command to the person's browser (as the
 // person) or, with --agent, to the agent's (as the agent), and prints the result.
+// --session ID, only with --agent, sends it in that page session.
 func cmdCDP(args []string, out io.Writer) error {
+	agent, session, args, err := cdpArgs(args)
+	if err != nil {
+		return err
+	}
 	sock := ctlSock
-	if len(args) > 0 && args[0] == "--agent" {
+	if agent {
 		if err := checkAgentUID(); err != nil {
 			return err
 		}
-		sock, args = agentCtlSock(), args[1:]
+		sock = agentCtlSock()
 	} else if err := checkPerson(); err != nil {
 		return err
-	}
-	if len(args) < 1 || len(args) > 2 {
-		return errors.New("usage: cdp [--agent] METHOD [PARAMS-JSON]")
 	}
 	var params json.RawMessage
 	if len(args) == 2 {
@@ -178,10 +274,31 @@ func cmdCDP(args []string, out io.Writer) error {
 		}
 		params = json.RawMessage(args[1])
 	}
-	res, err := ctlCall(sock, args[0], params)
+	res, err := ctlCallIn(sock, session, args[0], params)
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "%s\n", res)
 	return err
+}
+
+// cdpArgs splits cmdCDP's arguments: --agent, then --session ID (only after
+// --agent), then METHOD and an optional PARAMS-JSON.
+func cdpArgs(args []string) (agent bool, session string, rest []string, err error) {
+	usage := errors.New("usage: cdp [--agent [--session ID]] METHOD [PARAMS-JSON]")
+	if len(args) > 0 && args[0] == "--agent" {
+		agent, args = true, args[1:]
+		if len(args) > 0 && args[0] == "--session" {
+			if len(args) < 2 || args[1] == "" {
+				return false, "", nil, usage
+			}
+			session, args = args[1], args[2:]
+		}
+	} else if len(args) > 0 && args[0] == "--session" {
+		return false, "", nil, errors.New("--session goes with --agent")
+	}
+	if len(args) < 1 || len(args) > 2 {
+		return false, "", nil, usage
+	}
+	return agent, session, args, nil
 }

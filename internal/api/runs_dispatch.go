@@ -187,7 +187,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	// Codex's own sandbox, when the run's walls froze one (#2822).
 	codexFiles, cxErr := s.codexSandbox(ctx, run, sandboxEnv)
-	if apErr = cmp.Or(apErr, cxErr); apErr != nil {
+	browserFiles, brErr := s.browserLockdown(ctx, run)
+	if apErr = cmp.Or(apErr, cxErr, brErr); apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
 		// error) — logged here for the operator, never handed to the member
@@ -429,7 +430,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// The managed settings this run's autonomy level generates and the
 		// started harness's approval credential; nil for a run with neither, or
 		// on a runner that cannot deliver them.
-		ManagedFiles: slices.Concat(agentPolicy.files, codexFiles, credFiles, mcp.files),
+		ManagedFiles: slices.Concat(agentPolicy.files, codexFiles, credFiles, mcp.files, browserFiles),
 		Containers:   extras,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
@@ -596,7 +597,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// proxy config is final, so the host marks it carries describe the config the runner is sent.
 	envelope := effectivePolicyDatum{
 		RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
-		Provenance: p.Provenance,
+		Provenance: p.Provenance, LocalFolderLayers: p.LocalFolderLayers,
 	}
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
@@ -781,7 +782,7 @@ func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ce
 	}
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec)
-	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease)
+	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease) && s.keepRunLocalFolderWalls(ctx, run, envelope.LocalFolders, envelope.Provenance["local_folders"], envelope.LocalFolderLayers, stopLease)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

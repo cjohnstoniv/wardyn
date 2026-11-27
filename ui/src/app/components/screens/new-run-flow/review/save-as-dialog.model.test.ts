@@ -18,7 +18,7 @@ describe("the policy keys a policy may hold", () => {
     // internal/api TestTemplatePolicyKeysArePinned lists the same fifteen.
     expect(Object.keys(POLICY_KEY_PART).sort()).toEqual([
       "allow_all_egress", "allowed_domains", "allowed_methods", "data_out", "denied_domains", "eligible_grants",
-      "first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "host_rules", "llm_inspection", "max_holds", "outage", "recording",
+      "first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "host_rules", "llm_inspection", "local_folders", "max_holds", "outage", "recording",
       "refuse_ip_literals",
     ]);
   });

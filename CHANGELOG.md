@@ -20,6 +20,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   step in Operations, grant it the same on the table as soon as the migration has run. Until then no schedule can be made,
   and a person's run tasks or credentials erasure fails until the grant is given.
 - A policy can shorten, and an admin can lengthen up to 24 hours, how long a run's network keeps serving while Wardyn cannot be reached, and a policy can mark it strict or end unattended runs after an outage (#4082). This release records and carries the setting; pausing and ending at the allowance follow in a later release.
+- Sandbox browser lockdown (#2970): with `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run gets a Chromium
+  policy the agent cannot change, allowing only the extensions you list. `wardyn-signin browser` refuses debugging and
+  extension flags, and `wardyn-signin cdp --agent --session` drives a page without a debugging port.
+- The run's policy view, its Policy tab and `wardyn run policy` show each host-scoped secret that went in as its value, and why (#3741).
+- The run page shows a repository clone that was skipped or failed; images from this release report it (#3159).
+- A policy knob, `local_folders`, walls off folders from a person's computer (#2990). `deny_remote` keeps them off a run on another machine, `deny_pull` keeps the sandbox's changes from coming back, `max_push_mib` and `max_pull_mib` cap one sync session or pass, and `deny` adds ignore patterns. The boundary, a unit or a run's policy can set them; each refusal names the layer that set its wall.
+- `wardyn sync --git` of a repository with SHA-256 history makes a SHA-256 repository in the sandbox. A sandbox git older than 2.29 is refused with a sentence saying it cannot hold SHA-256 history.
+
+### Changed
+
+- `wardyn-signin browser` takes only `--headless` and start URLs, and starts Chromium with a fixed environment.
+
+### Security
+
+- A Linux VM guest now refuses a managed file whose directory the agent could replace, as the Docker runner already did.
+
+### Fixed
+
+- `wardyn sync --git` and `--pull-commits` across a SHA-1 and a SHA-256 repository stop before any fetch with a message naming both hashes, where git used to report a corrupted pack and could leave a partial pack behind; no laptop ref is written.
 
 ### Before you upgrade
 
@@ -100,6 +119,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no
   replica leads the sweeps that run once.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_clone_status` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run's
+  repository clone outcome is not recorded.
+- Set `local_folders` walls only once every control-plane replica runs this release: an older replica serves a run's folders without them.
 
 ## [0.11.0-rc.4] — 2026-11-26
 

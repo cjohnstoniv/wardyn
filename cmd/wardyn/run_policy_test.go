@@ -393,3 +393,31 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 		}
 	})
 }
+
+// A secret that went in as its value is listed after the changes, as comments, so the output stays a policy file.
+func TestRunPolicyHeaderLines_AsValue(t *testing.T) {
+	v := sdk.RunPolicyView{Source: sdk.RunPolicySource{Kind: "inline"}, Complete: true}
+	if got := strings.Join(runPolicyHeaderLines(v, ""), "\n"); strings.Contains(got, runPolicyAsValueHeader) {
+		t.Errorf("no entry, yet the heading is printed:\n%s", got)
+	}
+	v.SecretsAsValue = []sdk.RunPolicySecretAsValue{
+		{Kind: "env_secret", SecretName: "DEPLOY_TOKEN", Host: "api.example.com", Reason: "the host is not an exact entry of the run's allowlist"},
+		{Kind: "file_secret", Host: "git.example.com", Reason: "the host already carries another credential", Delivery: "runner_resident"},
+	}
+	got := strings.Join(runPolicyHeaderLines(v, ""), "\n")
+	want := "Went in as their value (no placeholder):\n" +
+		"  env_secret DEPLOY_TOKEN for api.example.com: the host is not an exact entry of the run's allowlist\n" +
+		"  file_secret (name hidden) for git.example.com, to the runner: the host already carries another credential"
+	if !strings.Contains(got, want) {
+		t.Errorf("header lines:\n%s\nwant to contain:\n%s", got, want)
+	}
+	view := recordedView()
+	view.SecretsAsValue = v.SecretsAsValue
+	out, err := execRunPolicy(t, policyViewServer(t, view, "alice", "alice"), view.RunID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "# Went in as their value (no placeholder):\n#   env_secret DEPLOY_TOKEN for api.example.com: ") {
+		t.Errorf("output:\n%s", out)
+	}
+}

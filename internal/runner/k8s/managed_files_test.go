@@ -499,3 +499,62 @@ func TestCreateSandbox_ASecretFileIsRefusedBesideAShareDrive(t *testing.T) {
 		t.Errorf("fsGroup = %d after a secret and a managed drive, want %d", got, agentFSGroup)
 	}
 }
+
+// The browser lockdown's file rides the same delivery: one read-only Secret volume mounted at
+// runner.ChromiumPolicyDir itself, with one item, its content in the run Secret (#2970). Nothing
+// here checks the image's /etc/chromium; that limit is documented.
+func TestCreateSandbox_DeliversTheChromiumPolicyReadOnly(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.12")
+	installAgentRunningReactor(t, cs)
+
+	const policy = `{"ExtensionInstallBlocklist":["*"]}`
+	spec := testSandboxSpec()
+	spec.ManagedFiles = []runner.ManagedFile{{Path: runner.ChromiumPolicyFile, Mode: 0o644, Content: []byte(policy)}}
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	sec, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get run secret: %v", err)
+	}
+	if got := string(sec.Data[managedFileDataKey(0)]); got != policy {
+		t.Errorf("secret key %q = %q, want the policy", managedFileDataKey(0), got)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if strings.Contains(podSpecString(pod), "ExtensionInstallBlocklist") {
+		t.Error("the policy's content is in the pod spec; it rides the run Secret")
+	}
+
+	main, ok := findContainer(pod.Spec.Containers, mainContainerName)
+	if !ok {
+		t.Fatal("no main container")
+	}
+	var mounts []corev1.VolumeMount
+	for _, m := range main.VolumeMounts {
+		if m.MountPath == runner.ChromiumPolicyDir {
+			mounts = append(mounts, m)
+		}
+	}
+	if len(mounts) != 1 {
+		t.Fatalf("%d mounts at %s, want exactly one (mounts: %+v)", len(mounts), runner.ChromiumPolicyDir, main.VolumeMounts)
+	}
+	if m := mounts[0]; !m.ReadOnly || m.SubPath != "" || m.SubPathExpr != "" {
+		t.Fatalf("the policy mount = %+v, want read-only with no subPath", m)
+	}
+	vol := podVolume(pod, mounts[0].Name)
+	if vol == nil || vol.Secret == nil || vol.Secret.SecretName != secretName(spec.RunID) {
+		t.Fatalf("volume %q = %+v, want a Secret volume of the run Secret %q", mounts[0].Name, vol, secretName(spec.RunID))
+	}
+	if len(vol.Secret.Items) != 1 {
+		t.Fatalf("volume projects %d items, want exactly the policy: %+v", len(vol.Secret.Items), vol.Secret.Items)
+	}
+	if it := vol.Secret.Items[0]; it.Path != "wardyn.json" || it.Key != managedFileDataKey(0) || it.Mode == nil || *it.Mode != 0o644 {
+		t.Errorf("the policy item = %+v (mode %v), want wardyn.json from %q at 0644", it, it.Mode, managedFileDataKey(0))
+	}
+}

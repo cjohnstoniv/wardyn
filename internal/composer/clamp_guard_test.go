@@ -54,6 +54,7 @@ var clampRules = map[string]string{
 	"outage.unattended":                "end where the ceiling says end (clampOutage)",
 	"recording":                        "raised to the ceiling's level (clampRecording)",
 	"data_out":                         "raised to the ceiling's rule, and blocked denies every push (clampDataOut)",
+	"local_folders":                    "raised to the ceiling's walls (clampLocalFolders)",
 	"push_rules.deny_paths":            "the ceiling's unioned in (clampPushRules)",
 	"push_rules.max_inspect_pack_mib":  "capped at the ceiling's (clampPushRules)",
 	"push_rules.require_review_paths":  "the ceiling's unioned in (clampPushRules)",

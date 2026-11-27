@@ -64,6 +64,8 @@ type createRunLaunch struct {
 	overridden bool
 	// provenance: which layer set each value of the run's policy (policy_source.knobs).
 	provenance knobProvenance
+	// localFolderLayers: each local_folders wall's layer (policy_source's in-memory localFolderLayers).
+	localFolderLayers map[string]types.LocalFolderWallLayer
 	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
 	pushSets []types.PushRuleSet
 	// harnessRules are the run's tool rules per included harness (applyHarnessToolRules).
@@ -89,7 +91,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	return createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
 		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), portalDrives: portalDriveMounts(f.drives, created.CreatedVia), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
-		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
+		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, localFolderLayers: f.source.localFolderLayers, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 		signinImageUngranted: f.signinImageUngranted, machine: f.machine,
 	}
@@ -193,7 +195,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			UserMounts:       s.userMountPosture(l.wsRefs),
 			Components:       l.comps.dispatchWith(l.gw.githubAPI),
 			PolicyOverridden: l.overridden,
-			Provenance:       l.provenance,
+			Provenance:       l.provenance, LocalFolderLayers: l.localFolderLayers,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,

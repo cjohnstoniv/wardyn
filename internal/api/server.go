@@ -206,6 +206,9 @@ type Config struct {
 	// person's sign-in store and the proxy's sign-in lane, and its owner may sign in to websites there
 	// (run_desktop_signin.go). Off by default.
 	DesktopSignins bool
+	// BrowserPolicy is the Chromium managed policy WARDYN_BROWSER_LOCKDOWN=on delivers into every run
+	// (run_browser_lockdown.go); nil when the lockdown is off.
+	BrowserPolicy []byte
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".

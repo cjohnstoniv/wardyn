@@ -51,6 +51,7 @@ var leqRules = map[string]string{
 	"outage.unattended":                "a ends unattended runs where b does",
 	"recording":                        "a records at least what b does",
 	"data_out":                         "a is at least as strict as b, unset read as allowed",
+	"local_folders":                    "a is at least as strict as b, an omitted field read as no wall",
 	"push_rules.deny_paths":            "a keeps every path of b",
 	"push_rules.max_inspect_pack_mib":  "a is no looser cap than b, after the default under an active rule",
 	"push_rules.require_review_paths":  "a keeps every path of b",

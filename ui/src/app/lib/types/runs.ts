@@ -17,7 +17,7 @@ import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
 import type { RunService, RunServiceStatus } from "./run-service";
-import type { RunComputerFolder } from "./runs-folder";
+import type { LocalFolderWallLayer, RunComputerFolder } from "./runs-folder";
 import type { ImageAdmissionVerdict } from "./image-admission";
 import type { RunnerPoolSelection } from "./runner-pools";
 import type { RunMachine } from "./kept-machine";
@@ -89,7 +89,7 @@ export type RunState =
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
 
-export type { RunComputerFolder, RunFolderPass, ComputerFolderFate, ComputerFolderSandboxCopy, ComputerFolderLastReport } from "./runs-folder";
+export type { RunComputerFolder, RunFolderPass, ComputerFolderFate, ComputerFolderSandboxCopy, ComputerFolderLastReport, LocalFolderWallLayer, FolderWallsView } from "./runs-folder";
 export type { RunService, RunServiceProbe, RunServiceStatus, ServiceHealth, ServiceHealthState } from "./run-service";
 
 /** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
@@ -538,8 +538,16 @@ export interface RunSyncOpen {
 export interface RunSync {
   open: RunSyncOpen[];
   // deny is the organisation's WARDYN_SYNC_DENY patterns, which `wardyn sync`
-  // applies above every ignore file; the console does not show it yet.
+  // applies above every ignore file; the console does not show it yet. With the run's folder walls it also holds
+  // the run's own patterns.
   deny?: string[];
+  // The run's folder walls (runSyncViewFor): the size caps in bytes for one session, deny_pull with the sentence
+  // `wardyn sync --pull` exits with, and each wall's layer by wall name.
+  max_push_bytes?: number;
+  max_pull_bytes?: number;
+  deny_pull?: boolean;
+  deny_pull_text?: string;
+  wall_layers?: Record<string, LocalFolderWallLayer>;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that endpoint sends (handleGetRun's anonymous
@@ -729,6 +737,20 @@ export interface RunPolicyView {
   inspection_left_to?: string[]; // each model provider whose gateway checks the run's prompts itself, by name
   wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
   pushes_unstoppable?: boolean; // the broker is off and the capability list leaves out code_write: a git token in the sandbox can still push
+  // Each host-scoped secret that went in as its value although a placeholder switch was on; the newest row per secret.
+  secrets_as_value?: RunPolicySecretAsValue[];
+  // Set when more than 50 matched; the list holds the first 50.
+  secrets_as_value_truncated?: boolean;
+}
+
+// internal/api/run_policy_as_value.go runPolicySecretAsValue. secret_name is absent below the security admin tier.
+export interface RunPolicySecretAsValue {
+  kind: string; // env_secret | file_secret
+  secret_name?: string;
+  host: string;
+  cause?: string; // absent on a row written before causes existed
+  reason: string;
+  delivery?: string; // runner_resident for a value the runner got
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

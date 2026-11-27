@@ -147,6 +147,7 @@ var namespaceCensusColumns = []censusColumn{
 var namespaceCensusExempt = map[string]string{
 	"inbound_trusts.subject":                    "an outside provider's sub claim, matched as bytes; never a Wardyn principal",
 	"portal_issuers.created_by":                 "the admin who bound the issuer; this table is the registry the census consults",
+	"run_clone_status.repos":                    "a run's own repository folders and clone outcomes; no person list",
 	"run_support_grants.owner_email":            "an email address; a principal is never stored in it",
 	"runner_pending_actions.subject":            "the action's subject kind (run or asserted), not a person",
 	"runner_registration_tokens.owner_kind":     "a kind word, not a principal",
@@ -161,6 +162,7 @@ var namespaceCensusExempt = map[string]string{
 	"agent_runs.inner_walls":                    "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.local_folder":                   "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.local_folder_status":            "a run's own settings and recorded state, not a list that names people",
+	"agent_runs.local_folder_walls":             "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.model_allowlists":               "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.policy_generations":             "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.run_limits":                     "a run's own settings and recorded state, not a list that names people",

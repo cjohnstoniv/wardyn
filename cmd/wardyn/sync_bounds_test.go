@@ -7,13 +7,18 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/foldersync"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -89,5 +94,93 @@ func TestCappedBuffer_KeepsAtMost64KiBAndDrains(t *testing.T) {
 	}
 	if got := len(b.String()); got != 64<<10 {
 		t.Errorf("kept %d bytes, want %d", got, 64<<10)
+	}
+}
+
+// The run's pull cap bounds a pass when it is smaller than the flag's, and never raises it; no cap leaves the flag.
+func TestSyncMaxPullBytesTakesTheRunCap(t *testing.T) {
+	for _, tc := range []struct{ flag, run, want int64 }{
+		{foldersync.DefaultMaxPullBytes, 10 << 20, 10 << 20},
+		{5 << 20, 10 << 20, 5 << 20},
+		{5 << 20, 0, 5 << 20},
+	} {
+		f := syncFlags{maxPullBytes: tc.flag, pull: true}
+		if err := applySyncRules(&f, sdk.RunSyncRules{MaxPullBytes: tc.run}); err != nil || f.maxPullBytes != tc.want {
+			t.Errorf("flag %d, run cap %d: %d, %v; want %d", tc.flag, tc.run, f.maxPullBytes, err, tc.want)
+		}
+	}
+}
+
+// denyPullText is the server's --pull sentence for a run whose walls keep the sandbox's changes in.
+const denyPullText = "local_folder: bringing the sandbox's changes back to your computer is walled off by the Wardyn boundary"
+
+// syncUnderDenyPull runs `wardyn sync` with flag against a run whose walls keep the sandbox's changes in, and
+// returns how many times it dialed the gateway and its error.
+func syncUnderDenyPull(t *testing.T, flag string) (int32, error) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var dialed atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dialed.Add(1)
+			_ = c.Close()
+		}
+	}()
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/runs/") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"sync": map[string]any{"deny_pull": true, "deny_pull_text": denyPullText}})
+			return
+		}
+		host, port, _ := net.SplitHostPort(ln.Addr().String())
+		_ = json.NewEncoder(w).Encode(map[string]any{"ssh": map[string]any{
+			"enabled": true, "advertise_addr": net.JoinHostPort(host, port), "host_key_fingerprint": "SHA256:none",
+		}})
+	}))
+	t.Cleanup(web.Close)
+	t.Setenv("HOME", t.TempDir())
+	cmd := syncCmd(func() *sdk.Client { return &sdk.Client{BaseURL: web.URL, HTTPClient: web.Client()} })
+	cmd.SetArgs([]string{testRunID, t.TempDir(), flag})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	err = cmd.Execute()
+	return dialed.Load(), err
+}
+
+// A --pull sync of a run whose walls keep the sandbox's changes in exits with the server's sentence before it
+// connects to the gateway; without --pull it goes on.
+func TestSyncPullRefusedBeforeConnect(t *testing.T) {
+	dialed, err := syncUnderDenyPull(t, "--pull")
+	if err == nil || err.Error() != denyPullText {
+		t.Fatalf("sync --pull = %v, want %q", err, denyPullText)
+	}
+	if dialed != 0 {
+		t.Errorf("the gateway was dialed %d times before the refusal", dialed)
+	}
+	f := syncFlags{maxPullBytes: foldersync.DefaultMaxPullBytes}
+	if err := applySyncRules(&f, sdk.RunSyncRules{DenyPull: true, DenyPullText: denyPullText}); err != nil {
+		t.Errorf("a push-only sync was refused: %v", err)
+	}
+}
+
+// A --pull-commits sync brings the sandbox's commits back, so a run whose walls keep its changes in refuses it the
+// same way, before it connects.
+func TestSyncPullCommitsRefusedBeforeConnect(t *testing.T) {
+	dialed, err := syncUnderDenyPull(t, "--pull-commits")
+	if err == nil || err.Error() != denyPullText {
+		t.Fatalf("sync --pull-commits = %v, want %q", err, denyPullText)
+	}
+	if dialed != 0 {
+		t.Errorf("the gateway was dialed %d times before the refusal", dialed)
+	}
+	f := syncFlags{maxPullBytes: foldersync.DefaultMaxPullBytes, pullCommits: true}
+	if err := applySyncRules(&f, sdk.RunSyncRules{DenyPull: true, DenyPullText: denyPullText}); err == nil || err.Error() != denyPullText {
+		t.Errorf("applySyncRules with --pull-commits = %v, want the refusal", err)
 	}
 }

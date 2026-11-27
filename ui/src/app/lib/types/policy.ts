@@ -363,6 +363,8 @@ export interface RunPolicySpec {
   recording?: RecordingLevel;
   // The run's rule for content leaving it (mirrors Go's RunPolicySpec.DataOut). Absent is allowed.
   data_out?: "allowed" | "review" | "blocked";
+  // The walls for folders from a person's computer (mirrors Go's RunPolicySpec.LocalFolders). Absent is none.
+  local_folders?: LocalFolderRules;
 }
 
 // review (download only): each download waits for a person's yes on that file (Go's types.TransferReview).
@@ -380,6 +382,17 @@ export interface OutageControls {
   allowance_minutes?: number;
   strict?: boolean;
   unattended?: "" | "keep" | "end";
+}
+
+// Mirrors Go's types.LocalFolderRules. They only narrow: a deny stays set, a cap only shrinks, patterns only add.
+export interface LocalFolderRules {
+  deny_remote?: boolean;
+  deny_pull?: boolean;
+  // The most MiB one sync session sends in (push) or brings back (pull); absent or 0 is no cap.
+  max_push_mib?: number;
+  max_pull_mib?: number;
+  // Ignore patterns added to the deployment's WARDYN_SYNC_DENY.
+  deny?: string[];
 }
 
 /** Go: types.RecordingLevel. */

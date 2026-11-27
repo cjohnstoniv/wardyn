@@ -246,6 +246,8 @@ type RunPolicySpec struct {
 	Recording RecordingLevel `json:"recording,omitempty"`
 	// DataOut is the run's rule for content leaving it (docs/POLICIES.md#data_out). "" is allowed.
 	DataOut TransferRule `json:"data_out,omitempty"`
+	// LocalFolders are the walls for folders from a person's computer (docs/POLICIES.md#local_folders). nil is none.
+	LocalFolders *LocalFolderRules `json:"local_folders,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice
@@ -504,6 +506,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 		pr.RequireReviewPaths = append([]string(nil), s.PushRules.RequireReviewPaths...)
 		out.PushRules = &pr
 	}
+	out.LocalFolders = s.LocalFolders.Clone()
 	return out
 }
 

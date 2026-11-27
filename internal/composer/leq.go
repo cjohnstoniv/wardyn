@@ -167,7 +167,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqDesktop(a.Desktop, b.Desktop) &&
 		leqOutage(a.Outage, b.Outage) &&
 		a.Recording.Rank() >= b.Recording.Rank() &&
-		leqDataOut(a.DataOut, b.DataOut)
+		leqDataOut(a.DataOut, b.DataOut) &&
+		a.LocalFolders.AtLeastAsStrict(b.LocalFolders)
 }
 
 // leqDesktop holds when no desktop direction of a is looser than b's (allowed < review < blocked,

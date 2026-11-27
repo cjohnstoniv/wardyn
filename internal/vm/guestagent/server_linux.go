@@ -362,6 +362,9 @@ func (s *Server) writeFile(f File) error {
 	if strings.Contains(f.Path, "..") {
 		return fmt.Errorf("managed file %q has \"..\" in its path", f.Path)
 	}
+	if err := ceilingParents(filepath.Dir(f.Path)); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
 		return err
 	}

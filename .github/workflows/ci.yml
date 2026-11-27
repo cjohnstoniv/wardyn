@@ -2920,6 +2920,12 @@ jobs:
           DOCKER_HOST: unix:///var/run/docker.sock
           IMAGE: wardyn/agent-novnc-signin:trivy-scan
         run: ./scripts/test-image-novnc-signin.sh
+      - name: Browser lockdown image gate against the built image
+        if: env.TRIVY_IMAGE == 'agent-novnc-signin'
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+          IMAGE: wardyn/agent-novnc-signin:trivy-scan
+        run: ./scripts/test-image-browser-lockdown.sh
       # trivy-action's built-in cache (on by default) restores AND saves the
       # vulnerability DB on every event, so each PR run wrote seven PR-scoped
       # entries (issue #470). It is off here; the DB is restored below and saved

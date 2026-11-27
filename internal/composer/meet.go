@@ -251,6 +251,9 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if d := c.DataOut; d != nil && !types.ValidDataOut(*d) {
 		m.fail(ReasonOverlayInvalid, "data_out", "data_out: %q is not a rule; want allowed, review or blocked", *d)
 	}
+	if negativeLocalFolderCap(c.LocalFolders) {
+		m.fail(ReasonOverlayInvalid, "local_folders", "local_folders: a cap is a positive number of MiB")
+	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {
 		for _, p := range *d {

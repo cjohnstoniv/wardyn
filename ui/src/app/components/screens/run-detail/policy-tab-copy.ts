@@ -57,6 +57,25 @@ export const POLICY_TAB = {
   redacted: "Values shown as <redacted> are hidden from you. Fill them in before using this as a policy.",
 } as const;
 
+// Secrets that went in as their value although a placeholder switch was on (#3741). The board's strings, character
+// for character; asValueTruncated sits under the list when the server cut it at 50.
+export const AS_VALUE = {
+  heading: "Went in as their value",
+  lede: "Placeholders were on for this run, but these secrets were handed over as their real value. Each row says why.",
+  toRunner: "Sent to the runner",
+  asValueTruncated: "Showing the first 50.",
+} as const;
+
+// The cause token the server records, in the person's words. A row written before causes carries none, and one this
+// console does not know falls back to the row's own sentence.
+export const AS_VALUE_CAUSE: Record<string, string> = {
+  host_not_allowlisted: "This host is not an exact entry in the run's allowed hosts.",
+  host_taken: "This host already has another credential.",
+  value_multiline: "The value runs over more than one line, so it can't go in a request header.",
+  grant_unrecorded: "Wardyn could not record the grant that lets it swap the placeholder for the value.",
+  rule_invalid: "The rule that swaps the placeholder for the value could not be read.",
+};
+
 // S-14a / S-14b .. S-23: the change-group headings, one per cause. The three
 // that need a name or a date (S-14b, S-20, S-21) take it from the change.
 export const CHANGE_HEADING = {

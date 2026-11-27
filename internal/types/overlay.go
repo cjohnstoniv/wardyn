@@ -52,6 +52,7 @@ type CeilingOverlay struct {
 	Outage                  *OutageControls        `json:"outage,omitempty"`
 	Recording               *RecordingLevel        `json:"recording,omitempty"`
 	DataOut                 *TransferRule          `json:"data_out,omitempty"`
+	LocalFolders            *LocalFolderRules      `json:"local_folders,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.

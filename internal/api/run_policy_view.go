@@ -78,6 +78,8 @@ type policySourceRecord struct {
 	// knobs stays in memory: which layer set each value as the policy resolved,
 	// carried to the run.policy.resolve row (run_policy_provenance.go).
 	knobs knobProvenance
+	// localFolderLayers stays in memory: each local_folders wall's layer (stepLocalFolderWalls), for the envelope.
+	localFolderLayers map[string]types.LocalFolderWallLayer
 	// applyAudits stays in memory: the policy.*.apply rows a create writes once the run's row is
 	// inserted (recordPolicyApplyAudits), so a refusal before that leaves no row for a run that never began.
 	applyAudits []types.AuditEvent
@@ -130,6 +132,10 @@ type runPolicyResponse struct {
 	// code_write: a git token in the sandbox can still push. It is the decision behind unstoppablePushWarning, read from the
 	// spec the walls and the preset have already narrowed.
 	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
+	// SecretsAsValue is each host-scoped secret that went into the sandbox, or to the runner, as its value although a
+	// placeholder switch was on, and why (#3741). SecretsAsValueTruncated is set when more than 50 did; the list holds the first 50.
+	SecretsAsValue          []runPolicySecretAsValue `json:"secrets_as_value,omitempty"`
+	SecretsAsValueTruncated bool                     `json:"secrets_as_value_truncated,omitempty"`
 }
 
 type runPolicyWallPreset struct {
@@ -266,6 +272,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
 	tier := s.specReadTierFor(ctx)
+	s.fillSecretsAsValue(ctx, run.ID, tier, &resp)
 	out := redactSpecForRead(served, tier)
 	if out.LLMInspection != nil {
 		li := *out.LLMInspection

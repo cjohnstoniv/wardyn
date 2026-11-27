@@ -437,6 +437,23 @@ Not yet: live sync, and **Pause sync**.
 For now this needs a single-replica deployment: with several replicas, a runner connected to another replica reads as
 offline.
 
+### Organisation walls for folders
+
+An organisation can wall off folders from a person's computer with the policy knob
+[`local_folders`](../POLICIES.md#local_folders), set on the boundary, a unit or a run's policy. It covers `wardyn sync`
+folders and the folders above.
+
+- `deny_remote` refuses a folder from your computer for a run on another machine. A `wardyn sync` folder needs
+  `--placement local` and a run on your own runner.
+- `deny_pull` keeps the sandbox's changes from coming back: **Both ways** is refused at create, the pass back and
+  `wardyn folder bring-back` are refused, and `wardyn sync --pull` stops before it connects.
+- `max_push_mib` and `max_pull_mib` cap one sync session or one pass. The size limits count per session: a new session
+  or pass starts again at zero.
+- `deny` adds ignore patterns to `WARDYN_SYNC_DENY`. `wardyn sync` and the runner skip a matching path.
+- Each refusal names the layer that set its wall. The run detail shows when a pass back is walled off, and why.
+- The walls are kept on the run when it starts; a change reaches runs started after it.
+- Set `local_folders` walls only once every control-plane replica runs this release.
+
 ## A workspace folder on your runner
 
 A workspace folder can live on your computer: the `local_dir` source names your runner, and its runs run only there.
