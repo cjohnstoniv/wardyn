@@ -101,6 +101,7 @@ type mcpServer struct {
 	port    int
 	path    string // the URL's path, which a gateway identity route's prefix is matched against
 	grantID *uuid.UUID
+	relay   *MCPRelayTarget // a server in its own sandbox (mcp_relay.go); nil for a remote one
 
 	mu        sync.Mutex
 	header    injectedHeader
@@ -114,6 +115,10 @@ func newMCPBroker(servers []MCPServerConfig, bindings []MCPBinding) *mcpBroker {
 	}
 	b := &mcpBroker{servers: map[string]*mcpServer{}, bindings: bindings}
 	for _, s := range servers {
+		if s.Relay != nil {
+			b.servers[s.Key] = newMCPRelayServer(s)
+			continue
+		}
 		u, _ := url.Parse(s.URL)
 		port := 443
 		if u.Port() != "" {
@@ -224,7 +229,8 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	// A server on the host and port of an identity route that does not cover it is not sent, as on the
 	// other lanes (gatewayOffRouteRefused): there the proxy sends only what carries the token. It is
 	// refused before the body is read, so no call to it is held for a person first (holdApproveEach).
-	if cause := p.gatewayOffRouteCause(x.server.host, x.server.port, x.server.path); cause != "" {
+	// A relay server is on no identity route: it is a literal address on the run's relay link.
+	if cause := p.gatewayOffRouteCause(x.server.host, x.server.port, x.server.path); x.server.relay == nil && cause != "" {
 		if p.sink != nil {
 			log := decisionLog(x.req, egress.Deny, ruleSourceMCPCredential)
 			log.Cause = cause
@@ -235,7 +241,7 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	// A route there that covers the server but is another destination's is refused here as forward
 	// refuses it, before the body is read: no person is asked and no credential is resolved first.
-	if rt := p.gatewayRouteFor(x.server.host, x.server.port, x.server.path); rt != nil && rt.MCPKey != x.server.key {
+	if rt := p.gatewayRouteFor(x.server.host, x.server.port, x.server.path); x.server.relay == nil && rt != nil && rt.MCPKey != x.server.key {
 		x.emit(egress.Deny, ruleSourceMCPCredential)
 		p.httpError(w, "the MCP server's gateway identity route is not its own", errors.New("another destination's route covers this server"), http.StatusBadGateway)
 		return
@@ -527,6 +533,10 @@ func writeJSONStatus(w http.ResponseWriter, status int, contentType string, v an
 // and internal hosts as configured). A redirect is refused, never followed.
 func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	p, s := x.p, x.server
+	if s.relay != nil {
+		x.forwardRelay(w, body)
+		return
+	}
 	target, ok := x.vetTarget(w)
 	if !ok {
 		return
@@ -549,6 +559,9 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	stripSandboxCredentials(out.Header, "")
 	// An MCP server gets the call id on a run with a gateway route, and the identity token only on its own route.
 	p.stripGatewayHeaders(out.Header)
+	if !x.mcpCallHeaders(w, out.Header, body) {
+		return
+	}
 	if s.grantID != nil {
 		hdr, ok := x.credential(w)
 		if !ok {
@@ -720,6 +733,12 @@ func (c *Config) validateMCP() error {
 	for i, s := range c.MCPServers {
 		if !mcpServerKeyRE.MatchString(s.Key) || slices.ContainsFunc(c.MCPServers[:i], func(o MCPServerConfig) bool { return o.Key == s.Key }) {
 			return fmt.Errorf("config: mcp_servers[%d].key: %q is not a unique server key", i, s.Key)
+		}
+		if s.Relay != nil {
+			if err := s.validateRelay(); err != nil {
+				return fmt.Errorf("config: mcp_servers[%d]: %w", i, err)
+			}
+			continue
 		}
 		d, err := types.MCPURLDestination(s.URL)
 		if err != nil {

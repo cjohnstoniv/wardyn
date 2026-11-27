@@ -25,18 +25,23 @@ var nestedFields = map[reflect.Type][]string{
 		"PushRuleSets PushRuleBase ForgeHosts ActivityIgnoreHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		// LiveDenies is the hosts a live egress edit denied: it only narrows egress and carries no credential.
-		"VM PortRule SigninListen NoNetwork LiveDenies Outage"),
-	reflect.TypeFor[proxy.OutageConfig]():         strings.Fields("AllowanceS Strict"),
-	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
-	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
-	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
-	reflect.TypeFor[proxy.ViaOrgRoute]():          strings.Fields("GrantID Host"),
-	reflect.TypeFor[proxy.MCPApproveEachConfig](): strings.Fields("Windows SendOnce"),
-	reflect.TypeFor[proxy.GatewayIdentityRoute](): strings.Fields("Host Port PathPrefix ProviderID MCPKey Audience ProviderUID InspectionDeferred"),
-	reflect.TypeFor[proxy.ResidentMint]():         strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt Host"),
-	reflect.TypeFor[proxy.MCPServerConfig]():      strings.Fields("Key URL GrantID Ordinal"),
-	reflect.TypeFor[proxy.MCPBinding]():           strings.Fields("Harness SHA256 Servers"),
-	reflect.TypeFor[types.LocalModelSettings]():   strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
+		// ControlPlaneAudience and MCPRelayInbound are an MCP sandbox's proxy's: its token's audience, and its relay
+		// listener with the relay token's digest, never the token. Neither is a credential. RelayScrubValues is the
+		// same proxy's list of its MCP server's own secret values, to scrub from answers; a run's proxy is refused it.
+		"VM PortRule SigninListen NoNetwork LiveDenies Outage ControlPlaneAudience MCPRelayInbound RelayScrubValues"),
+	reflect.TypeFor[proxy.OutageConfig]():          strings.Fields("AllowanceS Strict"),
+	reflect.TypeFor[proxy.InjectionConfig]():       strings.Fields("InjectionRule GrantID"),
+	reflect.TypeFor[proxy.DecisionSinkConfig]():    strings.Fields("URL SPKISHA256 Key"),
+	reflect.TypeFor[proxy.HardDenyConfig]():        strings.Fields("Suffixes Hosts CIDRs"),
+	reflect.TypeFor[proxy.ViaOrgRoute]():           strings.Fields("GrantID Host"),
+	reflect.TypeFor[proxy.MCPApproveEachConfig]():  strings.Fields("Windows SendOnce"),
+	reflect.TypeFor[proxy.GatewayIdentityRoute]():  strings.Fields("Host Port PathPrefix ProviderID MCPKey Audience ProviderUID InspectionDeferred"),
+	reflect.TypeFor[proxy.ResidentMint]():          strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt Host"),
+	reflect.TypeFor[proxy.MCPServerConfig]():       strings.Fields("Key URL GrantID Ordinal Relay"),
+	reflect.TypeFor[proxy.MCPRelayTarget]():        strings.Fields("Addr Token"),
+	reflect.TypeFor[proxy.MCPRelayInboundConfig](): strings.Fields("Listen TokenSHA256 Upstream"),
+	reflect.TypeFor[proxy.MCPBinding]():            strings.Fields("Harness SHA256 Servers"),
+	reflect.TypeFor[types.LocalModelSettings]():    strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[LocalPlan](): strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust OwnerKind RequireManagedDevice MachineKind MachineKindDenials MacOSHostGateLater " +
 		"SiteID SiteName"),
 	reflect.TypeFor[types.MachineKindDenial]():    strings.Fields("Trust MachineKind SiteID"),

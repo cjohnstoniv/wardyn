@@ -76,6 +76,7 @@ COPY . .
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-proxy ./cmd/wardyn-proxy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-vmnet ./cmd/wardyn-vmnet
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-mcp-host ./cmd/wardyn-mcp-host
 
 # Runtime stage: $TARGETPLATFORM, COPY-only — no QEMU needed for arm64.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
@@ -108,6 +109,7 @@ LABEL io.wardyn.proxy.ready-marker="1" \
 
 COPY --from=builder /out/wardyn-proxy /usr/local/bin/wardyn-proxy
 COPY --from=builder /out/wardyn-vmnet /usr/local/bin/wardyn-vmnet
+COPY --from=builder /out/wardyn-mcp-host /usr/local/bin/wardyn-mcp-host
 
 # Corporate build support, runtime half (see the builder stage above and
 # docs/adoption/corp-image-authoring.md's "Corporate-build convention"): this

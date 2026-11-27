@@ -25,6 +25,7 @@
 | `wardyn-guest-agent` | Inside a Linux VM sandbox: how `wardyn-runnerd` reaches the guest (harness launch, terminals, exec, files, folder shares). No network listener. |
 | `wardyn-macvm` | Per-VM helper behind macOS VM sandboxes; also builds the Mac's base image. |
 | `wardyn-vmnet` | A desktop VM's network relay: hands each connection to the run's `wardyn-proxy` and drops the rest. |
+| `wardyn-mcp-host` | Inside a local MCP server's own sandbox: starts the server with no shell and serves it to that sandbox's `wardyn-proxy`, the only way in. Shipped in the proxy image. |
 | `wardyn-signin` | The desktop image's sign-in helper: the person signs in to websites in their own browser while the agent is stopped. |
 | `wardyn` | CLI (`wardyn --help` lists every group); see [below](#wardyn-role). |
 
