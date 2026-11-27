@@ -309,6 +309,14 @@ git checkout -q -b train/outer "$CIBASE"; git merge -q --no-ff -m "Merge sub" su
 # a release/** destination: its own tip, a clean tag merge into it
 git checkout -q -b release/0.11 "$CIBASE"; printf 'release only\n' >REL.txt; commit "release only"; RELBASE="$(git rev-parse HEAD)"
 git checkout -q -b train/rel "$RELBASE"; tagmerge; TRAINREL="$(git rev-parse HEAD)"
+# released history must pass: only v0.10.4 merged on the first parent (v0.10.3 is below its second parent) ...
+git checkout -q rel
+printf '# Changelog\n\n## [Unreleased]\n\n## [0.10.4]\n\n- later patch line\n\n## [0.10.3]\n\n- patch line\n\n## [0.10.2]\n\n- old entry\n' >CHANGELOG.md
+commit patch4; git tag -a -m v0.10.4 v0.10.4
+git checkout -q -b train/two "$CIBASE"; git merge -q --no-ff -m "Merge tag v0.10.4" v0.10.4; TRAINTWO="$(git rev-parse HEAD)"
+# ... and a tag a published 0.11 candidate already contains, reached through a sub-train's merge
+git checkout -q -b train/rc "$CIBASE"; git merge -q --no-ff -m "Merge sub, as an earlier candidate did" sub; git tag v0.11.0-rc.1
+printf 'later\n' >later2.txt; commit "after the candidate"; TRAINRC="$(git rev-parse HEAD)"
 step() {  # step HEAD_REF PR_HEAD [BASE]: with the PR head checked out, as the runner has it (attributes read from the base)
   git checkout -q --detach "$2"
   HEAD_REF="$1" BASE_SHA="${3:-$CIBASE}" PR_HEAD="$2" GIT_ATTR_SOURCE="${3:-$CIBASE}" RUNNER_TEMP="$TMP/rt" bash -e "$STEP" >"$out" 2>&1
@@ -333,6 +341,9 @@ want_step 1 "train route with a later .gitattributes, PR head checked out" train
 grep -q 'may not change a .gitattributes' "$out" || fail "ci step: .gitattributes not refused: $(cat "$out")"
 want_step 1 "train route with the tag merged on a sub-train" train/outer "$TRAINSUB"
 grep -q 'v0.10.3 is in train/outer but not through a first-parent tag merge' "$out" || fail "ci step: side-branch tag not named: $(cat "$out")"
+want_step 0 "train route with v0.10.3 below the merged v0.10.4" train/two "$TRAINTWO"
+grep -q 'tag merge .* (v0.10.4)' "$out" && grep -q 'forward-port-check: PASS' "$out" || fail "ci step: v0.10.4 tag merge not checked: $(cat "$out")"
+want_step 0 "train route whose sub-train tag is inside a published v0.11 candidate" train/rc "$TRAINRC"
 want_step 0 "train route into a release/** base" train/rel "$TRAINREL" "$RELBASE"
 grep -q 'forward-port-check: PASS' "$out" || fail "ci step: release/** route printed no PASS: $(cat "$out")"
 cd "$TMP"

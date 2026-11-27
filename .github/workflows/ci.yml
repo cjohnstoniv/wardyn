@@ -3406,11 +3406,11 @@ jobs:
                 echo "a train/* head may not change a .gitattributes: it can mark a file -diff and hide a loss" >&2; exit 1
               fi
               MERGES="$(git rev-list --first-parent --merges "$BASE_SHA..$PR_HEAD")"
-              n=0; CHECKED=" "
+              n=0; CHECKED=" "; CHECKED2=""
               for M in $MERGES; do
                 T="$({ git tag --list 'v0.10.*' --points-at "$M^2" | grep -xE 'v0\.10\.[0-9]+' || true; } | head -1)"
                 [ -n "$T" ] || continue
-                n=$((n + 1)); V="${T#v}"; CHECKED="$CHECKED$T "
+                n=$((n + 1)); V="${T#v}"; CHECKED="$CHECKED$T "; CHECKED2="$CHECKED2 $M^2"
                 [ "$n" -gt 1 ] || fpc
                 echo "tag merge $M (v$V) on $HEAD_REF"
                 PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$M^1")"
@@ -3422,9 +3422,16 @@ jobs:
                 fi
                 bash "$RUNNER_TEMP/fpc.sh" --version "$V" --allow-dir "$ALLOW" "$PREV" "$M^1" "$M"
               done
-              # A tag that reached the head any other way (a side branch, a sub-train) has no merge to check.
+              # A tag that reached the head any other way (a side branch, a sub-train) has no merge to
+              # check. Not counted: one below a checked tag merge's second parent (the patch line's
+              # earlier tags), or one already inside a published 0.11+ tag (an earlier rc's train).
               for T in $(git tag --merged "$PR_HEAD" --no-merged "$BASE_SHA" -l 'v0.10.*' | { grep -xE 'v0\.10\.[0-9]+' || true; }); do
-                case "$CHECKED" in *" $T "*) ;; *) echo "$T is in $HEAD_REF but not through a first-parent tag merge: merge it on the train's first parent" >&2; exit 1 ;; esac
+                case "$CHECKED" in *" $T "*) continue ;; esac
+                for P in $CHECKED2; do
+                  if git merge-base --is-ancestor "$T^{commit}" "$P"; then continue 2; fi
+                done
+                [ -z "$(git tag --merged "$PR_HEAD" --contains "$T" -l 'v0.1[1-9].*')" ] || continue
+                echo "$T is in $HEAD_REF but not through a first-parent tag merge: merge it on the train's first parent" >&2; exit 1
               done
               [ "$n" -gt 0 ] || echo "no v0.10.* tag merge in $BASE_SHA..$PR_HEAD: nothing to check"
               ;;
