@@ -165,6 +165,7 @@ var namespaceCensusExempt = map[string]string{
 	"agent_runs.service_status":                 "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.vm_machine":                     "a run's own settings and recorded state, not a list that names people",
 	"machine_snapshots.vm_machine":              "a run's own settings and recorded state, not a list that names people",
+	"run_containers.containers":                 "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.wall_preset":                    "a run's own settings and recorded state, not a list that names people",
 	"api_tokens.groups":                         "group names or claim values, never a person principal",
 	"approvals.requested_scope":                 "a run's own settings and recorded state, not a list that names people",
