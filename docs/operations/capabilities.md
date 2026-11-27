@@ -24,7 +24,7 @@ the ADMIN pre-authorized.
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) |
-| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, take an SSH ticket (`ssh_key`, while `WARDYN_SSH_TICKETS` is on), mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
+| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner`, `inbound` or `gpu` | narrows | whether a member may add an SSH key, take an SSH ticket (`ssh_key`, while `WARDYN_SSH_TICKETS` is on), mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam) |
 | `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)) |
 
@@ -267,6 +267,7 @@ the ADMIN pre-authorized.
 - `service_attach` gates a service identity's sponsor entering one of its runs (a terminal or a UI app); see [`service_attach`](#service_attach).
 - `self_host_runner` gates a person minting a registration token for a runner of their own; see [`self_host_runner`](#self_host_runner).
 - `inbound` gates declaring a UI app that named callers can reach through the gateway; see [`inbound`](#inbound).
+- `gpu` gates asking for a GPU in a run; see [`gpu`](#gpu).
 - Any other value is refused at write time (`400`), except an allow of a lowercase snake_case name: it is stored inert and grants nothing until a release ships that feature, so it can be staged before upgrading.
 
 #### `service_attach`
@@ -300,6 +301,17 @@ the ADMIN pre-authorized.
 - A withdrawn grant refuses new runs and ends none already going.
 - It gates the declaration only. Calling an inbound app needs no grant: the callers a run names are the allow-list, and a profile's `deny_ui_apps` or `deny_interactive` removes the apps ([UI sandboxes](../UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port)).
 - Minting the inbound token a caller uses is the `api_token` door above, not this value.
+
+#### `gpu`
+
+- Off for everyone: migration `0430_run_gpu` restricts the value, so a `*` allow grants nobody.
+  - An allow that names `gpu` admits its subject. The grant for everyone is `POST /api/v1/permissions/grants` with `{"subject_type": "all", "capability": "feature", "value": "gpu", "effect": "allow"}`.
+  - A deny wins.
+- Asked when a request carries `gpu` (`nvidia` or `render`): at `POST /runs`, preflight and the policy preview. A refusal is `capability_feature` with the target `runs.gpu`.
+- Admins are not asked.
+- The grant is asked when the run starts. A later deny stops new GPU runs; end a running one to take its GPU away.
+  - A proxy-only revive, which is allowed, restores a run's network without asking again.
+- The grant is one of several conditions: the host must also offer the GPU ([`WARDYN_DOCKER_GPU`](../ENV.md#wardyn_docker_gpu)).
 
 ### `GET /permissions/explain`
 

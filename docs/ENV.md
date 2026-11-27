@@ -200,6 +200,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | on | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read. Proven on Docker; not tested on Podman. [Details](#wardyn_docker_proxy_sandbox_peers_only) |
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
+| `WARDYN_DOCKER_GPU` | list | (unset) | **`wardynd`, Docker substrate**: the GPU kinds runs may ask for: `nvidia` (CDI), `render` (`/dev/dri` render nodes), or both. Only CC1 runs on runc get one, for people granted the `gpu` feature. Not yet tried on a GPU host. [Details](#wardyn_docker_gpu) |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
 | `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**: escape hatch. Starts runs that are otherwise refused, whose agent can reach services on the Docker host. [Details](#wardyn_allow_host_reachable_run_network) |
 | `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` | int | `0` (= `2000`) | milli-CPU limit for a sandbox whose policy sets none, read by every fallback site through `runner.EffectiveLimits()` (flag `-sandbox-default-cpu-millis`). The Helm chart sets `1000`. [Details](#wardyn_sandbox_default_cpu_millis) |
@@ -815,6 +816,18 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset, a runner that is newer than its organisation keeps the old behaviour (any peer) until the organisation is upgraded, and logs that it did: the organisation's proxy image refuses `allowed_peers`.
 - Meanwhile `wardyn-runnerd doctor`'s status stage says `peers-only not in effect: organisation older`.
 - Set to `true`, such a run is refused instead.
+
+### `WARDYN_DOCKER_GPU`
+
+- Off by default: unset, no run is given a GPU.
+- `nvidia` hands in every GPU the host's CDI specs name (`nvidia.com/gpu=all`); `render` hands in the host's `/dev/dri` render nodes, never a card node, with each node's group.
+- The device must exist: the NVIDIA Container Toolkit's CDI specs, with Docker's CDI support on, or at least one `/dev/dri/renderD*` node.
+- Only CC1 runs on runc get a GPU. A daemon whose default runtime is `nvidia` (the toolkit's legacy setup) offers none; use CDI with runc.
+- Every GPU run on the host shares the device. Docker has no partitioning.
+- The grant is asked when the run starts. A later deny stops new GPU runs; end a running one to take its GPU away.
+- A GPU run whose agent stopped is not revived: start a new run.
+- A garbage value refuses boot.
+- Asking needs the [`gpu` grant](operations/capabilities.md#gpu). Not yet tried on a GPU host.
 
 ### `WARDYN_ALLOW_UNENFORCEABLE_CAPS`
 

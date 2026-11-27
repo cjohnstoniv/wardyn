@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Container runs can ask for a GPU (`gpu`: `nvidia` through CDI, or `render` for `/dev/dri` render nodes) on a Docker host whose operator sets `WARDYN_DOCKER_GPU`, for people granted the new `gpu` feature. CC1 runs only. Not yet tried on a GPU host. (#2958)
 - An optional mutual TLS check on the proxy-to-control-plane hop (`WARDYN_INTERNAL_MTLS`, off by default; needs the SPIRE identity provider and the Kubernetes runner); the run token is still checked on every request (#4074).
 
 ### Changed
