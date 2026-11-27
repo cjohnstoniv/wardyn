@@ -56,6 +56,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 - **How should it run?** (Agent task only): **Interactive** or **Autonomous**.
   - Interactive means you work in the sandbox, and one harness can start with it.
   - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**, plus **Schedule for later** when [scheduled runs](ENV.md#wardyn_scheduled_runs) are on.
+  - Under **Schedule for later**, **Repeat** makes it a [repeating schedule](operations/runner-pools.md#repeating-schedules): **Every day**, **Every weekday** or **Every week on** the first start's weekday, at a time in a zone. Review then says **Checked again at every start.**, and **Create schedule** makes it and opens **Schedules**.
 - **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
 - **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
 - **Keep it running** (a background automation on a container) restarts the command on failure and checks a port: [Services](SERVICES.md#start-a-service).

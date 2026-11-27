@@ -41,7 +41,7 @@ import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import { ViewGate, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
 import { appURL } from "./lib/base-path";
 import type { SetupStatus } from "./lib/types";
-import { NewRunRoute, RunDetailScreen, ApprovalsScreen, PoliciesScreen, BoundaryScreen, GovernanceScreen, ChangeReviewPage, DrivesScreen, ProvidersScreen, ImagesScreen, ComponentsScreen, TemplatesScreen, WorkloadsScreen, PermissionsScreen, UserTypesScreen, CredentialsScreen, PeopleScreen, RunnersScreen, PoolFormScreen, SecretsScreen, AdminSettingsScreen, YourAccountScreen, CliSignInScreen, OpenAppScreen, WorkspacesScreen, WorkspaceDetailScreen, AuditScreen, RecordingScreen, GettingStarted, ComposerScreen } from "./lazy-routes";
+import { NewRunRoute, RunDetailScreen, ApprovalsScreen, PoliciesScreen, BoundaryScreen, GovernanceScreen, ChangeReviewPage, DrivesScreen, ProvidersScreen, ImagesScreen, ComponentsScreen, TemplatesScreen, WorkloadsScreen, PermissionsScreen, UserTypesScreen, CredentialsScreen, PeopleScreen, RunnersScreen, PoolFormScreen, SecretsScreen, AdminSettingsScreen, YourAccountScreen, CliSignInScreen, OpenAppScreen, WorkspacesScreen, WorkspaceDetailScreen, AuditScreen, RecordingScreen, GettingStarted, ComposerScreen, SchedulesScreen } from "./lazy-routes";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
@@ -717,6 +717,7 @@ export default function App() {
                 AdminSettingsScreen/YourAccountScreen below. */}
             <Route path="/admin" element={<FirstRunLanding status={setupStatus} admin />} />
             <Route path="/admin/runs" element={<RunsScreen />} />
+            <Route path="/admin/runs/schedules" element={suspend(<SchedulesScreen />)} />
             <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
@@ -747,6 +748,7 @@ export default function App() {
             <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/runs" element={<RunsScreen />} />
+            <Route path="/runs/schedules" element={suspend(<SchedulesScreen />)} />
             <Route path="/compose" element={suspend(<ComposerScreen />)} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route

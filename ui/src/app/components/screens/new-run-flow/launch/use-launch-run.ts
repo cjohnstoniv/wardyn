@@ -11,6 +11,7 @@
 import * as React from "react";
 import { getAuthGeneration, HttpError, isSignedOutHold } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
+import { runSchedules, type NewRunSchedule } from "../../../../lib/api/run-schedules";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
 import { useDeferredBusy } from "../../../../lib/use-deferred-busy";
 import type { DraftIdentity } from "../draft/use-intent-checks";
@@ -49,7 +50,9 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     };
   }, []);
 
-  const launch = async (body: CreateRunWire) => {
+  // One request at a time, held to the person who pressed Launch: post answers through `still`, which is false
+  // once another person has signed in since.
+  const send = async (post: (still: () => boolean) => Promise<void>) => {
     const { principal, resolved, authGeneration } = latest.current.identity;
     if (inFlight.current || !resolved || !principal || authGeneration !== getAuthGeneration() || isSignedOutHold()) return;
     const auth = getAuthGeneration();
@@ -59,9 +62,7 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     setPolicy(undefined);
     setCreating(true);
     try {
-      const created = await runs.createRunWire(body);
-      // A run that was created is shown even when the dialog is gone; one made for another person never is.
-      if (still()) latest.current.onCreated(created);
+      await post(still);
     } catch (e) {
       if (!still() || !mounted.current) return;
       setRefusal(refusalText(e));
@@ -73,5 +74,18 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     }
   };
 
-  return { launch, creating, spinning, refusal, policy };
+  const launch = (body: CreateRunWire) =>
+    send(async (still) => {
+      const created = await runs.createRunWire(body);
+      // A run that was created is shown even when the dialog is gone; one made for another person never is.
+      if (still()) latest.current.onCreated(created);
+    });
+  // A repeating start: the schedule is made, and the caller moves to the Schedules screen.
+  const schedule = (body: NewRunSchedule, onScheduled: () => void) =>
+    send(async (still) => {
+      await runSchedules.create(body);
+      if (still()) onScheduled();
+    });
+
+  return { launch, schedule, creating, spinning, refusal, policy };
 }

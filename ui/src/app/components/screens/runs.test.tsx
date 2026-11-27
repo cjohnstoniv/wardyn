@@ -793,3 +793,21 @@ describe("RunsScreen — hidden counts", () => {
     }
   });
 });
+
+describe("RunsScreen: the Schedules link (#3458)", () => {
+  it("is in the header only while scheduled runs are on, and goes to the view's own Schedules", async () => {
+    const tree = (on: boolean) => (
+      <MemoryRouter initialEntries={["/runs"]}>
+        <ModelAccessProvider status={baseStatus({ has_runs: true, features: { scheduled_runs: on } })} onRefresh={() => {}}>
+          <RunsScreen />
+        </ModelAccessProvider>
+      </MemoryRouter>
+    );
+    const { rerender, unmount } = render(tree(false));
+    await screen.findByRole("heading", { name: "Runs" });
+    expect(screen.queryByRole("link", { name: "Schedules" })).not.toBeInTheDocument();
+    rerender(tree(true));
+    expect(await screen.findByRole("link", { name: "Schedules" })).toHaveAttribute("href", "/runs/schedules");
+    unmount();
+  });
+});

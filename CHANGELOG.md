@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Repeating scheduled runs (daily, weekdays, weekly) and a Schedules screen, behind `WARDYN_SCHEDULED_RUNS` (#3458). A person's `run_tasks` or `credentials` erasure, and a leaver purge, delete their schedules.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_schedules` to every role that was granted `UPDATE` on `run_queue`, other than that table's owner. If the app role
+  is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES`
+  step in Operations, grant it the same on the table as soon as the migration has run. Until then no schedule can be made,
+  and a person's run tasks or credentials erasure fails until the grant is given.
+
 ## [0.11.0-rc.4] — 2026-11-26
 
 ### Added
