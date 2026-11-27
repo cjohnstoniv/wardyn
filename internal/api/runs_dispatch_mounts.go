@@ -232,6 +232,10 @@ func ValidateEnvToggles() {
 		fmt.Fprintln(flag.CommandLine.Output(), err)
 		os.Exit(2)
 	}
+	if err := validateIdentityNarrowingSwitch(); err != nil {
+		fmt.Fprintln(flag.CommandLine.Output(), err)
+		os.Exit(2)
+	}
 }
 
 // noProxyFor builds the sandbox's NO_PROXY: the CONFIGURED proxy host plus

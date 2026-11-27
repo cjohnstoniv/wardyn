@@ -80,6 +80,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run that
   names a disk drive is refused at create and at Review, because the server cannot read the table.
 - Machine kinds at a site: a `machine_kind_denials` entry can name a `site_id`, so a super admin can deny a machine kind on runners of one trust class at one site and allow it at another. The entry holds only on runners whose pool is at that site, and only while sites are on; the refusal names the site.
+- `WARDYN_IDENTITY_NARROWING` (`audit` by default) records, and under `enforce` applies, two narrowings by the identities behind a request (#4073).
 
 ### Before you upgrade
 
