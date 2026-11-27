@@ -277,6 +277,12 @@ func draftRows() []draftRow {
 		{"match-ended-1h", ended(time.Hour)},
 		{"match-no-accepted-part", notMatched(time.Hour, true, false)},
 		{"match-ended-3h", notMatched(3*time.Hour, true, true)},
+		{"match-edit-no-proposal", notMatched(time.Hour, false, true)},
+		{"match-other-kind-accepted", func(t *testing.T, f *draftFixture, r draftRoute, person, key string) (string, uuid.UUID, string) {
+			kind, k := draftOtherKind(r)
+			f.seedSession(t, person, draftSession{kind: kind, key: k, proposal: true, edit: true, endedAt: time.Now().Add(-time.Hour)})
+			return "", uuid.Nil, ""
+		}},
 		{"no-match", func(*testing.T, *draftFixture, draftRoute, string, string) (string, uuid.UUID, string) {
 			return "", uuid.Nil, ""
 		}},
