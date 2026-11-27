@@ -383,6 +383,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBSoft = diskSoft
+	resources.GPU = run.GPU
 	if run.LifetimeCapAt != nil {
 		// The run pods' deadline follows this run's own cap, not a driver-wide one (podLifetimeCap).
 		resources.LifetimeCap = s.podLifetimeCap(ctx, *run.LifetimeCapAt)

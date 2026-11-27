@@ -968,3 +968,5 @@ const (
 	reasonRunForwardBusy           = "run_forward_busy"            // 429: the run already holds its most SSH channels, commands and forwards
 	reasonRunForwardFailed         = "run_forward_failed"          // 502: the runner could not start the relay
 )
+
+const reasonGPUUnknown = "gpu_unknown" // 400: gpu is not "nvidia" or "render"

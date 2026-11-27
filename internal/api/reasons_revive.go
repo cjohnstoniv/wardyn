@@ -48,6 +48,7 @@ const (
 	reasonRevivePastEnd                     = "revive_past_end"                       // the run has passed its scheduled end; extend it first
 	reasonReviveMaxAge                      = "revive_max_age"                        // the run has reached its maximum age, which no extension moves; start a new run
 	reasonReviveEndedTaskRun                = "revive_ended_task_run"                 // a task run's agent cannot be started again once it has ended
+	reasonReviveGPUAgentStart               = "revive_gpu_agent_start"                // a GPU run's stopped agent is not started again
 	reasonReviveRebootAgentStopped          = "revive_reboot_agent_stopped"           // the run was lost to a reboot; only its own page can start its agent again
 	reasonReviveEndedAgentStopped           = "revive_ended_agent_stopped"            // the run has ended and its agent is stopped; only its own page can start it again
 	reasonReviveUnknownLostReason           = "revive_unknown_lost_reason"            // the run's lost_reason is not one revive recognizes

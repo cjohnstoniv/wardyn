@@ -235,6 +235,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepGPU, foldAll},
 	{(*Server).stepContainersPlacement, foldAll},
 	{(*Server).stepMCPSandbox, foldAll},
 	{(*Server).stepWindowsPlacement, foldAll},

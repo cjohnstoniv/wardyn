@@ -208,6 +208,7 @@ var templateRequestRules = []TemplateFieldRule{
 		"A folder on one person's computer is named at each launch; a template cannot know where it is."),
 	excludedField("machine_kind", templateExcludeLaunch,
 		"The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."),
+	excludedField("gpu", templateExcludeLaunch, "A GPU is asked for at each launch."),
 	excludedField("macos_base", templateExcludeLaunch,
 		"A macOS VM's base is chosen at each launch, with the kind of sandbox."),
 	excludedField("windows_image", templateExcludeLaunch,

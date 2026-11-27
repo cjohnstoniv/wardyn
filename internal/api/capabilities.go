@@ -183,7 +183,7 @@ const (
 	featureInbound = "inbound"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner, featureInbound}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner, featureInbound, featureGPU}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}

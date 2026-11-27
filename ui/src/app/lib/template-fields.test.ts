@@ -78,6 +78,7 @@ describe("template field registry", () => {
       "correlation_id",
       "description",
       "desktop_window",
+      "gpu",
       "integration_id",
       "keep_work_folder",
       "local_folder",

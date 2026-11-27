@@ -480,6 +480,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		RunnerTarget:     in.runnerTarget,
 		Interactive:      req.Interactive,
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
+		GPU:              types.GPUKind(req.GPU),
 		Image:            f.windowsRef,          // a Windows VM run's registered ref, which its insert takes a seat by; "" otherwise
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,

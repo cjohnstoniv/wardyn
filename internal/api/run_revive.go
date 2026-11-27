@@ -172,6 +172,9 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 	if !ok {
 		return nil, nil, nil, false, reviveUnsupported()
 	}
+	if run.GPU != types.GPUNone && (run.LostReason == types.LostReboot || run.LostReason == types.LostEnded) {
+		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveGPUAgentStart, "run has a GPU, so its stopped agent is not started again; start a new run")
+	}
 	if rerr := s.reviveEligible(ctx, run, startAgent); rerr != nil {
 		return nil, nil, nil, false, rerr
 	}
@@ -182,6 +185,9 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
 	if rebooted && !canStart {
 		return nil, nil, nil, false, reviveUnsupported()
+	}
+	if rebooted && run.GPU != types.GPUNone {
+		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveGPUAgentStart, "run has a GPU, so its stopped agent is not started again; start a new run")
 	}
 	if rebooted && !startAgent {
 		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,

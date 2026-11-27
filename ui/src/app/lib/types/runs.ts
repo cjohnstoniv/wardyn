@@ -421,6 +421,8 @@ export interface AgentRun {
   // started. Absent for a container run. A named interface for the same line-scrape reason as above.
   machine_kind?: VMKind;
   vm_machine?: VMMachine;
+  // AgentRun.GPU (migration 0430): "nvidia" or "render" for a run that was given a GPU. Absent for none.
+  gpu?: string;
 }
 
 // internal/types/machine.go's VMMachine.

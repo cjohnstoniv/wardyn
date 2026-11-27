@@ -921,6 +921,11 @@
       "why": "The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."
     },
     {
+      "name": "gpu",
+      "excluded": "launch",
+      "why": "A GPU is asked for at each launch."
+    },
+    {
       "name": "macos_base",
       "excluded": "launch",
       "why": "A macOS VM's base is chosen at each launch, with the kind of sandbox."
