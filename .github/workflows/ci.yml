@@ -3369,22 +3369,49 @@ jobs:
           fi
       # A forward-port (release/X.Y -> main) must not delete content that exists only
       # on main (scripts/forward-port-check.sh; an intended removal is listed in
-      # scripts/forward-port-check.d/<version>.allow). Skipped on every other pull request.
+      # scripts/forward-port-check.d/<version>.allow). Two routes, into main or release/**:
+      # a chore/forward-port-* branch, and a train/* head that carries 0.10.x patch lines in
+      # as tag merges (a first-parent merge whose second parent is a v0.10.* tag), each of
+      # which is checked on its own with BASE = its first parent and HEAD = the merge. The
+      # train route reads <version>.allow from the tag merge itself, so an exception holds
+      # only for the BASE and HEAD it was committed with. Skipped on every other pull request.
       - name: Forward-port keeps main's content
-        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && startsWith(github.head_ref, 'chore/forward-port-') }}
+        if: ${{ github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'release/')) && (startsWith(github.head_ref, 'chore/forward-port-') || startsWith(github.head_ref, 'train/')) }}
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          V="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' <<<"$HEAD_REF" | head -1)"
-          [ -n "$V" ] || { echo "no version in the branch name $HEAD_REF" >&2; exit 1; }
-          # main's copy of the check, never the port's own: a port could edit the check.
-          git show "$BASE_SHA:scripts/forward-port-check.sh" >"$RUNNER_TEMP/fpc.sh"
-          PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$BASE_SHA")"
-          [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
-          # Merge-base, not the base tip: main may have moved since the branch was cut.
-          bash "$RUNNER_TEMP/fpc.sh" --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
+          # The base's copy of the check, never the PR's own: a port could edit the check.
+          fpc() { git show "$BASE_SHA:scripts/forward-port-check.sh" >"$RUNNER_TEMP/fpc.sh"; }
+          case "$HEAD_REF" in
+            chore/forward-port-*)
+              V="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' <<<"$HEAD_REF" | head -1)"
+              [ -n "$V" ] || { echo "no version in the branch name $HEAD_REF" >&2; exit 1; }
+              fpc
+              PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$BASE_SHA")"
+              [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
+              # Merge-base, not the base tip: the base may have moved since the branch was cut.
+              bash "$RUNNER_TEMP/fpc.sh" --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
+              ;;
+            *)
+              MERGES="$(git rev-list --first-parent --merges "$BASE_SHA..$PR_HEAD")"
+              n=0
+              for M in $MERGES; do
+                T="$(git tag --list 'v0.10.*' --points-at "$M^2" --sort=-v:refname | head -1)"
+                [ -n "$T" ] || continue
+                n=$((n + 1)); V="${T#v}"
+                [ "$n" -gt 1 ] || fpc
+                echo "tag merge $M (v$V) on $HEAD_REF"
+                PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$M^1")"
+                [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
+                ALLOW="$RUNNER_TEMP/allow-$M"; mkdir -p "$ALLOW"
+                git show "$M:scripts/forward-port-check.d/$V.allow" >"$ALLOW/$V.allow" 2>/dev/null || rm -f "$ALLOW/$V.allow"
+                bash "$RUNNER_TEMP/fpc.sh" --version "$V" --allow-dir "$ALLOW" "$PREV" "$M^1" "$M"
+              done
+              [ "$n" -gt 0 ] || echo "no v0.10.* tag merge in $BASE_SHA..$PR_HEAD: nothing to check"
+              ;;
+          esac
 
   # ── stop a red pull request run early ─────────────────────────────────────
   # When a cheap, deterministic gate fails, the heavy jobs of the same run
