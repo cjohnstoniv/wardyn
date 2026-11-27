@@ -57,8 +57,8 @@ an operator follows to turn one on and run the queue.
 - A restriction binds a run that is already running: a revive meets it again, a credential for a host outside its `allowed_domains` is withheld at the next mint, and an approval cannot admit such a host. That holds for a restriction the run started under. One a person gains later applies when the next start or revive resolves it. A new group restriction needs the owner's own sign-in: an admin's revive finds user, user-type and everyone restrictions and keeps the captured ones, but not a new group restriction.
 - Keeping the strictest floor:
   - Key a floor restriction on a group, not a user type. Restrictions on groups combine over every group a person holds, so a person in both a restrictive and a permissive group keeps the restrictive floor.
-  - A person has one user type: the highest-priority type their sign-in matches. Two types tied at the top refuse sign-in. Where a user type must carry the floor, give the restrictive type the higher priority.
-  - A floor keyed only on a user type is lost when a higher-priority type also matches.
+  - A person's sign-in can match several user types. Their session is stamped with the highest-priority one, and two types tied at the top refuse sign-in.
+  - With `WARDYN_IDENTITY_NARROWING=enforce`, restrictions keyed on every type the sign-in matches apply, as group restrictions combine. Under `audit` (the default) only the stamped type's apply, and the ones the others would add are recorded in `governance.restriction.alert`, at most once a day per person and set. A type matched only by the identity provider's roles claim is not seen, and without single sign-on only the stamped type's apply.
 
 **Optional: four-eyes on governance writes.**
 

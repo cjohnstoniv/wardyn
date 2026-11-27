@@ -107,6 +107,9 @@ func (s *restrictedReviveStore) ListRestrictionsFor(context.Context, []string, [
 func (s *restrictedReviveStore) HasGroupTierRestrictions(context.Context) (bool, error) {
 	return false, nil
 }
+func (s *restrictedReviveStore) RestrictionUserTypes(context.Context) ([]string, error) {
+	return nil, nil
+}
 func (s *restrictedReviveStore) CountRestrictions(context.Context) (int, error) {
 	return len(s.list), nil
 }

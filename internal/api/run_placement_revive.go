@@ -211,7 +211,7 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorTyp
 		}
 	}
 	// The restrictions bind the revive whatever the unit (governance_restrictions.go).
-	list, err := s.reviveRestrictions(ctx, run)
+	list, err := s.reviveIdentityRestrictions(ctx, run)
 	if err != nil {
 		return ownerCeiling{}, reviveRefused(http.StatusServiceUnavailable, reasonOwnerUnitUnreadable, loggedMsg(ctx, "read the owner's restrictions", err))
 	}

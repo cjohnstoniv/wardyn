@@ -282,6 +282,9 @@ type contextQuery struct {
 	users, groups []string
 	userType      string
 	unusable      bool
+	// email is the caller's own email when the query is theirs: the restrictions then cover every user
+	// type their sign-in matches.
+	email string
 }
 
 // contextPick is the selected context: its unit (Default when no membership places the person,
@@ -310,7 +313,7 @@ func (s *Server) resolveContext(ctx context.Context, deployment governanceCeilin
 	// snapshot that is present, non-nil and INCOMPLETE, and the group whose membership walls them
 	// is exactly as likely to be missing as any other.
 	q := contextQuery{users: subj.users, groups: subj.groups, userType: subj.userType,
-		unusable: subj.stale || oidcGroupsTruncatedFromContext(ctx)}
+		unusable: subj.stale || oidcGroupsTruncatedFromContext(ctx), email: oidcEmailFromContext(ctx)}
 	return s.contextCeiling(ctx, q, contextChoiceFrom(ctx), deployment)
 }
 
@@ -321,7 +324,7 @@ func (s *Server) contextCeiling(ctx context.Context, q contextQuery, choice cont
 	if err != nil {
 		return governanceCeiling{}, err
 	}
-	return s.applyRestrictions(ctx, q, c)
+	return s.applyIdentityRestrictions(ctx, q, c)
 }
 
 // contextCeilingBelowRestrictions selects q's context under choice and composes it. Default is the

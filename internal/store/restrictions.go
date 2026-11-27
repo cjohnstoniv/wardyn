@@ -32,6 +32,9 @@ type RestrictionStore interface {
 	ListRestrictionsFor(ctx context.Context, userSubjects, groups []string, userType string) ([]types.Restriction, error)
 	// HasGroupTierRestrictions gates the stale-snapshot refusal, as HasGroupTierMemberships does.
 	HasGroupTierRestrictions(ctx context.Context) (bool, error)
+	// RestrictionUserTypes is every user type some restriction names as a subject, distinct and sorted: the
+	// types whose restrictions a person matching more than their stamped one could be missing.
+	RestrictionUserTypes(ctx context.Context) ([]string, error)
 	CountRestrictions(ctx context.Context) (int, error)
 	// GetRestrictionsByID is the current restriction of each id that still exists, in name order.
 	GetRestrictionsByID(ctx context.Context, ids []uuid.UUID) ([]types.Restriction, error)
@@ -81,6 +84,18 @@ func (s PG) ListRestrictionsFor(ctx context.Context, userSubjects, groups []stri
 
 func (s PG) HasGroupTierRestrictions(ctx context.Context) (bool, error) {
 	return s.hasGroupTierRows(ctx, "governance_restriction_members", "restrictions")
+}
+
+func (s PG) RestrictionUserTypes(ctx context.Context) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT DISTINCT subject FROM governance_restriction_members WHERE subject_type = 'user_type' ORDER BY subject`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list restriction user types: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("store: list restriction user types: %w", err)
+	}
+	return out, nil
 }
 
 func (s PG) CountRestrictions(ctx context.Context) (int, error) {

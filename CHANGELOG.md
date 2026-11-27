@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - An optional mutual TLS check on the proxy-to-control-plane hop (`WARDYN_INTERNAL_MTLS`, off by default; needs the SPIRE identity provider and the Kubernetes runner); the run token is still checked on every request (#4074).
+- Restrictions can combine over every user type a person's sign-in matches, not only the highest-priority one. Recorded only by default (`governance.restriction.alert`); applied with `WARDYN_IDENTITY_NARROWING=enforce` (#4073).
 
 ### Changed
 
