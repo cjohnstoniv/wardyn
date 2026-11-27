@@ -237,6 +237,9 @@ type RunPolicySpec struct {
 	// Desktop sets the desktop's clipboard and file-transfer rules by direction (#2967). Nil is
 	// the defaults: paste in and upload allowed, copy out and download blocked.
 	Desktop *DesktopControls `json:"desktop,omitempty"`
+	// Outage is the policy's say over its runs' outage terms (#4082): a shorter allowance than the site's, strict, and
+	// what a long outage does to an unattended run. Nil takes the site's allowance, not strict, kept.
+	Outage *OutageControls `json:"outage,omitempty"`
 	// Recording is how much of a run under this policy is recorded (RecordingLevel); empty chooses
 	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
 	// minimum: a policy under it may record more, never less.
@@ -490,6 +493,10 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.Desktop != nil {
 		d := *s.Desktop
 		out.Desktop = &d
+	}
+	if s.Outage != nil {
+		o := *s.Outage
+		out.Outage = &o
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules

@@ -134,6 +134,9 @@ mitm_ca_key_pem
 mitm_hosts
 mitm_llm
 no_network
+outage
+outage.allowance_s
+outage.strict
 pat_grants
 pat_grants.*.access
 pat_grants.*.api
@@ -194,6 +197,10 @@ policy.llm_inspection.workspace_secret_names
 policy.llm_inspection.workspace_secret_values
 policy.max_holds
 policy.min_confinement_class
+policy.outage
+policy.outage.allowance_minutes
+policy.outage.strict
+policy.outage.unattended
 policy.push_rules
 policy.push_rules.deny_all
 policy.push_rules.deny_new_executables

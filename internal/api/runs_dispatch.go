@@ -404,6 +404,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's extra containers could not be read")
 		return
 	}
+	// The run's outage terms (#4082), fixed and recorded now (run_outage.go).
+	outage, ok := s.recordOutageTerms(ctx, run, siteCfg, siteCfgErr, policy)
+	if !ok {
+		return
+	}
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            p.Image,
@@ -553,6 +558,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The person's sign-in listener; false, so no key is written,
 			// unless `signins` above.
 			DesktopSignins: signins,
+			// The run's outage terms; nil, so no key is written, for the default ones: an older proxy refuses the key.
+			Outage: proxyOutage(outage),
 		},
 		DesktopSignins: signins,
 		// Hard resource caps. A nil policy block (or a zero field) becomes the

@@ -298,6 +298,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		"The organisation's recording level applies. Keystrokes are never recorded."),
 	carriedField("data_out", partRules, templateOmitOptional, templateEmptySame,
 		"Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter."),
+	carriedField("outage", partRules, templateOmitOptional, templateEmptySame,
+		"The site's outage allowance applies. A template can only make the terms stricter: a shorter allowance, the run ended at it, or an unattended run ended in a long outage."),
 	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -337,6 +339,7 @@ var templateNestedCarried = map[string]string{
 	"HostRuleSet":         "rules",
 	"HostRule":            "host methods paths effect",
 	"DesktopControls":     "paste_in copy_out upload download",
+	"OutageControls":      "allowance_minutes strict unattended",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url detector_sidecar_format " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",

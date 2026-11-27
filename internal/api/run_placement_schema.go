@@ -93,7 +93,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.MachineKindDenial](): strings.Fields("Trust MachineKind"), // a trust class and a machine kind; no credential
 	reflect.TypeFor[types.SiteBranding]():      strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners Assistant UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy EgressRedirects ScmHosts Integrations InternalHosts Egress " +
-		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images Sessions FeatureSwitches DesktopWatermark"),
+		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images Sessions FeatureSwitches DesktopWatermark OutageAllowanceMinutes"),
 	reflect.TypeFor[types.SiteEgress]():                   strings.Fields("BaselineHosts"),
 	reflect.TypeFor[types.SiteMacOSVM]():                  strings.Fields("MaxBaseAgeDays AllowBackgroundWatch AllowAttendedWindow AllowKeptMachines KeptMachineIdleDays MaxKeptMachinesPerPerson"), // a placement limit, three switches and two kept-machine limits, no credential
 	reflect.TypeFor[types.SiteDesktopWatermark]():         strings.Fields("Required"),                                                                                                               // a switch, no credential

@@ -255,6 +255,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		CanonicalPushRepos:   pc.CanonicalPushRepos,
 		PushHoldRemovals:     pc.PushHoldRemovals,
 		Attribution:          pc.Attribution,
+		Outage:               pc.Outage,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
 		ForgeHosts:           pc.ForgeHosts,
@@ -296,5 +297,6 @@ func ProxySettingsOf(c proxy.Config) ProxyConfig {
 		LLMHeaders:         c.LLMHeaders,
 		NoNetwork:          c.NoNetwork,
 		PushHoldRemovals:   c.PushHoldRemovals,
+		Outage:             c.Outage,
 	}
 }

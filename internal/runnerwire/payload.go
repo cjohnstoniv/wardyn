@@ -262,6 +262,11 @@ const (
 	// ProxySettingPushHoldRemovals is push_hold_removals. Dropped, the run's proxy would forward a push
 	// that removes a review path, so such a runner is refused a run that sets it.
 	ProxySettingPushHoldRemovals = "push_hold_removals"
+	// ProxySettingOutage is outage, the run's outage terms (#4082). Dropped, the run's proxy keeps the default
+	// terms, a longer allowance than the policy set or not strict, so such a runner is refused a run whose allowance
+	// is not the default one or whose terms are strict. Any other run writes no key and is not refused, one that
+	// only ends unattended runs included: that choice is the control plane's alone.
+	ProxySettingOutage = "outage"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -288,7 +293,7 @@ var ProxySettings = []string{
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
 	ProxySettingMCPSendOnce, ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
-	ProxySettingHostRules, ProxySettingPushHoldRemovals,
+	ProxySettingHostRules, ProxySettingPushHoldRemovals, ProxySettingOutage,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -303,7 +308,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		pc.NoNetwork,
 		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
 		len(pc.Policy.HostRules) != 0,
-		pc.PushHoldRemovals} {
+		pc.PushHoldRemovals,
+		pc.Outage != nil} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
@@ -643,6 +649,10 @@ type Lease struct {
 	RunID               uuid.UUID `json:"run_id"`
 	TokenRenewedAt      time.Time `json:"token_renewed_at"`
 	EndsAt              time.Time `json:"ends_at"`
+	// OutageAllowanceS and OutageStrict are the run's outage terms (#4082); zero for the default ones, which an
+	// older runner reads as today's deadline.
+	OutageAllowanceS int64 `json:"outage_allowance_s,omitempty"`
+	OutageStrict     bool  `json:"outage_strict,omitempty"`
 }
 
 // PendingAction is one entry of the PENDING payload, oldest first.

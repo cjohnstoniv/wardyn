@@ -357,6 +357,7 @@ export interface RunPolicySpec {
   // RunPolicySpec.Desktop, #2967). Omitted, or an omitted direction, is the default:
   // paste in and upload allowed, copy out and download blocked.
   desktop?: DesktopControls;
+  outage?: OutageControls;
   // How much of a run is recorded (mirrors Go's RunPolicySpec.Recording). Absent chooses nothing:
   // the organisation's level applies. A ceiling's level is a minimum. Keystrokes are never recorded.
   recording?: RecordingLevel;
@@ -373,6 +374,12 @@ export interface DesktopControls {
   copy_out?: TransferRule;
   upload?: TransferRule;
   download?: TransferRule;
+}
+
+export interface OutageControls {
+  allowance_minutes?: number;
+  strict?: boolean;
+  unattended?: "" | "keep" | "end";
 }
 
 /** Go: types.RecordingLevel. */

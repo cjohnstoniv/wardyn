@@ -65,6 +65,7 @@
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
 | `desktop` | `DesktopControls` | omitted = paste in and upload allowed, copy out and download blocked | The desktop's clipboard and file-transfer rules by direction. See [below](#desktop--desktopcontrols). |
+| `outage` | `OutageControls` | omitted = the site's allowance (one hour unless an admin raised it), not strict, unattended runs kept | How long a run's network keeps serving while Wardyn cannot be reached, and what happens then. A policy can only shorten the site's allowance. See [below](#outage--outagecontrols). |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
 | `data_out` | `string` | omitted = allowed | Content leaving the run: `allowed`, `review` or `blocked`. See [below](#data_out). |
@@ -1217,6 +1218,25 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 | `copy_out` | `string` | `blocked` | The desktop's clipboard sent to the browser (RFB `ServerCutText`). |
 | `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
 | `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. `review` holds each file for a person's yes (below). |
+
+## `outage` — `OutageControls`
+
+- How long a run's network keeps serving while Wardyn cannot be reached (#4082), and what happens when that time runs out.
+- The site sets the allowance with `outage_allowance_minutes` in the site config: 0 is the default of 60 minutes, else 60
+  to 1440. A policy can only shorten it.
+- A run's terms are fixed when it is dispatched. A later change to the site or the policy does not change a running run.
+- A member's policy under a ceiling that sets `outage` never gets a longer allowance than the ceiling's, and keeps the
+  ceiling's `strict` and `end`.
+- This release records the terms and carries them to the run's proxy and runner. Pausing and ending at the allowance
+  come in a later release.
+- Raising the site's outage allowance, or a policy that shortens the outage allowance or sets `strict`, makes runs fail
+  at start on a run proxy older than this release. An operator who pins the proxy image upgrades it first.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `allowance_minutes` | `int` | `0` = the site's | 30 to 1440. Never longer than the site's allowance: a longer value has no effect. |
+| `strict` | `bool` | `false` | `true` ends the run at the allowance. `false` pauses its network instead, and it comes back by itself when Wardyn checks the run again, which needs a later release's proxy. |
+| `unattended` | `string` | `keep` | `keep` or `end`. `end` ends an unattended run after a long outage, so its pipeline can start a fresh one. |
 
 
 ## `data_out`
