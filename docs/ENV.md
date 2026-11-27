@@ -828,6 +828,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Off by default, a run is refused on a Docker Engine older than 28.0.0, and so is restarting or reviving a run whose network predates the upgrade.
 - Set, those runs start, each with a warning, and their agent can reach services on the Docker host. Set it only on a trusted host.
+- It never admits an MCP server that starts from a command: such a run fails with `mcp_sandbox_host_reachable`.
 - See [Docker host: run networks](OPERATIONS.md#docker-host-run-networks).
 
 ### `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS`
@@ -1707,6 +1708,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Off (the default), or the setting off: saving such a component is refused with `component_definition_invalid`, and a run that attaches one with `mcp_own_sandbox_off`. A site config that cannot be read counts as off.
 - A run is refused with `mcp_own_sandbox_unsupported` on a macOS VM, on a Linux VM, on a person's own runner, or on a runner that cannot start such a sandbox.
 - A run may have at most four such servers (`mcp_sandbox_limit`).
+- On Docker, such a server needs Docker Engine 28.0.0 or later. On an older engine the run fails with `mcp_sandbox_host_reachable`, also with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` set.
 - Such a server's hosts are not added to the agent's allowlist.
 - A rebooted run's revive is refused while the switch or the setting is off, and for a run whose server ran inside the agent's sandbox before this release.
 - `GET /setup/status` publishes it as `features.mcp_own_sandbox`, and `features.local_mcp_servers` when the setting is on as well.

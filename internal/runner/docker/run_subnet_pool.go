@@ -117,18 +117,19 @@ func (d *Driver) poolRunSubnet(ctx context.Context, lost []netip.Prefix) (netip.
 	}
 	subnet, ok := nextRunSubnet(d.cfg.RunSubnetPool, d.cfg.RunSubnetBits, used)
 	if !ok {
-		return netip.Prefix{}, fmt.Errorf("docker: create internal network: no free /%d subnet is left in %s=%s for this run's network (each sandbox holds one): widen the range, or end runs to free one",
+		return netip.Prefix{}, fmt.Errorf("docker: create internal network: no free /%d subnet is left in %s=%s for this run's network (each sandbox holds one, as does each MCP server's sandbox and the run's relay link): widen the range, or end runs to free one",
 			d.cfg.RunSubnetBits, EnvRunSubnetPool, d.cfg.RunSubnetPool)
 	}
 	return subnet, nil
 }
 
-// sweepRunNetworks removes the per-run networks, older than cutoff, of runs isOrphan says are gone, handing their
+// sweepRunNetworks removes the per-run networks (with an MCP sandbox's network and the run's relay link), older than cutoff, of runs isOrphan says are gone, handing their
 // subnets back: to Config.RunSubnetPool when it is set, else to the daemon's own pools. It catches the network a crash
 // between network create and proxy start leaves with no container for SweepOrphanedSandboxes to key on, and a subnet
 // probe whose removal failed (createDaemonRunNetwork).
 func (d *Driver) sweepRunNetworks(ctx context.Context, cutoff time.Time, isOrphan func(runID uuid.UUID) bool) (int, error) {
-	res, err := d.cli.NetworkList(ctx, client.NetworkListOptions{Filters: client.Filters{}.Add("label", labelComponent+"="+componentNetwork)})
+	// Values of one label key are ANDed, so the run network, an MCP sandbox's network and the relay link are matched below.
+	res, err := d.cli.NetworkList(ctx, client.NetworkListOptions{Filters: client.Filters{}.Add("label", labelComponent)})
 	if err != nil {
 		return 0, fmt.Errorf("docker: list networks for orphan sweep: %w", err)
 	}
@@ -137,7 +138,7 @@ func (d *Driver) sweepRunNetworks(ctx context.Context, cutoff time.Time, isOrpha
 	for _, n := range res.Items {
 		l := n.Labels
 		runID, perr := parseRunID(l[labelRun])
-		if perr != nil || l[labelComponent] != componentNetwork || l[labelManaged] != "true" || l[runner.LabelRunnerID] != d.cfg.RunnerID ||
+		if perr != nil || !slices.Contains([]string{componentNetwork, componentMCPNetwork, componentRelayNetwork}, l[labelComponent]) || l[labelManaged] != "true" || l[runner.LabelRunnerID] != d.cfg.RunnerID ||
 			d.otherDeployment(l) || n.Created.After(cutoff) || !isOrphan(runID) {
 			continue
 		}
