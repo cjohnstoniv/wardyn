@@ -16,8 +16,10 @@ import { Button } from "../../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../ui/table";
 import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { RAIL_CHECK } from "../../../wardyn/copy/new-run-rail";
 import { NEW_RUN_PATH } from "../../new-run-flow/draft/new-run-url";
 import { ChecksStrip } from "./checks-strip";
+import { flushEdits, postEdit } from "./edit-queue";
 import { DroppedHosts, type DroppedItem } from "./dropped-hosts";
 import { PartCard, sectionLabel, valueLines } from "./part-card";
 
@@ -82,8 +84,14 @@ const kept = new Map<string, PartState[]>();
 /** A new session takes over from another (Try again): what the person accepted and edited goes with it. */
 export function carryKept(from: string, to: string): void {
   const parts = kept.get(from);
-  if (parts) kept.set(to, parts);
+  if (!parts) return;
+  kept.set(to, parts);
+  // The new session has never seen the draft: it is told once, through the session's own queue, so its next turn does.
+  const draft = draftOf(parts);
+  if (Object.keys(draft).length > 0) postEdit(to, draft, new Map(Object.entries(draft).map(([k, v]) => [k, JSON.stringify(v)])), () => undefined);
 }
+
+export { flushEdits };
 
 /** The left-out entries of the proposal, each with the count the server's checks gave for that unit when they did. */
 export function mergeDropped(proposed: readonly DroppedItem[], fromChecks: readonly AssistantDropped[] | null | undefined): DroppedItem[] {
@@ -123,9 +131,6 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   const [answered, setAnswered] = React.useState(0);
   const [editedAt, setEditedAt] = React.useState<Record<string, number>>({});
   const changed = React.useRef(0);
-  // Posts of the person's edits go one at a time, the latest draft after the one in flight: a snapshot that left
-  // earlier can never be stored after a later one.
-  const posting = React.useRef<{ busy: boolean; next: { draft: Record<string, unknown>; changed: Map<string, string> } | null }>({ busy: false, next: null });
   const latest = React.useRef(parts);
   latest.current = parts;
   const proposed = React.useRef("");
@@ -144,25 +149,6 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
     if (sessionId) kept.set(sessionId, parts);
   }, [sessionId, parts]);
 
-  const postEdit = (id: string, draft: Record<string, unknown>, changes: Map<string, string>) => {
-    const q = posting.current;
-    if (q.busy) {
-      q.next = { draft, changed: new Map([...(q.next?.changed ?? []), ...changes]) };
-      return;
-    }
-    q.busy = true;
-    assistant
-      .postEdits(id, { draft, changed: [...changes].map(([field, value]) => ({ field, value })) })
-      .then(() => setEditFailed(null))
-      .catch((e: unknown) => setEditFailed(getErrorMessage(e)))
-      .finally(() => {
-        const next = q.next;
-        q.busy = false;
-        q.next = null;
-        if (next) postEdit(id, next.draft, next.changed);
-      });
-  };
-
   const act = (section: string, change: (p: PartState) => PartState | null, edit = false) => {
     const next = latest.current.flatMap((p) => {
       if (p.section !== section) return [p];
@@ -177,7 +163,7 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
     setChecks(null);
     if (sessionId) {
       const after = next.find((p) => p.section === section);
-      postEdit(sessionId, draftOf(next), new Map([[section, JSON.stringify(after ? after.value : null)]]));
+      postEdit(sessionId, draftOf(next), new Map([[section, JSON.stringify(after ? after.value : null)]]), setEditFailed);
     }
   };
 
@@ -223,8 +209,16 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
 
   // New run gets only what the person saw checked: the checks of this very draft answered valid and left nothing out.
   // The answer carries no clamped policy to hand on instead, so a draft with a left-out host waits for the person.
-  const checkedLeftOut = (checks?.dropped ?? []).length > 0;
+  // A host the ceiling refused is the person's to take out; any other entry (a field the server set itself) is shown and
+  // changes nothing they can do.
+  const checkedLeftOut = (checks?.dropped ?? []).some((d) => !!d.host);
   const reviewable = checks?.valid === true && !checkedLeftOut;
+
+  const checkAgain = () => {
+    setChecks(null);
+    setFailed(null);
+    setChanges((changed.current += 1));
+  };
 
   const review = () =>
     navigate(NEW_RUN_PATH, {
@@ -277,6 +271,11 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
         </div>
       )}
       {(accepted > 0 || checks || failed || editFailed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={[editFailed, failed]} leftOut={left.length > 0} />}
+      {accepted > 0 && failed && (
+        <Button type="button" variant="outline" size="sm" onClick={checkAgain}>
+          {RAIL_CHECK.BUTTON}
+        </Button>
+      )}
       {accepted > 0 && (
         <>
           <Button type="button" disabled={!reviewable} onClick={review}>

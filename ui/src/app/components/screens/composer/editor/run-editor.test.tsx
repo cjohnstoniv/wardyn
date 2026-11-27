@@ -10,9 +10,10 @@ import { assistant, type AssistantChecks } from "../../../../lib/api/assistant";
 import { CHANGES } from "../../../../lib/governance-copy";
 import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { RAIL_CHECK } from "../../../wardyn/copy/new-run-rail";
 import { NEW_RUN_PATH } from "../../new-run-flow/draft/new-run-url";
 import { SUMMARY } from "../../run-detail/policy-tab-copy";
-import { draftOf, mergeDropped, mergeProposal, RunEditor, type EditorProposal, type PartState } from "./run-editor";
+import { draftOf, flushEdits, mergeDropped, mergeProposal, RunEditor, type EditorProposal, type PartState } from "./run-editor";
 
 const HOSTS = { section: "allowed_domains", value: ["github.com", "api.github.com"] };
 const CRED = { section: "eligible_grants", value: [{ kind: "git_pat", host: "github.com" }] };
@@ -272,6 +273,65 @@ describe("accepting, discarding and editing", () => {
     await settle(400);
     expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
     expect(screen.queryByText(T.VALID)).toBeNull();
+  });
+
+  it("lets Review go ahead when the checks only list a field they set themselves, and shows it as information", async () => {
+    checks.mockResolvedValue({ ...CHECKS, dropped: [{ field: "first_use_approval", code: "clamped", unit: "Payments", admin_change_approvals: 2 }] });
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeEnabled();
+    expect(screen.queryByText(T.REVIEW_HELD_LEFT_OUT)).toBeNull();
+    expect(screen.getByText(T.LEFT_OUT("first_use_approval", "Payments"))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN }));
+    expect(screen.getByTestId("arrived")).toBeInTheDocument();
+  });
+
+  it("offers Check again after a failed check, which is the way out, and Review opens once it answers valid", async () => {
+    checks.mockRejectedValueOnce(new Error("Could not run the checks."));
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not run the checks.");
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: RAIL_CHECK.BUTTON }));
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: RAIL_CHECK.BUTTON })).toBeNull();
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeEnabled();
+  });
+
+  it("keeps the edit queue across a closed and reopened editor, so an old post never lands after a new one", async () => {
+    const answers: { ok: () => void }[] = [];
+    edits.mockImplementation(() => new Promise((ok) => answers.push({ ok: () => ok({ seq: 1 }) })));
+    const first = editor();
+    accept("allowed_domains");
+    first.unmount();
+    editor();
+    fireEvent.click(within(card("allowed_domains"), T.PART_DISCARD));
+    expect(answers).toHaveLength(1);
+    await act(async () => answers[0].ok());
+    expect(answers).toHaveLength(2);
+    expect(edits.mock.calls[1][1]).toMatchObject({ draft: {} });
+  });
+
+  it("lets a caller wait for the session's pending edits", async () => {
+    let answer: () => void = () => undefined;
+    edits.mockImplementation(() => new Promise((ok) => (answer = () => ok({ seq: 1 }))));
+    editor();
+    accept("allowed_domains");
+    accept("eligible_grants");
+    let done = false;
+    const waiting = flushEdits(SESSION()).then(() => (done = true));
+    await settle();
+    expect(done).toBe(false);
+    await act(async () => answer());
+    await act(async () => answer());
+    await waiting;
+    expect(done).toBe(true);
+    expect(edits).toHaveBeenCalledTimes(2);
+    await expect(flushEdits("a-session-that-never-posted")).resolves.toBeUndefined();
   });
 
   it("takes a discarded part out of the draft and tells the session", async () => {

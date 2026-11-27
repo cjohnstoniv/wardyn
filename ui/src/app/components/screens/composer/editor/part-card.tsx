@@ -67,14 +67,16 @@ const isIPv6 = (h: string) => {
   }
 };
 // An entry whose every label is a decimal or 0x number is an address, and only the standard spelling of one is taken.
-const numberLabel = (l: string) => /^\d+$/.test(l) || /^0x[0-9a-f]+$/i.test(l);
+const numberLabel = (l: string) => /^\d+$/.test(l) || /^0x[0-9a-f]*$/i.test(l);
 
 /**
  * The sentence for a domain entry the proxy can never match, or null: a host, "*." and a host, or an IP address, each
  * with an optional port (internal/egress/proxy/policy.go ValidDomainEntry).
  */
-export function domainEntryError(entry: string): string | null {
-  const bad = T.DOMAIN_ENTRY_BAD(entry);
+export function domainEntryError(raw: string): string | null {
+  const bad = T.DOMAIN_ENTRY_BAD(raw);
+  // The server trims an entry before it reads it.
+  const entry = raw.trim();
   if (entry === "" || /[\s/]/.test(entry)) return bad;
   const wild = entry.startsWith("*.");
   const rest = wild ? entry.slice(2) : entry;
@@ -95,7 +97,9 @@ export function domainEntryError(entry: string): string | null {
 const ruleHostError = (host: string): string | null => {
   if (host.includes("*")) return T.RULE_HOST_WILDCARD(host);
   const dead = host === "" || host !== host.toLowerCase() || /[\s:/?#[\]@\\%]|[^\x21-\x7e]/.test(host) || host.startsWith(".") || host.endsWith(".");
-  return dead || (/^[0-9.]+$/.test(host) && !IPV4.test(host)) ? T.RULE_HOST_BAD(host) : null;
+  // Every label a number (decimal, or hex after 0x): an address, and only the standard spelling of one is a host.
+  const address = host.split(".").every(numberLabel);
+  return dead || (address && !IPV4.test(host)) ? T.RULE_HOST_BAD(host) : null;
 };
 
 /**
@@ -111,6 +115,8 @@ export function parsePartText(section: string, text: string): { value: unknown }
     return { error: T.PART_EDIT_INVALID };
   }
   const kind = KIND[section];
+  // allowed_domains alone is written as null for no list (internal/types/policy.go:132, ui lib/types/policy.ts).
+  if (section === "allowed_domains" && value === null) return { value };
   if (kind && !KIND_OK[kind](value)) return { error: KIND_ERROR[kind] };
   if (DOMAIN_SECTIONS.has(section)) {
     if ((value as unknown[]).some((h) => typeof h !== "string")) return { error: T.PART_EDIT_INVALID };

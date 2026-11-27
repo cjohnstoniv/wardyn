@@ -81,7 +81,7 @@ describe("domainEntryError", () => {
   });
 
   it("refuses what it refuses", () => {
-    for (const bad of ["", "https://x.example/path", "a b.example", "*", "a.*.example", "github.com:0", "github.com:65536", "github.com:x", "010.0.0.5", "300.0.0.5", "134744072", "0x7f.0.0.1", "[fd00::1]", "*.fd00::1", "ünï.example", "*.10.0.0.5"]) {
+    for (const bad of ["", "https://x.example/path", "a b.example", "*", "a.*.example", "github.com:0", "github.com:65536", "github.com:x", "010.0.0.5", "300.0.0.5", "134744072", "0x7f.0.0.1", "0x.1.2.3", "0xc0.0.2.1", "[fd00::1]", "*.fd00::1", "ünï.example", "*.10.0.0.5"]) {
       expect(domainEntryError(bad), bad).toBe(T.DOMAIN_ENTRY_BAD(bad));
     }
   });
@@ -93,6 +93,10 @@ describe("parsePartText", () => {
     expect(parsePartText("allowed_domains", JSON.stringify(["github.com", bad]))).toEqual({ error: T.DOMAIN_ENTRY_BAD(bad) });
     expect(parsePartText("allowed_domains", '["github.com","10.0.0.5","*.example.com:443"]')).toEqual({ value: ["github.com", "10.0.0.5", "*.example.com:443"] });
     expect(parsePartText("denied_domains", '["10.0.0.5"]')).toEqual({ value: ["10.0.0.5"] });
+    // The server trims an entry before it judges it.
+    expect(domainEntryError("  github.com ")).toBeNull();
+    expect(domainEntryError(" 0x.1.2.3")).toBe(T.DOMAIN_ENTRY_BAD(" 0x.1.2.3"));
+    expect(parsePartText("allowed_domains", '[" github.com"]')).toEqual({ value: [" github.com"] });
   });
 
   it("refuses a host listed twice with Guided setup's own sentence, however long the list", () => {
@@ -111,10 +115,21 @@ describe("parsePartText", () => {
     expect(parsePartText("host_rules", rules("github.com", "github.com"))).toEqual({ value: JSON.parse(rules("github.com", "github.com")) });
     expect(parsePartText("host_rules", rules("*.github.com"))).toEqual({ error: T.RULE_HOST_WILDCARD("*.github.com") });
     // internal/types/host_rules.go validHostRule: no port, path, trailing dot, upper case; an IPv4 is written in full.
+    // A host every label of which a resolver reads as a number is an address, and only the standard spelling is taken.
+    for (const bad of ["0xc0.0.2.1", "0x.1.2.3", "0x7f.1", "0X7F.0.0.1", "1.2.3", "0x"]) {
+      expect(parsePartText("host_rules", rules("ok.example", bad)), bad).toEqual({ error: T.RULE_HOST_BAD(bad) });
+    }
+    expect(parsePartText("host_rules", rules("0xc0.example"))).toHaveProperty("value");
     for (const bad of ["github.com:443", "10.0.0.5:80", "https://x.example/path", "github.com.", ".github.com", "GitHub.com", "010.0.0.5", "300.0.0.5", "", "a b", "[::1]", "ünï.example"]) {
       expect(parsePartText("host_rules", rules("ok.example", bad)), bad).toEqual({ error: T.RULE_HOST_BAD(bad) });
     }
     expect(parsePartText("host_rules", '{"rules":1}')).toEqual({ error: T.PART_EDIT_LIST });
+  });
+
+  it("takes null for allowed_domains, which the server writes for no list, and for no other field", () => {
+    expect(parsePartText("allowed_domains", "null")).toEqual({ value: null });
+    expect(parsePartText("denied_domains", "null")).toEqual({ error: T.PART_EDIT_LIST });
+    expect(parsePartText("ui_apps", "null")).toEqual({ error: T.PART_EDIT_LIST });
   });
 
   it("wants the kind of value a known field holds, and any JSON for another", () => {

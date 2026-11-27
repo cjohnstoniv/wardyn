@@ -21,7 +21,7 @@ import { Chip } from "../../wardyn/primitives";
 import { usePrincipal } from "../../wardyn/operator-context";
 import { ComposerChat } from "./composer-chat";
 import { ComposerDraftPanel, draftLines } from "./composer-draft-panel";
-import { carryKept } from "./editor/run-editor";
+import { carryKept, flushEdits } from "./editor/run-editor";
 import { PhoneDraftBar, PhoneDraftSheet, useIsPhone } from "./composer-phone";
 import { ComposerPreview, kindLabel } from "./composer-preview";
 import { ComposerStarting } from "./composer-starting";
@@ -202,6 +202,8 @@ export function ComposerScreen() {
     if (phase.name !== "session") return;
     setChatError(null);
     try {
+      // The person's edits to the draft go first, so the assistant's next turn reads the draft they are looking at.
+      await flushEdits(phase.session.id);
       await assistant.postMessage(phase.session.id, text);
     } catch (e) {
       if (e instanceof HttpError && (e.status === 409 || e.reason === "assistant_role_denied")) {

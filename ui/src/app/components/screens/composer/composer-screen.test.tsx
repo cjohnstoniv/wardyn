@@ -378,10 +378,28 @@ describe("when the assistant stops", () => {
     await userEvent.click(await screen.findByRole("button", { name: T.START }));
     await push(ev("state", { state: "ready" }));
     const again = await screen.findByTestId("composer-part");
+    // The new session is told the carried draft once, through the same queue as every edit.
+    await waitFor(() => expect(edits).toHaveBeenCalledWith(second.id, { draft: { allowed_domains: ["github.com"] }, changed: [{ field: "allowed_domains", value: '["github.com"]' }] }));
+    expect(edits.mock.calls.filter((c) => c[0] === second.id)).toHaveLength(1);
     expect(again).toHaveAttribute("data-status", "accepted");
     expect(again).toHaveTextContent(T.PART_EDITED);
     expect(again).toHaveTextContent("github.com");
     expect(again).not.toHaveTextContent("api.github.com");
+  });
+
+  it("sends a chat message only after the session's pending edits have settled", async () => {
+    let answer: () => void = () => undefined;
+    edits.mockReset().mockImplementation(() => new Promise((ok) => (answer = () => ok({ seq: 1 }))));
+    // What the person accepted is kept per session, so this one is its own.
+    create.mockResolvedValue({ ...SESSION, id: "5b1d2f3a-0000-4000-8000-0000000000b1" });
+    await ready();
+    await push(ev("proposal", { parts: [{ section: "allowed_domains", value: ["github.com"] }], dropped: [] }));
+    await userEvent.click(within(await screen.findByTestId("composer-draft-panel")).getByRole("button", { name: T.PART_ACCEPT }));
+    await userEvent.type(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER }), "now allow it");
+    await userEvent.click(screen.getByRole("button", { name: T.SEND }));
+    expect(message).not.toHaveBeenCalled();
+    await act(async () => answer());
+    await waitFor(() => expect(message).toHaveBeenCalledWith(expect.any(String), "now allow it"));
   });
 
   it("answers a message refused with assistant_off by ending the chat with that reason, keeping the draft", async () => {
