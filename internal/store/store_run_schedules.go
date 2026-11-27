@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// A run_schedules row is one repeating schedule a person keeps (#3458, migration 0400): the rule, the run
+// A run_schedules row is one repeating schedule a person keeps (#3458, migration 0420): the rule, the run
 // request less its start fields, and the authority it was made or last resumed under. The leader sweep books
 // each occurrence as a one-time scheduled run and then advances next_at with a compare-and-set, so an
 // occurrence is never advanced twice.

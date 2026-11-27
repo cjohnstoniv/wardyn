@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const runMovesMigration = "0400"
+const runMovesMigration = "0426"
 
 // TestRunMovesMigration_GrantsTheAppRole: on a split-role install the migration gives each of its three tables,
 // with exactly the verbs the server's SQL uses on it, to every role that may delete attach leases, read from the
@@ -36,7 +36,7 @@ func TestRunMovesMigration_GrantsTheAppRole(t *testing.T) {
 		t.Fatal("the leases table's owner holds no DELETE entry in its acl, so the owner case proves nothing")
 	}
 
-	migrateBefore(t, pool, "0401")
+	migrateBefore(t, pool, "0427")
 
 	granted := map[string][]string{
 		"run_moves":         {"SELECT", "INSERT", "UPDATE"},

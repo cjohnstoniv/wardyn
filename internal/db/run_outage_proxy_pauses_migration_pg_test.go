@@ -11,12 +11,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestMigration0402_AppRoleUpdatesOnlyProxyPauses_PG: on a split-role install the migration gives the role that
+// TestMigration0424_AppRoleUpdatesOnlyProxyPauses_PG: on a split-role install the migration gives the role that
 // already updates agent_runs UPDATE on run_outage_terms.proxy_pauses alone, read from the catalog, so the upgrade
 // needs no hand grant. That role then runs both of the store's statements on the column: a proxy start's clearing
 // update (store.PG.BeginProxyStart) and a loaded report's upsert (store.PG.SetRunProxyPauses). It still cannot change a
 // run's terms, and a role that may only read agent_runs gets nothing.
-func TestMigration0402_AppRoleUpdatesOnlyProxyPauses_PG(t *testing.T) {
+func TestMigration0424_AppRoleUpdatesOnlyProxyPauses_PG(t *testing.T) {
 	pool, schema := partialSchemaPool(t, runOutageTermsMigration)
 	app, appPass := auditRole(t, pgPool(t), "wardyn_rop_app")
 	reader, _ := auditRole(t, pgPool(t), "wardyn_rop_reader")
@@ -26,7 +26,7 @@ func TestMigration0402_AppRoleUpdatesOnlyProxyPauses_PG(t *testing.T) {
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE, DELETE ON agent_runs TO `+app)
 	pgExec(t, pool, `GRANT SELECT ON agent_runs TO `+reader)
 
-	migrateBefore(t, pool, "0403")
+	migrateBefore(t, pool, "0425")
 
 	for column, want := range map[string]bool{"proxy_pauses": true, "allowance_s": false, "strict": false, "end_unattended": false, "run_id": false} {
 		if got := pgScalar[bool](t, pool, `SELECT has_column_privilege($1, 'run_outage_terms', $2, 'UPDATE')`, app, column); got != want {

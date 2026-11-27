@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
 
-// TokenSeal keeps each GitHub installation token a run minted in run_github_token_seals (migration 0403), sealed
+// TokenSeal keeps each GitHub installation token a run minted in run_github_token_seals (migration 0425), sealed
 // under the 'cred' subject key of the run's masking-manifest owner, so that the hand-back worker
 // (RunGitHubTokenRevokes) can present it to GitHub's DELETE /installation/token after the run's revoke. The owner is
 // run_mask_manifest.owner, the name a person's erasure fences and deletes under; a run with no masking manifest keeps

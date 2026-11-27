@@ -20,7 +20,7 @@ import (
 )
 
 // A Windows VM run is a desktop-only interactive run of an image an admin registered and bound to a licence
-// pool. The database holds the licence fence (migration 0401's triggers): the insert takes the seat and only
+// pool. The database holds the licence fence (migration 0428's triggers): the insert takes the seat and only
 // the run's end frees it. The steps here give the friendly refusal before the insert; the triggers stay the
 // fence for every path.
 

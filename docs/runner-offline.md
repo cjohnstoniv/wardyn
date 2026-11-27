@@ -169,4 +169,4 @@ On a Kubernetes runner, run the same command in the runnerd pod (`kubectl exec`)
 | `0155_runner_asserted_subjects` | Queued actions that name a run the organisation has no row for |
 | `0175_runner_action_refused` | The `refused` action result |
 | `0232_runner_exit_parked` | `parked_at` on exit receipts |
-| `0403_revocation_outage` | `run_local_containment`, a run a local operator contained on its runner, as reported; and `run_github_token_seals` |
+| `0425_revocation_outage` | `run_local_containment`, a run a local operator contained on its runner, as reported; and `run_github_token_seals` |

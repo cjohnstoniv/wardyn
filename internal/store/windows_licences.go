@@ -15,7 +15,7 @@ import (
 
 // WindowsLicenceStore is the Windows VM licence pools, their holders, the registered Windows images and the
 // live seats. The database holds the fence: a windows_vm run takes its seat in the statement that inserts it
-// (migration 0401's take trigger), and frees it only by ending, so nothing here writes a seat. These writes
+// (migration 0428's take trigger), and frees it only by ending, so nothing here writes a seat. These writes
 // refuse a change that would strand a live seat, naming the run that holds it (WindowsSeatLiveError).
 type WindowsLicenceStore interface {
 	ListWindowsLicencePools(ctx context.Context) ([]types.WindowsLicencePool, error)

@@ -11,14 +11,14 @@ import (
 	"github.com/google/uuid"
 )
 
-const runOutageTermsMigration = "0401"
+const runOutageTermsMigration = "0421"
 
-// TestMigration0401_AppRoleRecordsAndReadsOutageTerms_PG: on a split-role install the migration gives run_outage_terms
+// TestMigration0421_AppRoleRecordsAndReadsOutageTerms_PG: on a split-role install the migration gives run_outage_terms
 // to the role that already updates agent_runs, read from the catalog, so the upgrade needs no hand grant: SELECT and
 // INSERT only. That role then records a run's terms with the store's own statement, a second write keeps the first
 // (ON CONFLICT DO NOTHING needs no UPDATE), and deleting the run removes its row through the cascade with no DELETE
 // on the table. A role that may only read agent_runs gets nothing.
-func TestMigration0401_AppRoleRecordsAndReadsOutageTerms_PG(t *testing.T) {
+func TestMigration0421_AppRoleRecordsAndReadsOutageTerms_PG(t *testing.T) {
 	pool, schema := partialSchemaPool(t, runOutageTermsMigration)
 	app, appPass := auditRole(t, pgPool(t), "wardyn_rot_app")
 	reader, _ := auditRole(t, pgPool(t), "wardyn_rot_reader")
@@ -28,7 +28,7 @@ func TestMigration0401_AppRoleRecordsAndReadsOutageTerms_PG(t *testing.T) {
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE, DELETE ON agent_runs TO `+app)
 	pgExec(t, pool, `GRANT SELECT ON agent_runs TO `+reader)
 
-	migrateBefore(t, pool, "0402")
+	migrateBefore(t, pool, "0422")
 
 	for priv, want := range map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": false, "DELETE": false, "TRUNCATE": false} {
 		if got := pgScalar[bool](t, pool, `SELECT has_table_privilege($1, 'run_outage_terms', $2)`, app, priv); got != want {
