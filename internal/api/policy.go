@@ -887,7 +887,7 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool, onRu
 	// an onboarded source here — gating a run to only ONBOARDED workspaces is a
 	// later, security-critical wave (validateWorkspaceSources); this stays the
 	// PURE structural check (no store access).
-	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts)+len(spec.WorkspaceRepos))
+	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts))
 	for i, wm := range spec.WorkspaceMounts {
 		validateSource := runner.ValidateMountSource
 		if !resolveMounts || onRunner[i] {
