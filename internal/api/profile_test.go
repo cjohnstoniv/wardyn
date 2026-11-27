@@ -115,6 +115,29 @@ func TestSynthesizeProfile_ConfinedVerifyRunDoesNotMislabelDenials(t *testing.T)
 	}
 }
 
+// TestSynthesizeProfile_SkipsMCPSandboxEgress: a host only an MCP server's proxy reached is not observed and
+// not in the synthesized profile; the agent's own host beside it is.
+func TestSynthesizeProfile_SkipsMCPSandboxEgress(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	mcp := egressAllowEvent(runID, "api.vendor.test")
+	mcp.Data = mustJSON(map[string]any{"host": "api.vendor.test", "method": "GET", "mcp_sandbox": "files"})
+	fake := &recordStore{
+		run: types.AgentRun{ID: runID, Agent: "claude-code", Repo: "org/repo",
+			State: types.RunCompleted, ConfinementClass: types.CC2},
+		events: []types.AuditEvent{egressAllowEvent(runID, "registry.npmjs.org"), mcp},
+	}
+	cfg := baseTestConfig(h, fake)
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowAllEgress: true, MinConfinementClass: types.CC2}
+	w := do(t, New(cfg), http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST .../profile code = %d, body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "api.vendor.test") || !strings.Contains(w.Body.String(), "registry.npmjs.org") {
+		t.Errorf("profile = %s, want registry.npmjs.org and no trace of the MCP server's api.vendor.test", w.Body.String())
+	}
+}
+
 // Each synthesis holds the run's audit trail in memory, so only maxProfileSyntheses run at once on a
 // replica: the next is refused with 429 (and Retry-After), and a refused or finished call gives its
 // slot back.

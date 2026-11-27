@@ -258,6 +258,8 @@ func TestComponentMCP_Sandbox(t *testing.T) {
 			Spec: &types.RunPolicySpec{HostRules: hold}}), "mcp.sandbox.policy.spec.host_rules[0].rules[1].effect: "},
 		"overlay, hold rule": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower,
 			Overlay: &types.CeilingOverlay{HostRules: &hold}}), "mcp.sandbox.policy.overlay.host_rules[0].rules[1].effect: "},
+		"overlay, resources": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower,
+			Overlay: &types.CeilingOverlay{Resources: &types.ResourcesOverlay{}}}), "mcp.sandbox.policy.overlay.resources: "},
 		"overlay, raw secret values": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower,
 			Overlay: &types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"s3cr3t-value"}}}}),
 			"mcp.sandbox.policy.overlay.llm_inspection.workspace_secret_values may not be set on a policy write "},

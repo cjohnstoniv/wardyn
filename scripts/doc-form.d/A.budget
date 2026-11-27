@@ -497,7 +497,7 @@
 # docs/AUDIT-ACTIONS.md 75951 measured at the rc.5 join merge of the G5 sub-train (ours 75572, theirs 75543).
 # docs/AUDIT-ACTIONS.md 76388 measured at the rc.5 join merge of the G2 sub-train (ours 75951, theirs 75584).
 # docs/AUDIT-ACTIONS.md 71339 = ours 71312 + theirs 70587 - base 70560 at the merge of the site features switch.
-docs/AUDIT-ACTIONS.md=76666 share=8 # 76666 measured at the rc.6 train merge of the MCP server relay (ours 76388, theirs 71525).
+docs/AUDIT-ACTIONS.md=77249 share=8 # 77249 measured at the rc.6 train merge of the MCP own sandbox control plane.
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

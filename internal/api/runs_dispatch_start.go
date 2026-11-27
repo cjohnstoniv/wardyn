@@ -163,6 +163,7 @@ func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harn
 		// where "" already means "use container Status" — the sentinel only
 		// matters for a value that gets persisted and re-read after a restart.
 		s.startCompletionWatcher(run.ID, ref, execID)
+		s.startMCPSandboxWatcher(run.ID)
 	}
 }
 

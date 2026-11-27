@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -246,7 +247,13 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // be read keeps it too, as a retryable one noted on the run's trail (runUnreadableError, refuseRunToken), and so does
 // a database clock that cannot be read.
 func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, error) {
-	claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
+	return s.verifyRunTokenFor(r, tok, internalAudience)
+}
+
+// verifyRunTokenFor is verifyRunToken for the audience aud: the MCP sandbox's door (mcpSandboxAuth) verifies
+// its token with the same revoked-token door at the decisions route.
+func (s *Server) verifyRunTokenFor(r *http.Request, tok, aud string) (*identity.Claims, error) {
+	claims, err := s.cfg.Identity.Verify(r.Context(), tok, aud)
 	var revoked *identity.RevokedTokenError
 	// The door's exact path: chi routes on the escaped path, so another door's parameter can spell the segment.
 	if err == nil || s.cfg.Store == nil || !errors.As(err, &revoked) || revoked.Claims == nil ||
@@ -348,7 +355,7 @@ func uploadGraceOpen(since, now time.Time) bool {
 func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason authz.Reason, key, val string) {
 	once := r.URL.Path == decisionsDoor &&
 		(reason == authz.ReasonRunTerminal || reason == authz.ReasonRunKept || placement.Reason(reason).Valid())
-	if once && !s.claimDecisionRefusal(claims.RunID, authz.AuditAction) {
+	if once && !s.claimDecisionRefusal(r.Context(), claims.RunID, authz.AuditAction) {
 		return
 	}
 	d := authz.Deny(reason, r.URL.Path, "").OnRun(claims.RunID).With("actor", internalAuthActor)
@@ -360,22 +367,23 @@ func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, r
 	if !once {
 		s.recordAudit(r.Context(), ev)
 	} else if !s.recordAuditDurably(r.Context(), ev) {
-		s.releaseDecisionRefusal(claims.RunID, authz.AuditAction)
+		s.releaseDecisionRefusal(r.Context(), claims.RunID, authz.AuditAction)
 	}
 }
 
-// doorRefusals holds, per run and per row, until when this replica writes no further row of that action for
-// the decision door (claimDecisionRefusal): its refusal (authz.denied) and a post it could not take
+// doorRefusals holds, per run, per row and per MCP server, until when this replica writes no further row of that
+// action for the decision door (claimDecisionRefusal): its refusal (authz.denied) and a post it could not take
 // (run.report.drop). The zero value is ready to use.
 type doorRefusals struct {
 	mu    sync.Mutex
 	until map[doorRow]time.Time
 }
 
-// doorRow is one run's row of one action at the decision door.
+// doorRow is one run's row of one action at the decision door, for the agent's proxy or for one MCP server's.
 type doorRow struct {
 	run    uuid.UUID
 	action string
+	server string // audit.MCPSandboxOf the request; "" for the agent's
 }
 
 // claimDecisionRefusal reports whether this refusal of the decision door is the one row of action this replica
@@ -387,12 +395,14 @@ type doorRow struct {
 // inside that span, Verify's leeway included. This replica therefore writes at most one such row per run in
 // any RunTokenLapseAfter, a restart at most one more, and a claim whose span is over is dropped at the next
 // claim, so the set holds only the runs refused within the last span. A post the door could not take
-// (noteDecisionReportLost) is bounded the same way, under its own action.
-func (s *Server) claimDecisionRefusal(runID uuid.UUID, action string) bool {
+// (noteDecisionReportLost) is bounded the same way, under its own action. An MCP proxy's request claims apart
+// from the agent's, one row per server: the replay leaves the proxy's row out, so it must not hold back the
+// agent's, and the agent's claim is the run's as before.
+func (s *Server) claimDecisionRefusal(ctx context.Context, runID uuid.UUID, action string) bool {
 	g := &s.doorRefusals
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	now, row := s.cfg.Now(), doorRow{runID, action}
+	now, row := s.cfg.Now(), doorRow{runID, action, audit.MCPSandboxOf(ctx)}
 	if until, ok := g.until[row]; ok && now.Before(until) {
 		return false
 	}
@@ -410,10 +420,10 @@ func (s *Server) claimDecisionRefusal(runID uuid.UUID, action string) bool {
 
 // releaseDecisionRefusal gives a run's claim of action back when its row was neither written nor spooled, so
 // the next refused post writes it.
-func (s *Server) releaseDecisionRefusal(runID uuid.UUID, action string) {
+func (s *Server) releaseDecisionRefusal(ctx context.Context, runID uuid.UUID, action string) {
 	g := &s.doorRefusals
 	g.mu.Lock()
-	delete(g.until, doorRow{runID, action})
+	delete(g.until, doorRow{runID, action, audit.MCPSandboxOf(ctx)})
 	g.mu.Unlock()
 }
 

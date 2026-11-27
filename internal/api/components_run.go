@@ -638,6 +638,9 @@ func (a attachedComponent) auditEntry(ordinal int) map[string]any {
 	if def.MCP != nil {
 		e["mcp_harnesses"] = slices.Concat([]string{}, a.snapshot.MCPHarnesses)
 	}
+	if def.LocalMCP() {
+		e["mcp_policy_mode"] = mcpPolicyModeOf(def) // the sandbox's policy: same, narrower or own
+	}
 	return e
 }
 

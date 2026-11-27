@@ -361,7 +361,7 @@ func (s *Server) refuseRecover(w http.ResponseWriter, r *http.Request, claims *i
 // renew, but at most one row per run and reason per identity.RunTokenLapseAfter (claimDecisionRefusal): a proxy
 // asking every minute through a long outage writes one row per reason, not one per ask. The answer is unchanged.
 func (s *Server) auditRecoverDenied(r *http.Request, claims *identity.Claims, reason string) {
-	if !s.claimDecisionRefusal(claims.RunID, "identity.recover:"+reason) {
+	if !s.claimDecisionRefusal(r.Context(), claims.RunID, "identity.recover:"+reason) {
 		return
 	}
 	ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,

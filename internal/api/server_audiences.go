@@ -15,3 +15,7 @@ const internalAudience = "wardyn-internal"
 // This bounds the host sensor's authority to exactly "write ground-truth audit
 // events" and nothing else.
 const groundtruthAudience = "wardyn-groundtruth"
+
+// mcpSandboxAudience is the audience of an MCP sandbox's proxy token. internalAuth refuses it on every route;
+// mcpSandboxAuth serves it on its five (internal_mcp_auth.go), for the run's server row whose jti it is.
+const mcpSandboxAudience = "wardyn-mcp-sandbox"

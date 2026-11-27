@@ -28,6 +28,8 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	var revokeErr, approvalsErr error
 	heldCall(ctx, heldRevokeBound, func(ctx context.Context) { revokeErr = s.revokeRunCascade(ctx, runID) })
 	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { approvalsErr = s.cancelRunApprovals(ctx, runID) })
+	heldCall(ctx, mcpSandboxEndTimeout, func(ctx context.Context) { s.endRunMCPSandboxes(ctx, runID, mcpEndCompleted) })
+	s.lostCuts.Delete(runID)
 	errs := []error{revokeErr, approvalsErr}
 	if !finishAfterStop {
 		heldCall(ctx, killCascadeTimeout, func(ctx context.Context) {

@@ -100,12 +100,14 @@ func decisionDurable(dl egress.DecisionLog) bool {
 // being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
 // A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
 // decisions are kept on its trail and, as on the runner spool, are not activity.
+// An MCP proxy's decision moves neither clock (mcpSandboxCaller), and is judged so ahead of shouldTouch, so it
+// never takes the agent's debounce slot.
 func (s *Server) decisionTouch(ctx context.Context, runID uuid.UUID, kind types.MachineKind, isOver func() bool, dl egress.DecisionLog) {
-	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
+	if s.cfg.Store != nil && !mcpSandboxCaller(ctx) && s.shouldTouch(runID, kind, dl) && !isOver() {
 		_ = s.cfg.Store.TouchRun(ctx, runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
+	if !mcpSandboxCaller(ctx) && decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
 		s.noteAgentActive(ctx, runID)
 	}
 }

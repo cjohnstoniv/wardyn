@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_mcp_sandboxes` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run with
+  an MCP server that starts from a command does not start.
+
 ## [0.11.0-rc.5] — 2026-11-27
 
 ### Added

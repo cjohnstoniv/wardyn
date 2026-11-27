@@ -229,7 +229,9 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (
 // relostUnwritten, with the stop's error when the stop is not confirmed.
 func (s *Server) containUnwrittenLoss(ctx context.Context, run types.AgentRun, fence int) (reloseFate, error) {
 	s.revokeRunBroker(ctx, run.ID)
-	if err := s.stopLostSandboxAt(ctx, run, fence); err != nil {
+	err := s.stopLostSandboxAt(ctx, run, fence)
+	s.endRunMCPSandboxes(ctx, run.ID, mcpEndLost) // whether or not the stop failed: the run is contained either way
+	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return relostUnwritten, err

@@ -294,6 +294,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 			// credential) on every substrate whose SandboxEnder answers it.
 			s.cancelRunApprovals(ctx, run.ID)
 			s.revokeRunBroker(ctx, run.ID)
+			s.endRunMCPSandboxes(ctx, run.ID, mcpEndEnded) // the run is kept: its MCP servers go with their secrets
 			s.leaseEnded.Store(run.ID, struct{}{})
 			outcome := "success"
 			if err != nil {

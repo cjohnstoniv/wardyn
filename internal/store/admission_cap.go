@@ -27,7 +27,25 @@ var (
 	ErrApprovalRunCap = errors.New("store: the run holds its approval cap")
 	ErrAPITokenCap    = errors.New("store: the owner holds the live API token cap")
 	ErrSSHKeyCap      = errors.New("store: the owner holds the SSH key cap")
+	// ErrApprovalMCPSandboxCap refuses an MCP server's egress hold once that server holds its own cap
+	// (WithMCPSandboxAdmissionCap).
+	ErrApprovalMCPSandboxCap = errors.New("store: the MCP server holds its approval cap")
 )
+
+// mcpSandboxApprovalSQL holds for an approval an MCP server's proxy raised: an egress hold whose
+// requested_scope has a top-level string mcp_sandbox that is not empty (internal/api's isMCPSandboxRow). It
+// is never NULL. The run's approval cap leaves these rows out; each server has a cap of its own.
+const mcpSandboxApprovalSQL = `(kind = 'egress_domain' AND jsonb_typeof(requested_scope -> 'mcp_sandbox') IS NOT DISTINCT FROM 'string'
+	AND requested_scope ->> 'mcp_sandbox' <> '')`
+
+type mcpSandboxCapKey struct{}
+
+// WithMCPSandboxAdmissionCap is WithAdmissionCap for an MCP server's egress hold: CreateApproval counts only
+// the run's rows labelled key against limit, under the run's cap lock, and refuses with
+// ErrApprovalMCPSandboxCap.
+func WithMCPSandboxAdmissionCap(ctx context.Context, limit int, key string) context.Context {
+	return context.WithValue(WithAdmissionCap(ctx, limit), mcpSandboxCapKey{}, key)
+}
 
 var errAdmissionOutsideTx = errors.New("store: a capped insert must run in a transaction")
 
@@ -51,9 +69,9 @@ func lockScope(ctx context.Context, q Querier, class int32, key string) error {
 }
 
 // admitUnderCap is a capped writer's step before its insert on q: with a cap on ctx, it takes class's
-// lock for scope and counts with countSQL ($1 = scope), returning full at the cap. Without one it
-// takes nothing.
-func admitUnderCap(ctx context.Context, q queryRower, class int32, scope any, countSQL string, full error) error {
+// lock for scope and counts with countSQL ($1 = scope, then args), returning full at the cap. Without one
+// it takes nothing.
+func admitUnderCap(ctx context.Context, q queryRower, class int32, scope any, countSQL string, full error, args ...any) error {
 	limit, ok := ctx.Value(admissionCapKey{}).(int)
 	if !ok {
 		return nil
@@ -66,7 +84,7 @@ func admitUnderCap(ctx context.Context, q queryRower, class int32, scope any, co
 		return err
 	}
 	var n int
-	if err := tx.QueryRow(ctx, countSQL, scope).Scan(&n); err != nil {
+	if err := tx.QueryRow(ctx, countSQL, append([]any{scope}, args...)...).Scan(&n); err != nil {
 		return fmt.Errorf("store: count under the cap's lock: %w", err)
 	}
 	if n >= limit {
@@ -78,8 +96,9 @@ func admitUnderCap(ctx context.Context, q queryRower, class int32, scope any, co
 // admitApproval is what an approval insert takes in tx before its row, returning the run's leaf
 // governance profile. With notifications on: the run's notification budget lock, and the profile, read
 // in this transaction so a concurrent profile change cannot route the approval by stale data. With a
-// cap on ctx: the run's cap lock and its count of approvals in any state. Lock order: the budget lock,
-// then the cap lock, then rows.
+// cap on ctx: the run's cap lock and its count of approvals in any state, leaving out its MCP servers' holds,
+// or, under WithMCPSandboxAdmissionCap, that server's holds alone. Lock order: the budget lock, then the cap
+// lock, then rows.
 func admitApproval(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (*uuid.UUID, error) {
 	var profileID *uuid.UUID
 	if notify.Enabled() {
@@ -90,5 +109,10 @@ func admitApproval(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (*uuid.UUID,
 			return nil, fmt.Errorf("store: read run profile: %w", err)
 		}
 	}
-	return profileID, admitUnderCap(ctx, tx, db.ApprovalRunCapLockClass, runID, `SELECT count(*) FROM approvals WHERE run_id = $1`, ErrApprovalRunCap)
+	if key, _ := ctx.Value(mcpSandboxCapKey{}).(string); key != "" {
+		return profileID, admitUnderCap(ctx, tx, db.ApprovalRunCapLockClass, runID, `SELECT count(*) FROM approvals
+			WHERE run_id = $1 AND `+mcpSandboxApprovalSQL+` AND requested_scope ->> 'mcp_sandbox' = $2`, ErrApprovalMCPSandboxCap, key)
+	}
+	return profileID, admitUnderCap(ctx, tx, db.ApprovalRunCapLockClass, runID,
+		`SELECT count(*) FROM approvals WHERE run_id = $1 AND NOT `+mcpSandboxApprovalSQL, ErrApprovalRunCap)
 }

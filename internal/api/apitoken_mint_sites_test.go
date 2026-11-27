@@ -25,7 +25,8 @@ import (
 // and no non-test code in this package sets MintedBy on a types.APIToken (the
 // minted_by column is read here, never written). Every door of a capped insert (a
 // token, an SSH key, a sandbox's approval raise) passes its cap to the store once
-// (store.WithAdmissionCap), so the store's count under the cap's lock is the authority.
+// (store.WithAdmissionCap, or for an MCP server's proxy's hold store.WithMCPSandboxAdmissionCap), so the store's
+// count under the cap's lock is the authority.
 // An inbound federation exchange writes its token through CreateExchangedToken alone, from handleInboundExchange,
 // and passes no admission cap: the store caps it per trust.
 func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
@@ -36,7 +37,7 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 	fset := token.NewFileSet()
 	calls := map[string]map[string]int{}
 	for _, name := range []string{"insertAPIToken", "CreateAPIToken", "ClaimInvitation", "CreateServiceToken", "CreateExchangedToken", "mintGuards", "prepareMint",
-		"CreateCLISession", "RotateCLISession", "CreateCLIAdminToken", "mintCLIToken", "WithAdmissionCap"} {
+		"CreateCLISession", "RotateCLISession", "CreateCLIAdminToken", "mintCLIToken", "WithAdmissionCap", "WithMCPSandboxAdmissionCap"} {
 		calls[name] = map[string]int{}
 	}
 	for _, f := range files {
@@ -92,8 +93,10 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 		"CreateCLISession":    {"createCLISession"},
 		"RotateCLISession":    {"rotateCLISession"},
 		"CreateCLIAdminToken": {"mintCLIAdmin"},
-		"WithAdmissionCap": {"handleAddSSHKey", "handleClaimInvitation", "handleInternalRequestApproval",
+		"WithAdmissionCap": {"approvalRaiseCap", "handleAddSSHKey", "handleClaimInvitation",
 			"handleRequestDesktopReview", "insertAPIToken", "mintCLIToken"},
+		// A sandbox's raise is capped in approvalRaiseCap: the run's cap, or an MCP server's own for its proxy's holds.
+		"WithMCPSandboxAdmissionCap": {"approvalRaiseCap"},
 	} {
 		got := slices.Sorted(maps.Keys(calls[name]))
 		if !slices.Equal(got, want) {

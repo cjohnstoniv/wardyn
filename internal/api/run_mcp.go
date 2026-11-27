@@ -236,10 +236,17 @@ type componentMCP struct {
 	// EnvNames is a local server's own variables: its env secrets' and its
 	// config's names.
 	EnvNames []string
+	// Headers is a local server's header secrets: each injection of one is its own sandbox's
+	// (takeMCPServerSecrets), never the agent's (sandboxedMCPRule).
+	Headers []mcpHeaderSecret
 	// GatewayAudience and GatewayUID are an organisation's remote server's: the audience of the
 	// identity token its route sends, and the component and version that route is sealed against.
 	GatewayAudience, GatewayUID string
 }
+
+// mcpHeaderSecret is one header secret of a server that starts from a command: its host and its secret's name,
+// never a value.
+type mcpHeaderSecret struct{ Host, SecretName string }
 
 // mcpDispatch is what dispatch hands on for the run's MCP servers.
 type mcpDispatch struct {
@@ -260,14 +267,15 @@ type mcpDispatch struct {
 // credentialed or not, with its bindings, as a revive drops one. Each harness a server is on for gets one token and its
 // own configuration: Claude Code a managed file, Codex CLI the env its
 // agent-run writes into config.toml (env, set here into sandboxEnv). A server
-// that starts from a command is skipped: it runs only in a sandbox of its own,
-// and the gate refuses a run that has one until it can be given one.
+// that starts from a command runs only in a sandbox of its own: it gets its
+// entry with no URL and no credential, and its bindings, and
+// createRunMCPSandboxes sets its relay target once its sandbox exists.
 func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.InjectionGrant, proxyURL string, interactive bool, env map[string]string) mcpDispatch {
 	var out mcpDispatch
 	on := map[string][]string{}
 	var order []string
 	for _, m := range servers {
-		if m.Launch != nil || w.withheld(m.Host) {
+		if m.Launch == nil && w.withheld(m.Host) {
 			continue
 		}
 		cfg := proxy.MCPServerConfig{Key: m.Key, URL: m.URL, Ordinal: m.Ordinal}
@@ -340,7 +348,9 @@ func mintMCPToken() (token, digest string) {
 // reviveMCPBindings re-derives which harness reaches which MCP server from the
 // run's component rows, never from the stored config alone: a server whose row
 // is gone or erased is dropped, and each harness keeps only the servers its
-// row's mcp_harnesses record. It only narrows.
+// row's mcp_harnesses record. It only narrows. A server in its own sandbox is
+// reached at the address its MCP sandbox row pins, so a rebooted agent starts with
+// it before the revive re-creates the sandbox.
 func (s *Server) reviveMCPBindings(ctx context.Context, run types.AgentRun, cfg *proxy.Config) *reviveError {
 	if len(cfg.MCPServers) == 0 {
 		return nil
@@ -350,6 +360,17 @@ func (s *Server) reviveMCPBindings(ctx context.Context, run types.AgentRun, cfg 
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the run's MCP servers", err))
 	}
 	narrowMCPBindings(cfg, comps)
+	rows, err := s.reviveMCPRows(ctx, run.ID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "read the run's MCP servers", err))
+	}
+	for i := range cfg.MCPServers {
+		sv := &cfg.MCPServers[i]
+		j := slices.IndexFunc(rows, func(r store.RunMCPSandbox) bool { return r.Ordinal == sv.Ordinal })
+		if sv.Relay != nil && j >= 0 && rows[j].RelayAddr != "" {
+			sv.Relay.Addr = rows[j].RelayAddr
+		}
+	}
 	return nil
 }
 
@@ -378,7 +399,8 @@ const (
 )
 
 // attachedMCP is the MCP binding of the attached component a fact describes,
-// and its server's host; nil when it carries no server.
+// and its server's host; nil when it carries no server. A server that starts
+// from a command names its sandbox's policy mode; its hosts are the row's.
 func attachedMCP(comps runComponents, factID string) (*client.AccessMCP, string) {
 	keys := mcpServerKeys(comps.attached)
 	for i, a := range comps.attached {
@@ -387,10 +409,23 @@ func attachedMCP(comps runComponents, factID string) (*client.AccessMCP, string)
 			continue
 		}
 		server, _ := types.MCPURLDestination(def.MCP.URL) // a local server has no URL, so no broker host
-		return &client.AccessMCP{ServerKey: keys[i], Transport: def.MCP.Transport,
-			Harnesses: slices.Concat([]string{}, a.snapshot.MCPHarnesses)}, server.Host
+		out := &client.AccessMCP{ServerKey: keys[i], Transport: def.MCP.Transport,
+			Harnesses: slices.Concat([]string{}, a.snapshot.MCPHarnesses)}
+		if def.LocalMCP() {
+			out.PolicyMode = mcpPolicyModeOf(def)
+		}
+		return out, server.Host
 	}
 	return nil, ""
+}
+
+// mcpBrokeredServerFor reports whether an MCP server the broker sits in front
+// of is turned on for harness: a remote one, or one that starts from a
+// command, which the broker reaches through its sandbox's proxy.
+func mcpBrokeredServerFor(comps runComponents, harness string) bool {
+	return slices.ContainsFunc(comps.attached, func(a attachedComponent) bool {
+		return a.snapshot.Definition.MCP != nil && slices.Contains(a.snapshot.MCPHarnesses, harness)
+	})
 }
 
 // mcpRemoteServerFor reports whether a remote MCP server, which the broker

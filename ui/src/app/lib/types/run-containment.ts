@@ -49,6 +49,8 @@ export interface RunContainmentPending {
   no_causal_association: boolean;
   two_people: boolean;
   tuple?: NodeTuple;
+  /** Each MCP server of the run whose sandbox is not known to be gone yet. */
+  mcp_sandboxes?: string[];
 }
 
 /** One node record and what the runner answered. */

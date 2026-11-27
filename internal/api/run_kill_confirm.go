@@ -130,6 +130,9 @@ func (s *Server) tryKillConfirm(ctx context.Context, run types.AgentRun) error {
 	if err != nil {
 		return fmt.Errorf("%w: read the run: %w", errKillConfirmBusy, err) // not read: try again, never on the pre-cascade copy's ref
 	}
+	if err := s.confirmMCPSandboxesGone(lctx, cur); err != nil {
+		return err // containment waits for every MCP sandbox too, also once the agent's is gone
+	}
 	if cur.SandboxRef == "" {
 		return nil // a second kill or the boot pass confirmed it first
 	}

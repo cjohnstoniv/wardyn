@@ -1062,6 +1062,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
 	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/kill":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// A run's MCP servers that start from a command (run_mcp_sandbox_routes.go): the list and the Stop as the
+	// kill (a security admin too), the Restart as revive (the owner or a super admin).
+	"GET /api/v1/runs/{id}/mcp-servers":                {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/mcp-servers/{key}/restart": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/mcp-servers/{key}/stop":    {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// One command in a running run (run_exec.go): the entry rule, as SSH exec has it.
 	"POST /api/v1/runs/{id}/exec": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 
@@ -1277,6 +1282,21 @@ func absentRowSignInAnswer(method, pattern string, w *httptest.ResponseRecorder)
 		w.Code == http.StatusForbidden && errorReason(w) == "capability_component"
 }
 
+// unknownMCPServerAnswer reports whether w is an MCP server Restart's or Stop's own answer for a key the run
+// has no server for: the probe fills {key} with an id no server holds, so the handler, reached past its
+// authorization, answers its own 404, whose reason the not-owner 404 never carries. The exemption is those two
+// routes' alone.
+func unknownMCPServerAnswer(method, pattern string, w *httptest.ResponseRecorder) bool {
+	return method == http.MethodPost && (pattern == mcpServerStopRoute || pattern == mcpServerRestartRoute) &&
+		w.Code == http.StatusNotFound && errorReason(w) == reasonMCPSandboxUnknown
+}
+
+// mcpServerStopRoute and mcpServerRestartRoute are the MCP server Stop's and Restart's route patterns.
+const (
+	mcpServerStopRoute    = "/api/v1/runs/{id}/mcp-servers/{key}/stop"
+	mcpServerRestartRoute = "/api/v1/runs/{id}/mcp-servers/{key}/restart"
+)
+
 // assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
 func assertNotBlockedOn(t *testing.T, method, pattern, who string, w *httptest.ResponseRecorder) {
 	t.Helper()
@@ -1302,6 +1322,33 @@ func TestAbsentRowSignInAnswer_IsScopedToTheSignInRoute(t *testing.T) {
 	} {
 		if got := absentRowSignInAnswer(tc.method, tc.pattern, w); got != tc.want {
 			t.Errorf("%s %s: exempt = %v, want %v", tc.method, tc.pattern, got, tc.want)
+		}
+	}
+}
+
+func TestUnknownMCPServerAnswer_IsScopedToTheServerRoutes(t *testing.T) {
+	w := httptest.NewRecorder()
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.WriteString(`{"error":"x","reason":"` + reasonMCPSandboxUnknown + `"}`)
+	other := httptest.NewRecorder()
+	other.WriteHeader(http.StatusNotFound)
+	_, _ = other.WriteString(`{"error":"x","reason":"run_not_found"}`)
+	for _, tc := range []struct {
+		method, pattern string
+		w               *httptest.ResponseRecorder
+		want            bool
+	}{
+		{http.MethodPost, mcpServerStopRoute, w, true},
+		{http.MethodPost, mcpServerStopRoute, other, false},
+		{http.MethodPost, mcpServerRestartRoute, w, true},
+		{http.MethodPost, mcpServerRestartRoute, other, false},
+		{http.MethodGet, "/api/v1/runs/{id}/mcp-servers", w, false},
+		{http.MethodPost, "/api/v1/runs/{id}/kill", w, false},
+		{http.MethodGet, mcpServerStopRoute, w, false},
+		{http.MethodGet, mcpServerRestartRoute, w, false},
+	} {
+		if got := unknownMCPServerAnswer(tc.method, tc.pattern, tc.w); got != tc.want {
+			t.Errorf("%s %s (%s): exempt = %v, want %v", tc.method, tc.pattern, errorReason(tc.w), got, tc.want)
 		}
 	}
 }
@@ -1823,11 +1870,13 @@ func TestAuthzMatrix(t *testing.T) {
 						t.Errorf("admin on a FOREIGN entity, tierEntry route: status = %d, want 403 run_owner_only; body=%s",
 							w.Code, w.Body.String())
 					}
-				} else if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+				} else if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden ||
+					w.Code == http.StatusNotFound && !unknownMCPServerAnswer(method, pattern, w) {
 					t.Errorf("admin on a FOREIGN entity: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
 				}
 				// The owner reaches their own.
-				if w := doSSO(t, srv, method, pOwned, memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+				if w := doSSO(t, srv, method, pOwned, memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden ||
+					w.Code == http.StatusNotFound && !unknownMCPServerAnswer(method, pattern, w) {
 					t.Errorf("owning member: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
 				}
 				// A non-owner gets the byte-identical 404 a missing entity would
@@ -2016,7 +2065,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					// work — a route silently narrowed to super would strand
 					// incident response, which is the other direction of the
 					// same drift.
-					if w.Code == http.StatusNotFound || w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
+					if (w.Code == http.StatusNotFound && !unknownMCPServerAnswer(method, pattern, w)) || w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
 						t.Errorf("security_admin on a FOREIGN entity, tierSecurity route: status = %d, want the "+
 							"handler's own answer — inspect-or-stop is this tier's warrant; body=%s", w.Code, w.Body.String())
 					}
@@ -2075,9 +2124,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// PUT .../previews/{port} (tierEntry); 61 since 0.11 added POST
 		// /runs/{id}/desktop/local-window (tierEntry); 63 since 0.11 added POST
 		// /runs/{id}/move and GET /runs/{id}/placements (tierSuper, as resume); 64
-		// since rc.5 added GET /runs/{id}/clones (tierSecurity).
-		if probed != 64 {
-			t.Errorf("probed %d classOwner routes, want 64 — a route that left classOwner takes its tier "+
+		// since rc.5 added GET /runs/{id}/clones (tierSecurity); 67 since 0.11 added GET
+		// /runs/{id}/mcp-servers and POST .../{key}/restart (tierSuper) and .../{key}/stop.
+		if probed != 67 {
+			t.Errorf("probed %d classOwner routes, want 67 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -3156,6 +3206,10 @@ func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string)
 	ap.DecidedBy = "system"
 	a.byID[id] = ap
 	return nil
+}
+
+func (a *authzApprovals) CountForMCPSandbox(context.Context, uuid.UUID, string) (int, error) {
+	return 0, nil // this fixture raises no MCP server's hold
 }
 
 func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {

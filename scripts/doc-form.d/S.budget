@@ -397,7 +397,7 @@
 # docs/sdk.md 40972 measured at the rc.5 join merge of the G5 sub-train (ours 40688, theirs 40285).
 # docs/sdk.md 41980 measured at the rc.5 join merge of the G2 sub-train (ours 40972, theirs 41008).
 # docs/sdk.md 35254 = ours 35221 + theirs 35067 - base 35034 at the merge of the site features switch.
-docs/sdk.md=42034 share=21 # 42034 measured at the rc.6 train merge of the MCP sandbox runner (ours 41993, theirs 35381).
+docs/sdk.md=42225 share=21 # 42225 measured at the rc.6 train merge of the MCP own sandbox control plane.
 # docs/sdk.md 28793 adds 34 over 28759, measured: the component_unit_pinned row and the two pin reasons beside the workspace pin's.
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
