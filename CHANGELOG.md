@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.11.0-rc.4] — 2026-11-26
+
 ### Added
 
 - An experimental `spire` identity provider (`WARDYN_IDENTITY=spire`, off by default, Kubernetes only): each run token is a SPIRE JWT-SVID, its delegation chain is kept in the new `identity_token_bindings` table, and wardynd registers one SPIRE entry per run that selects only the run's proxy pod. Not yet run against a live SPIRE server. The chart's `spire` block wires it; see docs/operations/spire.md.

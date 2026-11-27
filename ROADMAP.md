@@ -41,6 +41,7 @@
 | **v0.11.0-rc.1** | rc.1, the first 0.11.0 candidate: the 0.10.4 fixes, `wardyn run forward` with the SSH gateway off, assistant settings and sessions. Multi-approver governance, single-use SSH tickets, startup while the identity provider is down, Walls server routes, and off-by-default 0.11 `features`. | **Shipped (pre-alpha)** — `v0.11.0-rc.1`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.11.0-rc.2** | rc.2: agent rules per harness, approval counts per kind of governance change, machine kinds by runner trust class, an optional MDM device certificate for macOS sandboxes, desktop watermarks, outage records, and batched proxy decisions. | **Shipped (pre-alpha)** — `v0.11.0-rc.2`, 2026-11-25 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.11.0-rc.3** | rc.3: every 0.10.5 fix carried into the 0.11.0 candidates, and git trusts the run's certificate bundle in container and Kubernetes runs. | **Shipped (pre-alpha)** — `v0.11.0-rc.3`, 2026-11-25 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.4** | rc.4: extra containers beside a run's agent, organisation sites, team drives, machine snapshots, inbound workload federation, run previews, run-history retention, a salted audit hash, and sweeps shared across replicas. | **Shipped (pre-alpha)** — `v0.11.0-rc.4`, 2026-11-26 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
