@@ -537,7 +537,7 @@ func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditRo
 // claimed for it: equals e.data->'device_origin'->>'row_hash' for every row IngestDeviceAudit
 // accepts. Claimed actor/source_ip/prev_hash live in device_origin; the claimed object is stored data
 // minus that key; a data-less claim is named by device_origin.data_null ("json" for JSON null, "sql" for absent).
-const FederatedClaimHashSQL = `audit_row_hash_any(COALESCE((e.data->'device_origin'->>'hash_format')::smallint, 1), e.claim_salt,
+const FederatedClaimHashSQL = `audit_row_hash_any(COALESCE((e.data->'device_origin'->>'hash_format')::smallint, 1::smallint), e.claim_salt,
 	e.data->'device_origin'->>'prev_hash', e.id, e.time, e.run_id,
 	e.actor_type, e.data->'device_origin'->>'actor', e.action, e.target, e.outcome, e.data->'device_origin'->>'source_ip',
 	CASE e.data->'device_origin'->>'data_null' WHEN 'json' THEN 'null'::jsonb WHEN 'sql' THEN NULL

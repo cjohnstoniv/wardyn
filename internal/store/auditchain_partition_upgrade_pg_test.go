@@ -29,6 +29,7 @@ func TestPG_AuditChainVerifiesAcrossThePartitionConversion(t *testing.T) {
 
 	execMigrationFile(t, pool, "0111_audit_partitioned.sql")
 	execMigrationFile(t, pool, "0112_audit_chain_partitioned.sql")
+	applyHashV2(t, pool)
 
 	var first types.AuditEvent
 	for i, action := range []string{"test.post.1", "test.post.2", "test.post.3"} {
