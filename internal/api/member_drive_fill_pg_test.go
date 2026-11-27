@@ -235,7 +235,8 @@ func wantOwnTokenGrant(t *testing.T, g types.CredentialGrant) {
 func TestDriveSeed_OwnerOnly_PG(t *testing.T) {
 	f := newFillPG(t)
 	ctx := context.Background()
-	adminDrive, err := f.pg.UpsertUserDrive(ctx, types.UserDrive{Name: "Shared", Backend: types.DriveBackendDockerVolume}, false)
+	adminDrive, err := f.pg.UpsertUserDrive(ctx, types.UserDrive{Name: "Shared", Backend: types.DriveBackendDockerVolume,
+		HomeTemplate: types.HomeTemplateHash, Reclaim: types.DriveReclaimRetain}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +556,7 @@ func TestDriveSeed_PostCreateCheckEndsRun_PG(t *testing.T) {
 	t.Run("the fold dropped the grant", func(t *testing.T) {
 		f := newFillPG(t)
 		defer func() { driveFillBeforeCreate = func() {} }()
-		driveFillBeforeCreate = func() { f.h.srv.cfg.DefaultPolicy.EligibleGrants = nil }
+		driveFillBeforeCreate = f.dropGitOnReadBack()
 		w := f.fill()
 		f.wantReason(w, http.StatusUnprocessableEntity, reasonDriveSeedOwnCredentialRequired)
 		var id string
@@ -574,7 +575,7 @@ func TestDriveSeed_PostCreateCheckEndsRun_PG(t *testing.T) {
 		f := newFillPG(t)
 		f.h.srv.cfg.Runner = &failTeardownRunner{fillPGRunner: f.rn}
 		defer func() { driveFillBeforeCreate = func() {} }()
-		driveFillBeforeCreate = func() { f.h.srv.cfg.DefaultPolicy.EligibleGrants = nil }
+		driveFillBeforeCreate = f.dropGitOnReadBack()
 		w := f.fill()
 		var got struct {
 			ID     uuid.UUID `json:"id"`
@@ -593,6 +594,30 @@ func TestDriveSeed_PostCreateCheckEndsRun_PG(t *testing.T) {
 			t.Errorf("drive.seed rows = %+v, want one refused, reason internal, with the run", rows)
 		}
 	})
+}
+
+// readBackDropsGit is the fill rig's store from the create on, whose first read of a run's grants outside the create
+// is missing its git grants: what a fill reads back from a create whose fold dropped the own-token grant. Changing the
+// ceiling between the pre-checks and the create cannot drop it, as the request resolves its ceiling once
+// (effectiveCeiling's memo), so the read-back is where the drop is made. The create's own reads carry the fill's
+// launch mark and see every grant; the read-back puts the store back, so the kill after it reads the store itself.
+type readBackDropsGit struct {
+	store.PG
+	srv *Server
+}
+
+func (s readBackDropsGit) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
+	grants, err := s.PG.ListGrantsByRun(ctx, runID)
+	if _, launch := driveFillLaunchFrom(ctx); launch || err != nil {
+		return grants, err
+	}
+	s.srv.cfg.Store = s.PG
+	return slices.DeleteFunc(grants, func(g types.CredentialGrant) bool { return g.Spec.Kind == types.GrantGitPAT }), nil
+}
+
+// dropGitOnReadBack is the seam that puts readBackDropsGit under the fill's create.
+func (f *fillPG) dropGitOnReadBack() func() {
+	return func() { f.h.srv.cfg.Store = readBackDropsGit{PG: f.h.srv.cfg.Store.(store.PG), srv: f.h.srv} }
 }
 
 // failTeardownRunner cannot stop or kill a sandbox.

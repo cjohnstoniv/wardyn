@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -23,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -490,10 +493,21 @@ func TestAssistantPersonCtxTakesThePublishedRole_PG(t *testing.T) {
 	if err := a.pg.PutPrincipalGroups(ctx, person, "", email, []string{}, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	const raw = apiTokenPrefix + "assistant-cli-access"
-	exp := time.Now().Add(time.Hour)
-	if _, err := a.pg.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: person, Email: email, Role: oidc.RoleSecurityAdmin,
-		UserType: types.UserTypeStandard, GroupsTruncated: new(bool), Name: "cli", Kind: types.APITokenKindCLIAccess, ExpiresAt: &exp}, raw); err != nil {
+	// A cli_access token is written with its CLI session (store.PG.CreateCLISession): the table holds no such token
+	// without one (api_tokens_cli_session_kind).
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now, notTruncated := time.Now().UTC(), false
+	exp := now.Add(time.Hour)
+	sess := store.CLISessionRow{ID: uuid.New(), Identity: store.CLIIdentity{Principal: person, Email: email, Role: oidc.RoleSecurityAdmin,
+		UserType: types.UserTypeStandard, GroupsTruncated: &notTruncated, RevSeq: 1},
+		IdentityStampedAt: now, Machine: "laptop", Store: types.CLIStoreKeychain, PublicKey: pub, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+	raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := a.pg.CreateCLISession(ctx, sess, "wdc_"+uuid.NewString(), types.APIToken{ID: uuid.New(), Principal: person, Email: email,
+		Role: oidc.RoleSecurityAdmin, UserType: types.UserTypeStandard, GroupsTruncated: &notTruncated, Name: "CLI: laptop", CreatedAt: now,
+		ExpiresAt: &exp, Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID}, raw); err != nil {
 		t.Fatal(err)
 	}
 	capture := func(serve func(http.Handler) http.Handler, r *http.Request) context.Context {
