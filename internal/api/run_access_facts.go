@@ -406,7 +406,7 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	case harness == codexHarness:
 		fact.RuleTools = "mcp_only"
 		// Its remote MCP tools' rules are enforced by the broker the servers sit
-		// behind; nothing enforces a local server's (localMCPRulesRefusal).
+		// behind.
 		if mcpRemoteServerFor(b.in.comps, harness) {
 			fact.Enforcer = toolEnforcerMCPBroker
 		}

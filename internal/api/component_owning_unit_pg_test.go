@@ -252,6 +252,35 @@ func TestSetComponentOwningUnitRoute(t *testing.T) {
 	}
 }
 
+// TestComponentPinAnswerRedactsForTier: the owning-unit answer goes to a security admin who is not the author, so an
+// MCP sandbox policy's mount host path in it is withheld, while the stored row keeps it.
+func TestComponentPinAnswerRedactsForTier(t *testing.T) {
+	e := newGovEnv(t)
+	u := seedCPTree(t, e, "cpr")
+	mounts := []types.WorkspaceMount{{Source: "/srv/cpr-host-path", Target: "/data"}}
+	c, err := e.pg.CreateComponent(context.Background(), types.Component{ID: uuid.New(), Name: "cpr-files", CreatedBy: "admin",
+		Definition: types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
+			Launch:  &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "files-server@1.2.3"}},
+			Sandbox: &types.ComponentMCPSandbox{Policy: types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{WorkspaceMounts: &mounts}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pg.SetCapabilityRestriction(context.Background(), capComponent, c.ID.String(), true, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.alice, http.MethodPut, componentPinPath(c.ID), pinBody(&u.prod.ID))
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "/srv/cpr-host-path") || !strings.Contains(w.Body.String(), mountSourceWithheld) {
+		t.Fatalf("pin answer: %d %s, want 200 with the mount source withheld", w.Code, w.Body)
+	}
+	stored, err := e.pg.GetComponent(context.Background(), c.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := (*stored.Definition.MCP.Sandbox.Policy.Overlay.WorkspaceMounts)[0].Source; got != "/srv/cpr-host-path" {
+		t.Errorf("the stored source = %q, want the host path kept", got)
+	}
+}
+
 // TestComponentPinHeldChangeStale: a pin moved after a held move was proposed makes its decide stale.
 func TestComponentPinHeldChangeStale(t *testing.T) {
 	e := newGovEnv(t)

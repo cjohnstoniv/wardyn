@@ -1,0 +1,980 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+func mustZone(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc
+}
+
+func TestRunScheduleNextOccurrence_Daily(t *testing.T) {
+	london := mustZone(t, "Europe/London")
+	r := scheduleRule{Every: scheduleEveryDaily, Hour: 9, Min: 0, Zone: london}
+	before := time.Date(2026, 11, 24, 8, 0, 0, 0, london)
+	if got, want := r.nextOccurrence(before), time.Date(2026, 11, 24, 9, 0, 0, 0, london); !got.Equal(want) {
+		t.Errorf("before the time = %s, want %s", got, want)
+	}
+	at := time.Date(2026, 11, 24, 9, 0, 0, 0, london)
+	if got, want := r.nextOccurrence(at), time.Date(2026, 11, 25, 9, 0, 0, 0, london); !got.Equal(want) {
+		t.Errorf("at the time = %s, want the next day's %s (strictly after)", got, want)
+	}
+}
+
+func TestRunScheduleNextOccurrence_Weekdays(t *testing.T) {
+	london := mustZone(t, "Europe/London")
+	r := scheduleRule{Every: scheduleEveryWeekdays, Hour: 9, Min: 0, Zone: london}
+	fri := time.Date(2026, 11, 27, 9, 0, 0, 0, london) // a Friday
+	if fri.Weekday() != time.Friday {
+		t.Fatalf("fixture is a %s", fri.Weekday())
+	}
+	if got, want := r.nextOccurrence(fri), time.Date(2026, 11, 30, 9, 0, 0, 0, london); !got.Equal(want) || got.Weekday() != time.Monday {
+		t.Errorf("Fri 09:00 = %s (%s), want Mon %s", got, got.Weekday(), want)
+	}
+}
+
+func TestRunScheduleNextOccurrence_Weekly(t *testing.T) {
+	london := mustZone(t, "Europe/London")
+	r := scheduleRule{Every: scheduleEveryWeekly, Weekday: time.Tuesday, Hour: 9, Min: 0, Zone: london}
+	tue := time.Date(2026, 11, 24, 9, 0, 0, 0, london) // a Tuesday
+	if got, want := r.nextOccurrence(tue), time.Date(2026, 12, 1, 9, 0, 0, 0, london); !got.Equal(want) {
+		t.Errorf("Tue 09:00 = %s, want the next Tuesday %s", got, want)
+	}
+	if got, want := r.nextOccurrence(tue.Add(-time.Hour)), tue; !got.Equal(want) {
+		t.Errorf("Tue 08:00 = %s, want %s", got, want)
+	}
+}
+
+// 01:30 on the spring-forward Sunday does not exist in Europe/London: the start is the instant time.Date gives,
+// on that date and within one hour of 01:30.
+func TestRunScheduleNextOccurrence_ClockChange(t *testing.T) {
+	london := mustZone(t, "Europe/London")
+	r := scheduleRule{Every: scheduleEveryDaily, Hour: 1, Min: 30, Zone: london}
+	got := r.nextOccurrence(time.Date(2027, 3, 27, 12, 0, 0, 0, london)).In(london)
+	if y, m, d := got.Date(); y != 2027 || m != time.March || d != 28 {
+		t.Fatalf("the spring-forward start is %s, want on 2027-03-28", got)
+	}
+	wall := time.Date(2027, 3, 28, 1, 30, 0, 0, time.UTC)
+	shown := time.Date(2027, 3, 28, got.Hour(), got.Minute(), 0, 0, time.UTC)
+	if d := shown.Sub(wall); d < -time.Hour || d > time.Hour {
+		t.Errorf("the spring-forward start reads %s in the zone, more than an hour from 01:30", got.Format("15:04"))
+	}
+}
+
+// A weekly schedule made at 09:01 for 09:00 first starts the next day, and repeats on that weekday.
+func TestRunScheduleFirstSlot_WeeklyWeekdayFromFirstSlot(t *testing.T) {
+	london := mustZone(t, "Europe/London")
+	mon := time.Date(2026, 11, 30, 9, 1, 0, 0, london)
+	if mon.Weekday() != time.Monday {
+		t.Fatalf("fixture is a %s", mon.Weekday())
+	}
+	r, ok := parseScheduleRule(scheduleEveryWeekly, "09:00", "Europe/London")
+	if !ok {
+		t.Fatal("rule refused")
+	}
+	first := r.firstSlot(mon)
+	if want := time.Date(2026, 12, 1, 9, 0, 0, 0, london); !first.Equal(want) || r.Weekday != time.Tuesday {
+		t.Errorf("first slot %s, weekday %s; want %s, Tuesday", first, r.Weekday, want)
+	}
+}
+
+func TestNarrowScheduleGroups_DropsAndReportsGains(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		stored        []string
+		storedTrunc   bool
+		rec           store.PrincipalGroups
+		kept          []string
+		truncated     bool
+		gained        bool
+		wantNilResult bool
+	}{
+		{name: "a dropped group narrows", stored: []string{"a", "b"}, rec: store.PrincipalGroups{Groups: []string{"b"}}, kept: []string{"b"}},
+		{name: "a gained group is reported", stored: []string{"b"}, rec: store.PrincipalGroups{Groups: []string{"b", "c"}}, kept: []string{"b"}, gained: true},
+		{name: "no stored list, empty sign-in", rec: store.PrincipalGroups{Groups: []string{}}, wantNilResult: true},
+		{name: "no stored list, a group at sign-in", rec: store.PrincipalGroups{Groups: []string{"a"}}, wantNilResult: true, gained: true},
+		{name: "a near-match counts as gained", stored: []string{"b"}, rec: store.PrincipalGroups{Groups: []string{"B"}}, kept: []string{}, gained: true},
+		{name: "a null record keeps the stored list", stored: []string{"a"}, rec: store.PrincipalGroups{}, kept: []string{"a"}, truncated: true},
+		{name: "a partial sign-in marks partial", stored: []string{"a"}, rec: store.PrincipalGroups{Groups: []string{"a"}, Truncated: true}, kept: []string{"a"}, truncated: true},
+		{name: "a partial stored list marks partial", stored: []string{"a"}, storedTrunc: true, rec: store.PrincipalGroups{Groups: []string{"a"}}, kept: []string{"a"}, truncated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kept, truncated, gained := narrowScheduleGroups(tc.stored, tc.storedTrunc, tc.rec)
+			if tc.wantNilResult != (kept == nil) || strings.Join(kept, ",") != strings.Join(tc.kept, ",") || truncated != tc.truncated || gained != tc.gained {
+				t.Errorf("= %q (nil %v) truncated %v gained %v; want %q truncated %v gained %v", kept, kept == nil, truncated, gained, tc.kept, tc.truncated, tc.gained)
+			}
+		})
+	}
+}
+
+// fakeScheduleStore is a runScheduleStore in memory, with the store faults the sweep tests need.
+type fakeScheduleStore struct {
+	store.Store
+	mu        sync.Mutex
+	rows      map[uuid.UUID]store.RunSchedule
+	dueCalls  int
+	signedIn  time.Time
+	signInErr error
+	groups    store.PrincipalGroups
+	groupsErr error
+	getErr    error                        // GetRunSchedule's answer once set
+	runs      map[uuid.UUID]types.AgentRun // GetRun's rows
+	getRunErr error                        // GetRun's answer once set
+	kills     int                          // kill claims (UpdateRunStateIf calls)
+	onKill    func(id uuid.UUID)           // once set, a kill claim runs it, under the lock, and loses the race
+}
+
+func newFakeScheduleStore() *fakeScheduleStore {
+	return &fakeScheduleStore{rows: map[uuid.UUID]store.RunSchedule{}, signedIn: time.Now(), groups: store.PrincipalGroups{Groups: []string{}}}
+}
+
+func (f *fakeScheduleStore) CreateRunSchedule(_ context.Context, sc store.RunSchedule, _ int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[sc.ID] = sc
+	return nil
+}
+
+func (f *fakeScheduleStore) ListRunSchedules(context.Context, string) ([]store.RunSchedule, error) {
+	return nil, nil
+}
+
+func (f *fakeScheduleStore) GetRunSchedule(_ context.Context, id uuid.UUID) (store.RunSchedule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return store.RunSchedule{}, f.getErr
+	}
+	sc, ok := f.rows[id]
+	if !ok {
+		return store.RunSchedule{}, store.ErrNotFound
+	}
+	return sc, nil
+}
+
+func (f *fakeScheduleStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getRunErr != nil {
+		return types.AgentRun{}, f.getRunErr
+	}
+	run, ok := f.runs[id]
+	if !ok {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	return run, nil
+}
+
+func (f *fakeScheduleStore) PauseRunSchedule(_ context.Context, id uuid.UUID, reason string, at time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sc, ok := f.rows[id]
+	if !ok || sc.PausedAt != nil {
+		return false, nil
+	}
+	sc.PausedAt, sc.PausedReason = &at, reason
+	f.rows[id] = sc
+	return true, nil
+}
+
+func (f *fakeScheduleStore) ResumeRunSchedule(context.Context, uuid.UUID, json.RawMessage, time.Time, time.Time) (bool, error) {
+	return false, errors.New("fake: resume not expected")
+}
+
+func (f *fakeScheduleStore) DeleteRunSchedule(_ context.Context, id uuid.UUID) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.rows[id]
+	delete(f.rows, id)
+	return ok, nil
+}
+
+func (f *fakeScheduleStore) DueRunSchedules(_ context.Context, before time.Time, _ int) ([]store.RunSchedule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dueCalls++
+	var out []store.RunSchedule
+	for _, sc := range f.rows {
+		if sc.PausedAt == nil && !sc.NextAt.After(before) {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeScheduleStore) AdvanceRunSchedule(_ context.Context, id uuid.UUID, wasNext, next time.Time, runID *uuid.UUID, outcome string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sc, ok := f.rows[id]
+	if !ok || !sc.NextAt.Equal(wasNext) {
+		return false, nil
+	}
+	sc.NextAt, sc.LastDueAt, sc.LastRunID, sc.LastOutcome = next, &wasNext, runID, outcome
+	f.rows[id] = sc
+	return true, nil
+}
+
+func (f *fakeScheduleStore) ScheduleOwnerSignedInAt(context.Context, string) (time.Time, bool, error) {
+	return f.signedIn, f.signInErr == nil, f.signInErr
+}
+
+func (f *fakeScheduleStore) GetPrincipalGroups(context.Context, string, string) (store.PrincipalGroups, error) {
+	return f.groups, f.groupsErr
+}
+
+func (f *fakeScheduleStore) BlankRunTaskByID(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeScheduleStore) UpdateRunStateIf(_ context.Context, id uuid.UUID, _, _ types.RunState) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kills++
+	if f.onKill != nil {
+		f.onKill(id)
+		return false, nil
+	}
+	return false, errors.New("fake: kill claim not expected")
+}
+
+func (f *fakeScheduleStore) PendingRunScheduleCancels(_ context.Context, prefix string, _ int) ([]store.RunSchedule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.RunSchedule
+	for _, sc := range f.rows {
+		if strings.HasPrefix(sc.LastOutcome, prefix) {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeScheduleStore) SettleRunScheduleCancel(_ context.Context, id, runID uuid.UUID, was, outcome string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sc, ok := f.rows[id]
+	if !ok || sc.LastRunID == nil || *sc.LastRunID != runID || sc.LastOutcome != was {
+		return false, nil
+	}
+	sc.LastOutcome = outcome
+	f.rows[id] = sc
+	return true, nil
+}
+
+func (f *fakeScheduleStore) row(t *testing.T, id uuid.UUID) store.RunSchedule {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sc, ok := f.rows[id]
+	if !ok {
+		t.Fatalf("schedule %s is gone", id)
+	}
+	return sc
+}
+
+// seed stores a daily schedule of sub-person's due at next, paused when paused is set.
+func (f *fakeScheduleStore) seed(next time.Time, paused bool) store.RunSchedule {
+	sc := store.RunSchedule{ID: uuid.New(), Owner: "sub-person", Every: scheduleEveryDaily, LocalTime: next.UTC().Format("15:04"),
+		TimeZone: "UTC", Request: json.RawMessage(`{"agent":"claude-code","task":"t"}`),
+		Authority: mustJSON(queueAuthority{Sub: "sub-person", Groups: []string{}}), AuthorityAt: next.Add(-time.Hour), NextAt: next}
+	if paused {
+		at := next.Add(-time.Minute)
+		sc.PausedAt, sc.PausedReason = &at, schedulePausedByOwner
+	}
+	f.rows[sc.ID] = sc
+	return sc
+}
+
+func scheduleTestServer(st store.Store) *Server {
+	return New(Config{Store: st, Audit: &recRecorder{}})
+}
+
+// scheduleRequest is a request to a schedule route as ctx's caller, with the {id} parameter set when id is.
+func scheduleRequest(ctx context.Context, method, path, id, body string) *http.Request {
+	r := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
+	if id != "" {
+		rc := chi.NewRouteContext()
+		rc.URLParams.Add("id", id)
+		r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rc))
+	}
+	return r
+}
+
+const scheduleTestBody = `{"name":"Nightly","every":"daily","time":"09:00","time_zone":"Europe/London","request":{"agent":"claude-code","task":"t"}}`
+
+func createScheduleAs(ctx context.Context, srv *Server, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	srv.handleCreateRunSchedule(w, scheduleRequest(ctx, http.MethodPost, "/api/v1/run-schedules", "", body))
+	return w
+}
+
+func TestRunScheduleCreate_Off(t *testing.T) {
+	t.Setenv(envScheduledRuns, "")
+	st := newFakeScheduleStore()
+	w := createScheduleAs(memberCtxFor("sub-person"), scheduleTestServer(st), scheduleTestBody)
+	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonScheduledRunsOff {
+		t.Fatalf("create with the switch off = %d %s; want 422 %s", w.Code, w.Body, reasonScheduledRunsOff)
+	}
+	if len(st.rows) != 0 {
+		t.Errorf("a refused create stored %d schedules", len(st.rows))
+	}
+}
+
+func TestRunScheduleCreate_RefusesStartAtInRequest(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	st := newFakeScheduleStore()
+	srv := scheduleTestServer(st)
+	for _, field := range []string{`"start_at":"2026-12-01T09:00"`, `"start_time_zone":"UTC"`} {
+		body := `{"every":"daily","time":"09:00","time_zone":"UTC","request":{"agent":"claude-code",` + field + `}}`
+		if w := createScheduleAs(memberCtxFor("sub-person"), srv, body); w.Code != http.StatusBadRequest || errorReason(w) != reasonRunScheduleInvalid {
+			t.Errorf("request with %s = %d %s; want 400 %s", field, w.Code, w.Body, reasonRunScheduleInvalid)
+		}
+	}
+	if len(st.rows) != 0 {
+		t.Errorf("a refused create stored %d schedules", len(st.rows))
+	}
+}
+
+func TestRunScheduleCreate_RefusesWeekdayInBody(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	body := `{"every":"weekly","weekday":2,"time":"09:00","time_zone":"UTC","request":{"agent":"claude-code"}}`
+	if w := createScheduleAs(memberCtxFor("sub-person"), scheduleTestServer(newFakeScheduleStore()), body); w.Code != http.StatusBadRequest || errorReason(w) != reasonRunScheduleInvalid {
+		t.Errorf("a body with weekday = %d %s; want 400 %s", w.Code, w.Body, reasonRunScheduleInvalid)
+	}
+}
+
+// A schedule's name is held to a run title's 200 characters, counted in runes, with the title's reason.
+func TestRunScheduleCreate_RefusesALongName(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	body := func(name string) string {
+		return `{"name":"` + name + `","every":"daily","time":"09:00","time_zone":"UTC","request":{"agent":"claude-code"}}`
+	}
+	st := newFakeScheduleStore()
+	w := createScheduleAs(memberCtxFor("sub-person"), scheduleTestServer(st), body(strings.Repeat("é", maxRunTitleLen+1)))
+	if w.Code != http.StatusBadRequest || errorReason(w) != reasonRunFieldTooLong || !strings.Contains(w.Body.String(), "name is too long (201 chars, max 200)") {
+		t.Fatalf("a 201-character name = %d %s; want 400 %s naming the name", w.Code, w.Body, reasonRunFieldTooLong)
+	}
+	if len(st.rows) != 0 {
+		t.Errorf("a refused create stored %d schedules", len(st.rows))
+	}
+	// The length check is the body decode's last step, so a name at the cap is read here and not sent on to the
+	// launch's refusals, which this fake store does not answer.
+	w = httptest.NewRecorder()
+	if _, _, ok := decodeRunScheduleBody(w, scheduleRequest(memberCtxFor("sub-person"), http.MethodPost, "/api/v1/run-schedules", "", body(strings.Repeat("é", maxRunTitleLen)))); !ok {
+		t.Errorf("a 200-character name of 400 bytes = %d %s; want it past the length check", w.Code, w.Body)
+	}
+}
+
+// The admin token (no person) and a service identity keep no schedule.
+func TestRunScheduleCreate_RefusesNonPerson(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for name, ctx := range map[string]context.Context{
+		"admin token":      context.Background(),
+		"service identity": withServiceIdentity(memberCtxFor("svc-bot"), "svc-bot", "sub-sponsor"),
+	} {
+		st := newFakeScheduleStore()
+		w := createScheduleAs(ctx, scheduleTestServer(st), scheduleTestBody)
+		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunScheduleOwnerUnsupported {
+			t.Errorf("%s: create = %d %s; want 422 %s", name, w.Code, w.Body, reasonRunScheduleOwnerUnsupported)
+		}
+		if len(st.rows) != 0 {
+			t.Errorf("%s: a refused create stored %d schedules", name, len(st.rows))
+		}
+	}
+}
+
+// Every API token is refused, whatever its role or kind, with the single sign-on sentence: no schedule outlives
+// a token.
+func TestRunScheduleCreate_RefusesEveryToken(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	token := func(role string, cli bool) context.Context {
+		ctx := withAPITokenID(withHumanIdentity(context.Background(), "sub-person", "person@corp.example", role, types.UserTypeStandard, []string{}, false), uuid.New())
+		if cli {
+			ctx = withCLISessionID(ctx, uuid.New())
+		}
+		return ctx
+	}
+	for name, ctx := range map[string]context.Context{
+		"wdn_ token, role admin":  token(oidc.RoleAdmin, false),
+		"a member's wdn_ token":   token(oidc.RoleUser, false),
+		"cli_access token":        token(oidc.RoleUser, true),
+		"cli_admin step-up token": token(oidc.RoleAdmin, true),
+	} {
+		st := newFakeScheduleStore()
+		w := createScheduleAs(ctx, scheduleTestServer(st), scheduleTestBody)
+		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunScheduleOwnerUnsupported ||
+			!strings.Contains(w.Body.String(), runScheduleOwnerUnsupportedMsg) {
+			t.Errorf("%s: create = %d %s; want 422 %s with its sentence", name, w.Code, w.Body, reasonRunScheduleOwnerUnsupported)
+		}
+		if len(st.rows) != 0 {
+			t.Errorf("%s: a refused create stored %d schedules", name, len(st.rows))
+		}
+	}
+}
+
+// A resume while scheduled runs are off says the schedule cannot resume, never "Start the run now", and the
+// schedule stays paused.
+func TestRunScheduleResume_OffIsRefusedWithItsOwnSentence(t *testing.T) {
+	t.Setenv(envScheduledRuns, "")
+	st := newFakeScheduleStore()
+	sc := st.seed(time.Now().Add(time.Hour), true)
+	w := httptest.NewRecorder()
+	scheduleTestServer(st).handleResumeRunSchedule(w, scheduleRequest(memberCtxFor("sub-person"), http.MethodPost,
+		"/api/v1/run-schedules/"+sc.ID.String()+"/resume", sc.ID.String(), ""))
+	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonScheduledRunsOff || !strings.Contains(w.Body.String(), runScheduleResumeOffMsg) {
+		t.Fatalf("resume with the switch off = %d %s; want 422 %s with the resume sentence", w.Code, w.Body, reasonScheduledRunsOff)
+	}
+	if strings.Contains(w.Body.String(), "Start the run now") {
+		t.Errorf("the resume refusal gives one-time advice: %s", w.Body)
+	}
+	if st.row(t, sc.ID).PausedAt == nil {
+		t.Error("the refused resume left the schedule active")
+	}
+}
+
+func TestRunScheduleSweep_OffFiresNothing(t *testing.T) {
+	t.Setenv(envScheduledRuns, "")
+	st := newFakeScheduleStore()
+	st.seed(time.Now().Add(time.Minute), false)
+	if err := scheduleTestServer(st).RunScheduleSweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st.dueCalls != 0 {
+		t.Errorf("the sweep with the switch off read due schedules %d times", st.dueCalls)
+	}
+}
+
+// testSweep is a tick over st with create answering as given, the owner live unless live says otherwise.
+func testSweep(srv *Server, st *fakeScheduleStore, now time.Time, create http.HandlerFunc, live bool) (*scheduleSweep, *int) {
+	creates := 0
+	sw := srv.newScheduleSweep(st)
+	sw.now = now
+	sw.create = func(w http.ResponseWriter, r *http.Request) {
+		creates++
+		if create != nil {
+			create(w, r)
+		}
+	}
+	sw.live = func(context.Context, queueAuthority, time.Time) (bool, error) { return live, nil }
+	sw.cancel = func(context.Context, uuid.UUID, string) (bool, error) { return true, nil }
+	return sw, &creates
+}
+
+func answers(codes ...int) http.HandlerFunc {
+	i := 0
+	return func(w http.ResponseWriter, _ *http.Request) {
+		code := codes[min(i, len(codes)-1)]
+		i++
+		if code == http.StatusConflict {
+			writeErrorReason(w, code, reasonIdempotencyKeyInFlight, "A request with this key is still being answered.")
+			return
+		}
+		writeErrorReason(w, code, reasonScheduledRunsUnavailable, scheduledRunsUnavailableMsg)
+	}
+}
+
+// A create still running under the key (409), then a server fault (503), leave a slot that is still ahead
+// unadvanced: the next tick tries the same key.
+func TestRunScheduleSweep_InFlightLeavesUnadvanced(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	st := newFakeScheduleStore()
+	now := time.Now()
+	sc := st.seed(now.Add(time.Minute), false)
+	srv := scheduleTestServer(st)
+	sw, creates := testSweep(srv, st, now, answers(http.StatusConflict, http.StatusServiceUnavailable), true)
+	for range 2 {
+		if err := sw.run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := st.row(t, sc.ID); !got.NextAt.Equal(sc.NextAt) || got.LastOutcome != "" || got.PausedAt != nil {
+		t.Errorf("after 409 then 503 the schedule is %+v; want it unadvanced and active", got)
+	}
+	if *creates != 2 {
+		t.Errorf("creates = %d, want 2", *creates)
+	}
+}
+
+// A missed slot an hour old whose replay meets a create still running under the key is left for the next tick,
+// never recorded missed; one 25 hours old is recorded missed without a replay.
+func TestRunScheduleSweep_MissedInFlightLeavesUnadvanced(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	now := time.Now()
+	st := newFakeScheduleStore()
+	sc := st.seed(now.Add(-time.Hour), false)
+	sw, creates := testSweep(scheduleTestServer(st), st, now, answers(http.StatusConflict), true)
+	if err := sw.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.row(t, sc.ID); !got.NextAt.Equal(sc.NextAt) || got.LastOutcome == scheduleOutcomeMissed || *creates != 1 {
+		t.Errorf("an hour-old slot whose replay is in flight = %+v after %d creates; want unadvanced after one replay", got, *creates)
+	}
+
+	st = newFakeScheduleStore()
+	sc = st.seed(now.Add(-25*time.Hour), false)
+	sw, creates = testSweep(scheduleTestServer(st), st, now, answers(http.StatusConflict), true)
+	if err := sw.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.row(t, sc.ID); got.LastOutcome != scheduleOutcomeMissed || !got.NextAt.After(now) || *creates != 0 {
+		t.Errorf("a 25-hour-old slot = %+v after %d creates; want advanced missed with no replay", got, *creates)
+	}
+}
+
+// A sign-in read that fails, or a groups read that fails with anything but not-found, books nothing and pauses
+// nothing: the schedule waits for the next tick.
+func TestRunScheduleSweep_StoreErrorsLeaveItForNextTick(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for name, fault := range map[string]func(*fakeScheduleStore){
+		"sign-in read": func(f *fakeScheduleStore) { f.signInErr = errors.New("postgres is down") },
+		"groups read":  func(f *fakeScheduleStore) { f.groupsErr = errors.New("postgres is down") },
+	} {
+		now := time.Now()
+		st := newFakeScheduleStore()
+		sc := st.seed(now.Add(time.Minute), false)
+		fault(st)
+		sw, creates := testSweep(scheduleTestServer(st), st, now, answers(http.StatusServiceUnavailable), true)
+		if err := sw.run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := st.row(t, sc.ID); *creates != 0 || got.PausedAt != nil || !got.NextAt.Equal(sc.NextAt) {
+			t.Errorf("%s fault: %d creates, schedule %+v; want no create, no pause, next_at unchanged", name, *creates, got)
+		}
+	}
+}
+
+// A missed slot whose owner is no longer live pauses identity_inactive before any replay.
+func TestRunScheduleSweep_MissedNotLivePausesBeforeReplay(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	now := time.Now()
+	st := newFakeScheduleStore()
+	sc := st.seed(now.Add(-time.Hour), false)
+	sw, creates := testSweep(scheduleTestServer(st), st, now, answers(http.StatusCreated), false)
+	if err := sw.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.row(t, sc.ID); *creates != 0 || got.PausedAt == nil || got.PausedReason != schedulePausedIdentity {
+		t.Errorf("%d creates, schedule %+v; want paused %s and the create never called", *creates, got, schedulePausedIdentity)
+	}
+}
+
+// booking201 answers a create with one run, as a replay when replayed is set; before runs first.
+func booking201(runID uuid.UUID, replayed bool, before func()) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if before != nil {
+			before()
+		}
+		if replayed {
+			w.Header().Set(idempotentReplayedHeader, "true")
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"id": runID})
+	}
+}
+
+// A fresh booking whose schedule is paused, unreadable or gone once the 201 is in is cancelled with that cause, never
+// session_revoked, and writes one run.schedule.fire row naming it. A paused or unreadable slot moves on recorded
+// cancelled, so no later replay of its key is recorded booked; a gone one has no row to advance and still writes its
+// fire row.
+func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct {
+		reason string
+		during func(*fakeScheduleStore, uuid.UUID)
+	}{
+		{scheduleCancelPaused, func(st *fakeScheduleStore, id uuid.UUID) {
+			_, _ = st.PauseRunSchedule(context.Background(), id, schedulePausedByOwner, time.Now())
+		}},
+		{scheduleCancelUnread, func(st *fakeScheduleStore, _ uuid.UUID) { st.getErr = errors.New("fake: read failed") }},
+		{scheduleCancelGone, func(st *fakeScheduleStore, id uuid.UUID) { _, _ = st.DeleteRunSchedule(context.Background(), id) }},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			srv := scheduleTestServer(st)
+			sw, _ := testSweep(srv, st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
+			var cancelled []string
+			sw.cancel = func(_ context.Context, id uuid.UUID, reason string) (bool, error) {
+				if id == runID {
+					cancelled = append(cancelled, reason)
+				}
+				return true, nil
+			}
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(cancelled) != 1 || cancelled[0] != tc.reason {
+				t.Errorf("cancel reasons = %v, want [%s]", cancelled, tc.reason)
+			}
+			fires := 0
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				var data map[string]any
+				if ev.Action == "run.schedule.fire" && json.Unmarshal(ev.Data, &data) == nil && data["reason"] == tc.reason {
+					fires++
+				}
+			}
+			if fires != 1 {
+				t.Errorf("run.schedule.fire rows naming %s = %d, want 1", tc.reason, fires)
+			}
+			if tc.reason == scheduleCancelGone {
+				return
+			}
+			st.getErr = nil
+			got := st.row(t, sc.ID)
+			if got.LastOutcome != scheduleOutcomeCancelled+tc.reason || got.LastRunID == nil || *got.LastRunID != runID || got.NextAt.Equal(sc.NextAt) {
+				t.Errorf("the schedule after the cancel = %+v; want it past the slot, recorded %s%s", got, scheduleOutcomeCancelled, tc.reason)
+			}
+		})
+	}
+}
+
+// fireRowsNaming is the run.schedule.fire rows srv wrote whose reason or cancel_too_late is reason.
+func fireRowsNaming(srv *Server, reason string) []map[string]any {
+	var out []map[string]any
+	for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+		var data map[string]any
+		if ev.Action == "run.schedule.fire" && json.Unmarshal(ev.Data, &data) == nil && (data["reason"] == reason || data["cancel_too_late"] == reason) {
+			out = append(out, data)
+		}
+	}
+	return out
+}
+
+// A fresh booking whose cancel fails is recorded cancel_pending with no fire row, never cancelled while its run may
+// still start, and its schedule books nothing while it stays pending, even with its next slot due. The tick after the
+// cancel goes through settles it cancelled, paused or not, and writes the slot's one fire row. A gone schedule has no
+// row to hold the retry, so its one fire row says the run was not cancelled.
+func TestRunScheduleSweep_FailedCancelStaysPendingUntilItStops(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct {
+		reason string
+		during func(*fakeScheduleStore, uuid.UUID)
+	}{
+		{scheduleCancelPaused, func(st *fakeScheduleStore, id uuid.UUID) {
+			_, _ = st.PauseRunSchedule(context.Background(), id, schedulePausedByOwner, time.Now())
+		}},
+		{scheduleCancelUnread, func(st *fakeScheduleStore, _ uuid.UUID) { st.getErr = errors.New("fake: read failed") }},
+		{scheduleCancelGone, func(st *fakeScheduleStore, id uuid.UUID) { _, _ = st.DeleteRunSchedule(context.Background(), id) }},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			srv := scheduleTestServer(st)
+			sw, creates := testSweep(srv, st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
+			fail := true
+			sw.cancel = func(context.Context, uuid.UUID, string) (bool, error) {
+				if fail {
+					return false, errors.New("fake: kill failed")
+				}
+				return true, nil
+			}
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			st.getErr = nil
+			if tc.reason == scheduleCancelGone {
+				if rows := fireRowsNaming(srv, tc.reason); len(rows) != 1 || rows[0]["cancelled"] != false {
+					t.Errorf("fire rows naming %s = %v; want one with cancelled false", tc.reason, rows)
+				}
+				return
+			}
+			got := st.row(t, sc.ID)
+			if got.LastOutcome != scheduleOutcomeCancelPending+tc.reason || got.LastRunID == nil || *got.LastRunID != runID {
+				t.Errorf("the schedule after a failed cancel = %+v; want it recorded %s%s for its run", got, scheduleOutcomeCancelPending, tc.reason)
+			}
+			if rows := fireRowsNaming(srv, tc.reason); len(rows) != 0 {
+				t.Errorf("fire rows naming %s after a failed cancel = %v; want none", tc.reason, rows)
+			}
+
+			sw.now = got.NextAt.Add(-time.Minute) // the next slot is due
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if again := st.row(t, sc.ID); *creates != 1 || again.LastOutcome != got.LastOutcome || !again.NextAt.Equal(got.NextAt) {
+				t.Errorf("a tick while the cancel still fails: %d creates, schedule %+v; want no new booking, still pending", *creates, again)
+			}
+
+			fail = false
+			sw.now = now
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.row(t, sc.ID); got.LastOutcome != scheduleOutcomeCancelled+tc.reason {
+				t.Errorf("the schedule after the cancel went through = %+v; want it recorded %s%s", got, scheduleOutcomeCancelled, tc.reason)
+			}
+			if rows := fireRowsNaming(srv, tc.reason); len(rows) != 1 || rows[0]["run_id"] != runID.String() {
+				t.Errorf("fire rows naming %s after the cancel went through = %v; want one for run %s", tc.reason, rows, runID)
+			}
+		})
+	}
+}
+
+// A run read that fails claims no kill and answers its error, so the sweep tries again; a run that is gone is
+// stopped.
+func TestCancelBookedRun_FailedReadClaimsNoKill(t *testing.T) {
+	st := newFakeScheduleStore()
+	st.getRunErr = errors.New("fake: postgres is down")
+	srv := scheduleTestServer(st)
+	if stopped, err := srv.cancelBookedRun(context.Background(), uuid.New(), scheduleCancelPaused); stopped || err == nil || st.kills != 0 {
+		t.Errorf("a failed run read = %v, %v after %d kill claims; want false, its error, no claim", stopped, err, st.kills)
+	}
+	st.getRunErr = nil
+	if stopped, err := srv.cancelBookedRun(context.Background(), uuid.New(), scheduleCancelPaused); !stopped || err != nil || st.kills != 0 {
+		t.Errorf("a gone run = %v, %v after %d kill claims; want true, nil, no claim", stopped, err, st.kills)
+	}
+}
+
+// A run that started before its booking's cancel (a terminal run with AdmittedAt set) is not stopped and claims no
+// kill; the sweep records the slot booked, with one success fire row naming the cancel as too late.
+func TestRunScheduleSweep_CancelAfterTheStartIsRecordedBooked(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	now := time.Now()
+	admitted := now.Add(-time.Minute)
+	st := newFakeScheduleStore()
+	sc := st.seed(now.Add(time.Minute), false)
+	runID := uuid.New()
+	st.runs = map[uuid.UUID]types.AgentRun{runID: {ID: runID, State: types.RunCompleted, AdmittedAt: &admitted}}
+	srv := scheduleTestServer(st)
+	if stopped, err := srv.cancelBookedRun(context.Background(), runID, scheduleCancelPaused); stopped || err != nil || st.kills != 0 {
+		t.Fatalf("a started run's cancel = %v, %v after %d kill claims; want false, nil, no claim", stopped, err, st.kills)
+	}
+	sw, _ := testSweep(srv, st, now, booking201(runID, false, func() {
+		_, _ = st.PauseRunSchedule(context.Background(), sc.ID, schedulePausedByOwner, time.Now())
+	}), true)
+	sw.cancel = srv.cancelBookedRun
+	if err := sw.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.row(t, sc.ID); got.LastOutcome != scheduleOutcomeBooked || got.LastRunID == nil || *got.LastRunID != runID || got.NextAt.Equal(sc.NextAt) {
+		t.Errorf("the schedule after a cancel that came too late = %+v; want it past the slot, recorded %s", got, scheduleOutcomeBooked)
+	}
+	var fires []types.AuditEvent
+	for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+		if ev.Action == "run.schedule.fire" {
+			fires = append(fires, ev)
+		}
+	}
+	if rows := fireRowsNaming(srv, scheduleCancelPaused); len(fires) != 1 || fires[0].Outcome != "success" || len(rows) != 1 ||
+		rows[0]["cancel_too_late"] != scheduleCancelPaused || rows[0]["run_id"] != runID.String() || rows[0]["reason"] != nil {
+		t.Errorf("fire rows = %d (%v); want one success row with cancel_too_late %s for run %s", len(fires), rows, scheduleCancelPaused, runID)
+	}
+	if st.kills != 0 {
+		t.Errorf("kill claims = %d, want none for a run that started", st.kills)
+	}
+}
+
+// A kill that loses its claim reads the run once more: one that the race left stopped (killed before it started) is
+// stopped, after the one claim.
+func TestCancelBookedRun_LostClaimReadsTheRunAgain(t *testing.T) {
+	st := newFakeScheduleStore()
+	runID := uuid.New()
+	st.runs = map[uuid.UUID]types.AgentRun{runID: {ID: runID, State: types.RunQueued}}
+	st.onKill = func(id uuid.UUID) { st.runs[id] = types.AgentRun{ID: id, State: types.RunKilled} }
+	srv := scheduleTestServer(st)
+	if stopped, err := srv.cancelBookedRun(context.Background(), runID, scheduleCancelPaused); !stopped || err != nil || st.kills != 1 {
+		t.Errorf("a lost claim on a run the race stopped = %v, %v after %d kill claims; want true, nil, one claim", stopped, err, st.kills)
+	}
+}
+
+// A replayed 201 re-reads its run: one that ended before it started (killed while it waited) is recorded
+// cancelled:run_ended, never booked; one still waiting is recorded booked.
+func TestRunScheduleSweep_ReplayedEndedRunIsNotBooked(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	admitted := time.Now().Add(-time.Minute)
+	for _, tc := range []struct {
+		name string
+		run  *types.AgentRun
+		want string
+	}{
+		{"killed while it waited", &types.AgentRun{State: types.RunKilled}, scheduleOutcomeCancelled + scheduleRunEnded},
+		{"gone", nil, scheduleOutcomeCancelled + scheduleRunEnded},
+		{"still waiting", &types.AgentRun{State: types.RunQueued}, scheduleOutcomeBooked},
+		{"started and ended", &types.AgentRun{State: types.RunCompleted, AdmittedAt: &admitted}, scheduleOutcomeBooked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			st.runs = map[uuid.UUID]types.AgentRun{}
+			if tc.run != nil {
+				st.runs[runID] = *tc.run
+			}
+			sw, _ := testSweep(scheduleTestServer(st), st, now, booking201(runID, true, nil), true)
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.row(t, sc.ID); got.LastOutcome != tc.want || got.NextAt.Equal(sc.NextAt) {
+				t.Errorf("the schedule after the replay = %+v; want it past the slot, recorded %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// Two sweeps over one due slot (an overlapping leader, or every replica sweeping) book it under one key, and only
+// the sweep whose advance wins writes the slot's run.schedule.fire row: one row, whether the slot was booked or
+// skipped. The second sweep's whole turn runs inside the first one's create.
+func TestRunScheduleSweep_TwoSweepsWriteOneFireRow(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct {
+		name    string
+		code    int
+		outcome string
+	}{
+		{"booked", http.StatusCreated, scheduleOutcomeBooked},
+		{"skipped", http.StatusUnprocessableEntity, scheduleOutcomeSkippedPrefix + reasonScheduledRunsUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			st.runs = map[uuid.UUID]types.AgentRun{runID: {State: types.RunQueued}}
+			srv := scheduleTestServer(st)
+			answer := func(replayed bool) http.HandlerFunc {
+				if tc.code == http.StatusCreated {
+					return booking201(runID, replayed, nil)
+				}
+				return answers(tc.code)
+			}
+			second, _ := testSweep(srv, st, now, answer(false), true)
+			first, _ := testSweep(srv, st, now, func(w http.ResponseWriter, r *http.Request) {
+				if err := second.run(context.Background()); err != nil {
+					t.Error(err)
+				}
+				answer(true)(w, r)
+			}, true)
+			if err := first.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			fires := 0
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				if ev.Action == "run.schedule.fire" {
+					fires++
+				}
+			}
+			if fires != 1 {
+				t.Errorf("run.schedule.fire rows = %d, want 1", fires)
+			}
+			if got := st.row(t, sc.ID); got.LastOutcome != tc.outcome || !got.NextAt.Equal(sc.NextAt.Truncate(time.Minute).Add(24*time.Hour)) {
+				t.Errorf("the schedule after both sweeps = %+v; want one slot on, recorded %s", got, tc.outcome)
+			}
+		})
+	}
+}
+
+// A booking acts with the email of the owner's latest sign-in, not the one stored at create, since the start
+// derives role and user type from it; a sign-in record with no email keeps the stored one.
+func TestRunScheduleSweep_BookingTakesTheLiveEmail(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct{ signedIn, want string }{
+		{"renamed@corp.example", "renamed@corp.example"},
+		{"", "person@corp.example"},
+	} {
+		now := time.Now()
+		st := newFakeScheduleStore()
+		sc := st.seed(now.Add(time.Minute), false)
+		sc.Authority = mustJSON(queueAuthority{Sub: "sub-person", Email: "person@corp.example", Groups: []string{}})
+		st.rows[sc.ID] = sc
+		st.groups.Email = tc.signedIn
+		var got string
+		sw, creates := testSweep(scheduleTestServer(st), st, now, func(w http.ResponseWriter, r *http.Request) {
+			got = oidcEmailFromContext(r.Context())
+			answers(http.StatusUnprocessableEntity)(w, r)
+		}, true)
+		if err := sw.run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if *creates != 1 || got != tc.want {
+			t.Errorf("sign-in email %q: the booking acted as %q (%d creates); want %q", tc.signedIn, got, *creates, tc.want)
+		}
+	}
+}
+
+// A due row whose rule or authority cannot be read is paused refused:unreadable with a run.schedule.pause row,
+// books nothing, and leaves the due list, so it cannot starve the schedules behind it.
+func TestRunScheduleSweep_UnreadableRowPauses(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for name, spoil := range map[string]func(*store.RunSchedule){
+		"rule":      func(sc *store.RunSchedule) { sc.TimeZone = "Nowhere/Unknown" },
+		"authority": func(sc *store.RunSchedule) { sc.Authority = json.RawMessage(`"not an authority"`) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			spoil(&sc)
+			st.rows[sc.ID] = sc
+			srv := scheduleTestServer(st)
+			sw, creates := testSweep(srv, st, now, answers(http.StatusUnprocessableEntity), true)
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.row(t, sc.ID); got.PausedAt == nil || got.PausedReason != schedulePausedUnreadable || *creates != 0 {
+				t.Errorf("after the tick the schedule is %+v with %d creates; want it paused %s, nothing booked", got, *creates, schedulePausedUnreadable)
+			}
+			pauses := 0
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				if ev.Action == "run.schedule.pause" && strings.Contains(string(ev.Data), schedulePausedUnreadable) {
+					pauses++
+				}
+			}
+			if pauses != 1 {
+				t.Errorf("run.schedule.pause rows naming %s = %d, want 1", schedulePausedUnreadable, pauses)
+			}
+			if due, _ := st.DueRunSchedules(context.Background(), now.Add(time.Hour), 50); len(due) != 0 {
+				t.Errorf("due after the pause = %d, want 0", len(due))
+			}
+		})
+	}
+}
+
+// Each arm of scheduleOwnerAuthority refuses on its own: a person's session carrying only that one marker is a
+// 422 run_schedule_owner_unsupported, while the same session without it keeps a schedule. Removing any one arm
+// fails its case.
+func TestScheduleOwnerAuthority_EachArmRefusesAlone(t *testing.T) {
+	person := func() context.Context { return memberCtxFor("sub-person") }
+	for name, ctx := range map[string]context.Context{
+		"delegate":             audit.WithDelegation(person(), types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}),
+		"device":               context.WithValue(person(), deviceCtxKey{}, types.Device{ID: uuid.New()}),
+		"break glass":          context.WithValue(person(), breakGlassKey{}, "outage"),
+		"binding":              withLaunchBinding(person(), uuid.New()),
+		"workload":             withLaunchWorkload(person(), store.Workload{Owner: "sub-person", Name: "nightly"}),
+		"portal person launch": memberCtxFor(types.PortalPersonPrefix + uuid.NewString()),
+	} {
+		w := httptest.NewRecorder()
+		if _, ok := scheduleOwnerAuthority(w, scheduleRequest(ctx, http.MethodPost, "/api/v1/run-schedules", "", "")); ok ||
+			w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunScheduleOwnerUnsupported {
+			t.Errorf("%s: owner authority = %v, %d %s; want refused 422 %s", name, ok, w.Code, w.Body, reasonRunScheduleOwnerUnsupported)
+		}
+	}
+	w := httptest.NewRecorder()
+	if a, ok := scheduleOwnerAuthority(w, scheduleRequest(person(), http.MethodPost, "/api/v1/run-schedules", "", "")); !ok || a.Sub != "sub-person" {
+		t.Errorf("a plain person's session = %+v, %v (%d %s); want it kept", a, ok, w.Code, w.Body)
+	}
+}

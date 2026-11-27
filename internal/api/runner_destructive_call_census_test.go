@@ -20,7 +20,14 @@ import (
 // call or a method value handed on, is a site of the census.
 var destructiveRunnerCalls = map[string]bool{
 	"StopSandbox": true, "StopProxy": true, "KillSandbox": true, "EndSandbox": true,
-	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true,
+	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true, "StopLostProxyAt": true,
+}
+
+// cutHelperCalls are the runner's cut helpers (internal/runner/mcp_sandbox.go), each made over one of those
+// methods: a reference to one is a site of its method, so a call moved into a helper keeps its row and guard.
+var cutHelperCalls = map[string]string{
+	"CutEgress": "StopProxy", "CutEgressAt": "StopProxyAt", "FenceEgress": "FenceProxy",
+	"EndSandboxCut": "EndSandbox", "EndSandboxCutAt": "EndSandboxAt", "CutLostEgressAt": "StopLostProxyAt",
 }
 
 // destructiveWrappers are the functions that make one of those calls for their caller. A reference to one is a site
@@ -158,8 +165,12 @@ func destructiveCallSites(files map[string]*ast.File) map[destructiveSite]int {
 			ast.Inspect(d, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.SelectorExpr:
-					if destructiveRunnerCalls[x.Sel.Name] || destructiveWrappers[x.Sel.Name] {
-						out[destructiveSite{path, fn, x.Sel.Name}]++
+					name := x.Sel.Name
+					if method, ok := cutHelperCalls[name]; ok {
+						name = method
+					}
+					if destructiveRunnerCalls[name] || destructiveWrappers[name] {
+						out[destructiveSite{path, fn, name}]++
 					}
 				case *ast.CallExpr:
 					if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "teardown" {

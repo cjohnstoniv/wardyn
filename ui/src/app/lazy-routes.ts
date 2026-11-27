@@ -17,6 +17,12 @@ const NewRunRoute = React.lazy(() =>
     default: m.NewRunRoute,
   })),
 );
+// Schedules (#3458): a person's repeating runs, and every person's in the Admin view.
+const SchedulesScreen = React.lazy(() =>
+  import("./components/screens/schedules").then((m) => ({
+    default: m.SchedulesScreen,
+  })),
+);
 const RunDetailScreen = React.lazy(() =>
   import("./components/screens/run-detail").then((m) => ({
     default: m.RunDetailScreen,
@@ -229,5 +235,6 @@ export {
   AuditScreen,
   RecordingScreen,
   GettingStarted,
+  SchedulesScreen,
   ComposerScreen,
 };

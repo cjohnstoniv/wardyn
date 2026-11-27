@@ -39,6 +39,8 @@ type Capabilities struct {
 	UserDrives      bool `json:"user_drives,omitempty"`
 	ManagedFiles    bool `json:"managed_files,omitempty"`    // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	ExtraContainers bool `json:"extra_containers,omitempty"` // fail-closed like UserDrives, AND-aggregated: runs SandboxSpec.Containers (extra_containers.go)
+	// MCPSandboxKinds are the machine kinds whose runs can have MCP sandboxes (MCPSandboxer). Fail closed: absent means none.
+	MCPSandboxKinds []types.MachineKind `json:"mcp_sandbox_kinds,omitempty"`
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
 	// `filesystem` (docker quota), `eviction` (k8s, never refuses the write),
 	// or `none`/empty. Aggregated as the WEAKEST across substrates.
@@ -268,6 +270,8 @@ type ProxyConfig struct {
 	ActivityIgnoreHosts []string                    `json:"activity_ignore_hosts,omitempty"` // proxy.Config.ActivityIgnoreHosts: hosts whose allowed requests are not activity
 	// NoNetwork is proxy.Config.NoNetwork: a run launched with the no-network wall preset.
 	NoNetwork bool `json:"no_network,omitempty"`
+	// Outage is the run's outage terms (#4082); nil for the default ones, so an older proxy never sees the key.
+	Outage *proxy.OutageConfig `json:"outage,omitempty"`
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

@@ -87,6 +87,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 	warns = clampOperatorSwitches(&out, ceiling, warns)
 	warns = clampInnerWalls(&out, ceiling, warns)
 	warns = clampDesktop(&out, ceiling, warns)
+	warns = clampOutage(&out, ceiling, warns)
 	warns = clampRecording(&out, ceiling, warns)
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
@@ -399,6 +400,10 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	if s.Desktop != nil {
 		d := *s.Desktop
 		out.Desktop = &d
+	}
+	if s.Outage != nil {
+		o := *s.Outage
+		out.Outage = &o
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
@@ -916,6 +921,23 @@ func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns [
 	m := out.Desktop.Meet(ceiling.Desktop)
 	out.Desktop = &m
 	return append(warns, "desktop narrowed: operator policy is stricter (review or blocked) on a direction the proposal allowed")
+}
+
+// clampOutage meets a proposal's outage terms with the ceiling's: never a longer allowance, and strict and "end" kept
+// where the operator sets them. A proposal already within is left as written; one that sets none takes a copy of the
+// ceiling's, which asks for nothing looser, so it is not warned.
+func clampOutage(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if ceiling.Outage == nil || leqOutage(out.Outage, ceiling.Outage) {
+		return warns
+	}
+	if out.Outage == nil {
+		o := *ceiling.Outage
+		out.Outage = &o
+		return warns
+	}
+	m := out.Outage.Meet(ceiling.Outage)
+	out.Outage = &m
+	return append(warns, "outage terms narrowed: operator policy sets a shorter allowance, strict, or ends unattended runs")
 }
 
 // clampRecording raises a proposal's recording level to the ceiling's: a ceiling's level is a minimum,

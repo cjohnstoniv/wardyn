@@ -36,6 +36,34 @@
       "namespace",
       "name"
     ],
+    "CeilingOverlay": [
+      "allowed_domains",
+      "denied_domains",
+      "allow_all_egress",
+      "refuse_ip_literals",
+      "first_use_approval",
+      "first_use_hold_seconds",
+      "max_holds",
+      "allowed_methods",
+      "host_rules",
+      "min_confinement_class",
+      "eligible_grants",
+      "auto_stop_after_sec",
+      "workspace_mounts",
+      "workspace_repos",
+      "llm_inspection",
+      "ui_apps",
+      "resources",
+      "tool_rules",
+      "git_push_any_branch",
+      "push_rules",
+      "azure_devops_capabilities",
+      "github_capabilities",
+      "harness_inner_walls",
+      "desktop",
+      "recording",
+      "data_out"
+    ],
     "ComponentCLI": [
       "kind",
       "azure",
@@ -65,11 +93,20 @@
       "url",
       "transport",
       "launch",
-      "gateway_audience"
+      "gateway_audience",
+      "sandbox"
     ],
     "ComponentMCPLaunch": [
       "command",
       "args"
+    ],
+    "ComponentMCPSandbox": [
+      "policy"
+    ],
+    "ComponentMCPSandboxPolicy": [
+      "mode",
+      "overlay",
+      "spec"
     ],
     "ComponentRef": [
       "id",
@@ -152,12 +189,26 @@
       "intercept_tls",
       "block_min_severity"
     ],
+    "OutageControls": [
+      "allowance_minutes",
+      "strict",
+      "unattended"
+    ],
     "PushRuleOverride": [
       "provider",
       "host",
       "org",
       "deny_paths",
       "require_review_paths"
+    ],
+    "PushRulesOverlay": [
+      "deny_paths",
+      "max_inspect_pack_mib",
+      "require_review_paths",
+      "hold_seconds",
+      "deny_new_executables",
+      "max_file_size_mib",
+      "deny_all"
     ],
     "PushRulesSpec": [
       "deny_paths",
@@ -173,6 +224,12 @@
       "ref"
     ],
     "ResourceLimits": [
+      "cpu_millis",
+      "memory_mib",
+      "pids_limit",
+      "disk_mib"
+    ],
+    "ResourcesOverlay": [
       "cpu_millis",
       "memory_mib",
       "pids_limit",
@@ -516,6 +573,14 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter.",
+      "section": "run_wide"
+    },
+    {
+      "name": "outage",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The site's outage allowance applies. A template can only make the terms stricter: a shorter allowance, the run ended at it, or an unattended run ended in a long outage.",
       "section": "run_wide"
     },
     {

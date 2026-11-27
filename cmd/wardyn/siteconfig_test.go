@@ -413,7 +413,7 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 
 	_, stderr, err := runSiteConfigSet(t, srv.URL,
 		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{},`+
-			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{},"governance_max_depth":16,"macos_vm":{},"images":{},"sessions":{},"features":{},"desktop_watermark":{}}`)
+			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{},"governance_max_depth":16,"macos_vm":{},"images":{},"sessions":{},"features":{},"desktop_watermark":{},"outage_allowance_minutes":60}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -442,6 +442,28 @@ func TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire(t *testing.T) {
 	}
 	if v, ok := wire["governance_max_depth"]; !ok || v != float64(0) {
 		t.Errorf("wire = %s, want governance_max_depth present as 0", body)
+	}
+}
+
+// TestSiteConfigSet_OutageAllowanceZeroStaysOnTheWire: outage_allowance_minutes 0 is the explicit reset
+// to the default (#4082), so the re-marshalled document must keep the key, as governance_max_depth's 0 does.
+func TestSiteConfigSet_OutageAllowanceZeroStaysOnTheWire(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, _, err := runSiteConfigSet(t, srv.URL, `{"outage_allowance_minutes":0}`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("wire body %q: %v", body, err)
+	}
+	if v, ok := wire["outage_allowance_minutes"]; !ok || v != float64(0) {
+		t.Errorf("wire = %s, want outage_allowance_minutes present as 0", body)
 	}
 }
 

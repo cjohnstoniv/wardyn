@@ -19,6 +19,7 @@ import (
 var sweepFamilies = map[string]string{
 	"run_queue.sweeper":        db.SweeperFamilyRuns,
 	"run_output.sweeper":       db.SweeperFamilyRuns,
+	"run_schedule.sweeper":     db.SweeperFamilyRuns,
 	"egress.reconcile":         db.SweeperFamilyRuns,
 	"portal.lifecycle.sweeper": db.SweeperFamilyRuns,
 	"run.retention":            db.SweeperFamilyRuns,

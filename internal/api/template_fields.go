@@ -298,6 +298,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		"The organisation's recording level applies. Keystrokes are never recorded."),
 	carriedField("data_out", partRules, templateOmitOptional, templateEmptySame,
 		"Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter."),
+	carriedField("outage", partRules, templateOmitOptional, templateEmptySame,
+		"The site's outage allowance applies. A template can only make the terms stricter: a shorter allowance, the run ended at it, or an unattended run ended in a long outage."),
 	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -326,7 +328,7 @@ var templateNestedCarried = map[string]string{
 	"ComponentCLI":        "kind azure aws github kubectl",
 	"ComponentDefinition": "description hosts secrets config cli mcp image",
 	"ComponentDelivery":   "mode host header format plain_http var file",
-	"ComponentMCP":        "url transport launch gateway_audience",
+	"ComponentMCP":        "url transport launch gateway_audience sandbox",
 	"ComponentMCPLaunch":  "command args",
 	"ComponentRef":        "id inline name builtin org repos access mcp_harnesses",
 	"ComponentSecret":     "secret_name shared delivery",
@@ -337,13 +339,16 @@ var templateNestedCarried = map[string]string{
 	"HostRuleSet":         "rules",
 	"HostRule":            "host methods paths effect",
 	"DesktopControls":     "paste_in copy_out upload download",
+	"OutageControls":      "allowance_minutes strict unattended",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url detector_sidecar_format " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",
+	"PushRulesOverlay":   "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",
 	"DriveAttachment":    "drive_id read_only",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
+	"ResourcesOverlay":   "cpu_millis memory_mib pids_limit disk_mib",
 	"RunService":         "restart port health",
 	"RunHostOverrides":   "add_allowed add_denied remove_allowed remove_denied",
 	"RunEgressOverrides": "first_use_approval allow_all_egress",
@@ -363,6 +368,12 @@ var templateNestedCarried = map[string]string{
 	// A run's extra containers (CreateRunRequest.Containers).
 	"RunContainer":          "name image command ports resources",
 	"RunContainerResources": "cpu_millis memory_mib",
+	"CeilingOverlay": "allowed_domains denied_domains allow_all_egress refuse_ip_literals first_use_approval first_use_hold_seconds max_holds " +
+		"allowed_methods host_rules min_confinement_class eligible_grants auto_stop_after_sec workspace_mounts workspace_repos llm_inspection " +
+		"ui_apps resources tool_rules git_push_any_branch push_rules azure_devops_capabilities github_capabilities harness_inner_walls desktop " +
+		"recording data_out",
+	"ComponentMCPSandbox":       "policy",
+	"ComponentMCPSandboxPolicy": "mode overlay spec",
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{

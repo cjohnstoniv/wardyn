@@ -63,14 +63,14 @@ func (s *Server) cutAgent(ctx context.Context, run types.AgentRun) (cutKind, err
 			return cutProxyStopped, errRunnerNotHere
 		}
 		if fencer, can := s.cfg.Runner.(runner.ProxyFencer); can && caps.ProxyFence {
-			err = fencer.FenceProxy(ctx, run.SandboxRef)
+			err = runner.FenceEgress(ctx, fencer, run.SandboxRef)
 		} else {
 			kind, err = s.stopProxyOnly(ctx, run.SandboxRef)
 		}
 	default:
 		fencer, can := s.cfg.Runner.(runner.ProxyFencer)
 		if can {
-			err = fencer.FenceProxy(ctx, run.SandboxRef)
+			err = runner.FenceEgress(ctx, fencer, run.SandboxRef)
 		}
 		if !can || errors.Is(err, runner.ErrEndUnsupported) {
 			kind, err = s.stopProxyOnly(ctx, run.SandboxRef)
@@ -89,7 +89,7 @@ func (s *Server) stopProxyOnly(ctx context.Context, ref string) (cutKind, error)
 	if !ok {
 		return cutUnsupported, nil
 	}
-	switch err := stopper.StopProxy(ctx, ref); {
+	switch err := runner.CutEgress(ctx, stopper, ref); {
 	case err == nil:
 		return cutProxyStopped, nil
 	case errors.Is(err, runner.ErrEndUnsupported):

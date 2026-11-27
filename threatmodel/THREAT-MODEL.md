@@ -2908,12 +2908,12 @@ These risks are **not closed by v1 Wardyn**.
       - The token is minted proxy-side only (`/wardyn/gh/`), and the run's direct GitHub hosts are denied.
       - Revive and extend re-check the owner's `workspace_provider` permission. They do not notice a repository that is no longer admitted, a provider row whose GitHub App lane was turned off, or a provider row that was removed.
     - (r) **A local MCP server runs inside the sandbox with the agent's own access [0.10.0, off by default].**
-      - A component whose `mcp` block has `transport: stdio` names a launch command, not a URL. Its harness starts that command inside the run's sandbox, as the agent's user (`claudeMCPFile`, `codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)).
+      - A component whose `mcp` block has `transport: stdio` names a launch command, not a URL. It runs only in a sandbox of its own, never in the agent's (`mcpGateSteps`, [`internal/api/run_mcp_sandbox_gate.go`](../internal/api/run_mcp_sandbox_gate.go)).
       - It is off by default. Until an admin sets `WARDYN_MCP_LOCAL_SERVERS`, saving such a component and attaching one already saved are both refused (`mcpLocalOffProblem`, called by `componentSaveRefusal` and `componentDefinitionProblem`).
       - An env or file secret given to it is readable by any process in the sandbox, the agent included. Only a request header the proxy adds to one of its hosts stays out of the sandbox.
       - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress (so the agent can reach them too), with no broker route in front of them (`rawEgressHosts`).
       - The broker never sees its tool calls, so the harness applies the run's rules to them, and the in-sandbox relay that asks is cooperative.
-      - Hold or block rules on its tools are refused at create where the harness can't apply them: Codex CLI in any mode, and any harness a command starts (`localMCPRulesRefusal`, [`internal/api/run_harness_tool_rules.go`](../internal/api/run_harness_tool_rules.go)).
+      - No harness starts it, so its tools' hold or block rules are not refused at create. Until an executor can start its sandbox, every run with one is refused (`mcpSandboxRefusal`, [`internal/api/run_mcp_sandbox_gate.go`](../internal/api/run_mcp_sandbox_gate.go)).
       - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component_mcp.go`](../internal/types/component_mcp.go)), which bounds that supply-chain risk but does not remove it; an absolute program in the image is trusted as the image is.
 
     </details>

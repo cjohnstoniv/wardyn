@@ -170,6 +170,18 @@ type SiteConfig struct {
 	// value and carries the stored one forward; a dropped value is reported
 	// as onboarding_completed_at_ignored.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+	// OutageAllowanceMinutes is how long a run's network keeps serving while Wardyn cannot be reached (#4082): 0 for
+	// the default, 60, else 60 to 1440. A policy can only shorten it (OutageControls). A pointer, as GovernanceMaxDepth
+	// is, so an explicit 0 (the reset) stays on the wire: nil is absent and keeps the stored value.
+	OutageAllowanceMinutes *int `json:"outage_allowance_minutes,omitempty"`
+}
+
+// OutageAllowance is the site's outage allowance in minutes as stored: 0, the default, when it is unset.
+func (c SiteConfig) OutageAllowance() int {
+	if c.OutageAllowanceMinutes == nil {
+		return 0
+	}
+	return *c.OutageAllowanceMinutes
 }
 
 // SiteMacOSVM is SiteConfig.MacOSVM.
@@ -295,7 +307,20 @@ type ComponentSettings struct {
 	// a governance profile: "" no cap (default), "L1" holds tool calls, "L0"
 	// refuses unattended runs. No other value is accepted: the cap only tightens.
 	AutonomyCap AutonomyLevel `json:"autonomy_cap,omitempty"`
+	// LocalMCPServers is the organisation's Local MCP servers setting: "off" refuses an MCP server that
+	// starts from a command; "on", "" and an absent key read on. A pointer, so a write that leaves the key
+	// out keeps the stored value.
+	LocalMCPServers *LocalMCPSetting `json:"local_mcp_servers,omitempty"`
 }
+
+// LocalMCPSetting is ComponentSettings.LocalMCPServers.
+type LocalMCPSetting string
+
+// The Local MCP servers values.
+const (
+	LocalMCPOff LocalMCPSetting = "off"
+	LocalMCPOn  LocalMCPSetting = "on"
+)
 
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.
 type InternalHost struct {

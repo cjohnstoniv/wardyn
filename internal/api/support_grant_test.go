@@ -906,11 +906,11 @@ func TestSupportTicketCarriesTheGrant(t *testing.T) {
 
 func TestSupportSwitchInSetupFeatures(t *testing.T) {
 	t.Setenv(envSupportSessions, "1")
-	if !setupFeatures(false, false).SupportSessions {
+	if !setupFeatures(false, false, false).SupportSessions {
 		t.Error("the switch on: SupportSessions is false")
 	}
 	t.Setenv(envSupportSessions, "0")
-	if setupFeatures(false, false).SupportSessions {
+	if setupFeatures(false, false, false).SupportSessions {
 		t.Error("the switch off: SupportSessions is true")
 	}
 }

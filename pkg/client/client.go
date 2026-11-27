@@ -125,6 +125,7 @@
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
+//   - /api/v1/run-schedules  — repeating scheduled runs: drive with raw HTTP; a CLI is a follow-up
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/org-sites      — organisation sites (0.11), with PUT and DELETE /api/v1/runner-pools/{id}/site and

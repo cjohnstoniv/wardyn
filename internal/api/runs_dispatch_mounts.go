@@ -218,7 +218,7 @@ const envAttachForward = "WARDYN_ATTACH_FORWARD"
 
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs, envSupportSessions, envAttachForward}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPOwnSandbox, envMacOSVMs, envSupportSessions, envAttachForward}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -231,6 +231,15 @@ func ValidateEnvToggles() {
 	if err := validateApprovalRulesSwitch(); err != nil {
 		fmt.Fprintln(flag.CommandLine.Output(), err)
 		os.Exit(2)
+	}
+	warnRemovedMCPLocalServers()
+}
+
+// warnRemovedMCPLocalServers logs, at boot, that the removed switch is still set. It never exits: the
+// deployment keeps running, and its servers meet WARDYN_MCP_OWN_SANDBOX and the organisation's setting.
+func warnRemovedMCPLocalServers() {
+	if os.Getenv("WARDYN_MCP_LOCAL_SERVERS") != "" {
+		slog.Warn("WARDYN_MCP_LOCAL_SERVERS is no longer read: an MCP server that starts from a command runs only in a sandbox of its own, behind WARDYN_MCP_OWN_SANDBOX and the organisation's Local MCP servers setting")
 	}
 }
 

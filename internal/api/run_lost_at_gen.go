@@ -60,7 +60,7 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 			return runner.ErrEndUnsupported
 		}
 		if canCut {
-			cutErr = gs.StopProxyAt(ctx, run.SandboxRef, gen)
+			cutErr = runner.CutEgressAt(ctx, gs, run.SandboxRef, gen)
 		}
 		if newer(cutErr) {
 			return nil // a newer revive owns the run: no end call, no stop mark
@@ -75,7 +75,7 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 			// No cut can happen: the agent is ended as well, as with no reader.
 		}
 	}
-	_, err := runner.SplitAWSCacheWipe(gs.EndSandboxAt(ctx, run.SandboxRef, gen))
+	_, err := runner.SplitAWSCacheWipe(runner.EndSandboxCutAt(ctx, gs, run.SandboxRef, gen))
 	if newer(err) {
 		return nil
 	}

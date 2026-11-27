@@ -170,6 +170,13 @@ export const FIELD_HELP = {
     doc: "desktop--desktopcontrols",
     snippet: { copy_out: "allowed" },
   },
+  outage: {
+    what: "How long a run's network keeps serving while Wardyn cannot be reached, and what happens when that time runs out. Fixed when the run is dispatched.",
+    values:
+      "allowance_minutes: 0 (the site's) or 30-1440, never longer than the site's allowance (outage_allowance_minutes, 60 unless an admin raised it). strict: true ends the run at the allowance; false pauses its network instead. unattended: keep | end; end ends an unattended run after a long outage. This release records the terms; pausing and ending come in a later release.",
+    doc: "outage--outagecontrols",
+    snippet: { allowance_minutes: 30 },
+  },
   tool_rules: {
     what: "Per-tool effects for a run whose tool approvals are held — the middle between approving everything and approving nothing.",
     values:
