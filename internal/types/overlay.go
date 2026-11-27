@@ -51,6 +51,7 @@ type CeilingOverlay struct {
 	Desktop                 *DesktopControls       `json:"desktop,omitempty"`
 	Recording               *RecordingLevel        `json:"recording,omitempty"`
 	DataOut                 *TransferRule          `json:"data_out,omitempty"`
+	LocalFolders            *LocalFolderRules      `json:"local_folders,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.

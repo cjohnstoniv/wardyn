@@ -37,6 +37,22 @@ export interface RunComputerFolder {
   give_up_at?: string;
   // The folder's record could not be read, so only a give-up it holds is shown (computerFolderRunView).
   record_unreadable?: boolean;
+  // What the run's folder walls mean for the pass back (folderWallsView, internal/api/local_folder_walls.go).
+  walls?: FolderWallsView;
+}
+
+// One folder wall's layer (types.LocalFolderWallLayer): boundary, unit (with its name) or the run's own policy.
+export interface LocalFolderWallLayer {
+  layer: string;
+  name?: string;
+  locked?: boolean;
+}
+
+// internal/api/local_folder_walls.go folderWallsView: absent when the walls allow a pass back.
+export interface FolderWallsView {
+  back_walled?: LocalFolderWallLayer;
+  back_walled_text?: string;
+  unreadable?: boolean;
 }
 
 // One pass as the server shows it (folderPassView, internal/api/run_computer_folder.go): types.FolderPassRecord

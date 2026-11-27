@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -837,7 +836,14 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		}
 		return runnerwire.FolderPass{}, false, true, errors.New(refusal.body.Error)
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run, nil, "-d", folder.RemoteDir)
+	rec, werr := s.runLocalFolderWalls(ctx, run.ID)
+	if werr != nil { // not settled: the pass is tried again and the sandbox kept
+		return runnerwire.FolderPass{}, false, false, fmt.Errorf("read the run's folder walls: %w", werr)
+	}
+	if pull && rec.Walls != nil && rec.Walls.DenyPull {
+		return runnerwire.FolderPass{}, false, true, errors.New(localFolderBackText(rec))
+	}
+	sess, reason, err := s.execSFTPServer(ctx, run, nil, s.folderPassArgs(ctx, run.ID, folder.RemoteDir, rec.Walls)...)
 	if err != nil {
 		return runnerwire.FolderPass{}, false, true, errors.New(reason)
 	}
@@ -845,7 +851,7 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	if sess.Stderr != nil {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
-	pass, err := sub.SyncFolder(ctx, runnerwire.SyncFolderArgs{
+	pass, err := s.walledSyncFolder(ctx, sub, rec.Walls, runnerwire.SyncFolderArgs{
 		RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny,
 		DeadlineUnixMs: passDeadlineMs(ctx),
 	})
@@ -858,19 +864,11 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		return runnerwire.FolderPass{}, false, runnerReplied(err), fmt.Errorf("the runner could not start the sync: %w", err)
 	}
 	defer func() { _ = pass.Stream.Close() }()
-	var joined sync.WaitGroup
-	joined.Go(func() {
-		_, _ = io.Copy(sess.Stdin, pass.Stream)
-		_ = sess.Stdin.Close()
-	})
-	joined.Go(func() {
-		_, _ = io.Copy(pass.Stream, sess.Stdout)
-		_ = pass.Stream.CloseWrite()
-	})
+	joined := s.passPipes(run.ID, rec, pass.Stream, sess.Stdin, sess.Stdout)
 	res, err := pass.Wait(ctx)
 	_ = pass.Stream.Close()
 	_ = sess.Close()
-	joined.Wait()
+	joined()
 	if cut = err != nil && ctx.Err() != nil; cut {
 		actx, cancel := context.WithTimeout(account, computerFolderAccountTime)
 		defer cancel()
@@ -919,7 +917,8 @@ type computerFolderRunView struct {
 	GiveUpAt    *time.Time        `json:"give_up_at,omitempty"`
 	// RecordUnreadable says the folder's record could not be decoded: the view shows only a give-up the record
 	// holds (setUnreadFolderFate), as the run's given_up row says status_unreadable.
-	RecordUnreadable bool `json:"record_unreadable,omitempty"`
+	RecordUnreadable bool             `json:"record_unreadable,omitempty"`
+	Walls            *folderWallsView `json:"walls,omitempty"` // what the run's folder walls mean for the pass back
 }
 
 // folderPassView is a pass record as the folder's views show it: types.FolderPassRecord without GivenUpAudited,
@@ -964,6 +963,7 @@ func (s *Server) computerFolderRunView(ctx context.Context, id uuid.UUID) *compu
 		return nil
 	}
 	v := &computerFolderRunView{Name: folder.Name, RemoteDir: folder.RemoteDir, Direction: folder.Direction, State: computerFolderWaiting}
+	v.Walls = s.folderWallsView(ctx, id)
 	if rs, ok := s.cfg.Store.(runnerGetter); ok {
 		if row, err := rs.GetRunner(ctx, *folder.RunnerID); err == nil {
 			v.Runner = runnerLabel(row)

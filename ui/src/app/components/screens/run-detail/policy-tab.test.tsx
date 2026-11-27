@@ -953,3 +953,20 @@ describe("PolicyTab: secrets that went in as their value", () => {
     expect(screen.queryByText("Showing the first 50.")).toBeNull();
   });
 });
+
+describe("PolicyTab — folders from your computer", () => {
+  it("gives the summary each wall's layer from the run's sync view", async () => {
+    const run = { ...RUN, sync: { open: [], max_pull_bytes: 256 * 1024 * 1024, wall_layers: { max_pull_mib: { layer: "boundary" } } } } as RunDetail;
+    show(view({ spec: { ...SPEC, local_folders: { max_pull_mib: 256 } } }), { run });
+    const summary = within(await screen.findByTestId("policy-summary"));
+    expect(summary.getByText("Folders from your computer")).toBeInTheDocument();
+    expect(summary.getByText("Wardyn boundary").closest("li")).toHaveTextContent("Brings back up to 256.0 MB per session");
+  });
+
+  it("a run whose sync view names no layer shows the walls with no chip", async () => {
+    show(view({ spec: { ...SPEC, local_folders: { deny_pull: true } } }));
+    const summary = within(await screen.findByTestId("policy-summary"));
+    expect(summary.getByText("Changes in the sandbox don't sync back to your computer")).toBeInTheDocument();
+    expect(summary.queryByText("Wardyn boundary")).toBeNull();
+  });
+});

@@ -40,7 +40,11 @@ func (s *Server) folderBackEligible(ctx context.Context, runID uuid.UUID) (bool,
 	if err != nil {
 		return false, err
 	}
-	return rule == types.TransferAllowed, nil
+	walled, err := s.folderPullWalled(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	return rule == types.TransferAllowed && !walled, nil
 }
 
 // folderDone is a record whose pass back ended with its Back written and no Resume left to run.

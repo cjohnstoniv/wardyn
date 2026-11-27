@@ -108,6 +108,9 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits, he
 			return err
 		}
 	}
+	if err := validateLocalFolders(sp.LocalFolders); err != nil {
+		return err
+	}
 	if m := limits.MaxEndAheadSec; m != nil && *m <= 0 {
 		return errors.New("limits.max_end_ahead_sec must be a positive number of seconds; omit it for no limit")
 	}

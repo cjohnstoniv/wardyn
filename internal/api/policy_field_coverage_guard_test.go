@@ -87,6 +87,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "closed levels (validateRecordingLevel), none of them keystrokes; raised to the ceiling's level (clampRecording), since a ceiling's level is a minimum. The organisation's level and lock apply at dispatch (types.RecordingChoice)"},
 	"DataOut": {validated: true, clamped: true,
 		why: "closed values (validateDataOut); the stricter of the proposal's and the ceiling's rule stands (clampDataOut), and an unset rule reads as allowed. The doors that hold content in read the sealed value at the run"},
+	"LocalFolders": {validated: true, clamped: true,
+		why: "caps 1 to 1048576 MiB and each deny pattern alone (validateLocalFolders); the walls only narrow under the ceiling's (clampLocalFolders). The folder doors read the walls stored on the run at dispatch"},
 	"HarnessInnerWalls": {validated: true, clamped: true,
 		why: "closed values, the harness's own sandbox modes refused with their own reason (validateHarnessInnerWalls); each axis the ceiling chooses stands over the proposal's (clampInnerWalls). The create door refuses a run whose walls cannot meet the choice, a looser one included (innerWallsFor)"},
 	"Desktop": {validated: true, clamped: true,

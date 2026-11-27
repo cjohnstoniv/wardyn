@@ -9,6 +9,7 @@ import { shortTime } from "../../../../lib/format";
 import { aheadByHours } from "../../../../lib/test-clock";
 import type { RunComputerFolder, RunDetail } from "../../../../lib/types";
 import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
+import { LOCAL_FOLDERS } from "../../../wardyn/copy/local-folders";
 import { ComputerFolderRows, computerFolderSettling } from "./identity-computer-folder";
 
 const AT = aheadByHours(-1);
@@ -254,5 +255,42 @@ describe("computerFolderSettling", () => {
     expect(computerFolderSettling(run("COMPLETED"))).toBe("unknown");
     expect(computerFolderSettling(run("RUNNING", { fate: "retained" }))).toBeNull();
     expect(computerFolderSettling(null)).toBeNull();
+  });
+});
+
+describe("Folders from your computer: the run's folder walls", () => {
+  const WALLED = "Bringing the sandbox's changes back to your computer is walled off by the Platform unit (locked).";
+  const BACK = { at: AT, files: 0, bytes: 0, refused: [] };
+
+  it("shows a walled pass back as the server's sentence alone, once, with no local_folder: prefix", () => {
+    show("COMPLETED", {
+      ...FOLDER, state: "synced", back: { ...BACK, error: WALLED },
+      walls: { back_walled: { layer: "unit", name: "Platform", locked: true }, back_walled_text: WALLED },
+    });
+    expect(screen.getByTestId("run-computer-folder-walled").textContent).toBe(WALLED);
+    expect(screen.getAllByText(WALLED)).toHaveLength(1);
+    expect(screen.queryByText(C.BACK_FAILED(WALLED))).toBeNull();
+    expect(screen.queryByText(/local_folder:/)).toBeNull();
+  });
+
+  it("says the changes could not come back when the walls could not be read", () => {
+    show("COMPLETED", { ...FOLDER, state: "synced", walls: { unreadable: true } });
+    expect(screen.getByRole("alert")).toHaveTextContent(C.BACK_FAILED(LOCAL_FOLDERS.WALLS_UNREADABLE));
+    expect(screen.getByText("The changes could not come back: the run's folder walls could not be read")).toBeInTheDocument();
+  });
+
+  it("says nothing about unreadable walls while the run is still active: nothing has failed to come back yet", () => {
+    show("RUNNING", { ...FOLDER, state: "synced", walls: { unreadable: true } });
+    expect(screen.queryByText(C.BACK_FAILED(LOCAL_FOLDERS.WALLS_UNREADABLE))).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("draws nothing from the walls for a folder that only copies in, or without walls", () => {
+    show("COMPLETED", { ...FOLDER, direction: "in", state: "synced", walls: { back_walled_text: WALLED, unreadable: true } });
+    expect(screen.queryByText(WALLED)).toBeNull();
+    expect(screen.queryByText(C.BACK_FAILED(LOCAL_FOLDERS.WALLS_UNREADABLE))).toBeNull();
+    cleanup();
+    show("COMPLETED", { ...FOLDER, state: "synced" });
+    expect(screen.queryByTestId("run-computer-folder-walled")).toBeNull();
   });
 });

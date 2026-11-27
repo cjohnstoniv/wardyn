@@ -26,6 +26,12 @@ import { HOST_RULES, IP_LITERALS, POLICY_TAB, SUMMARY } from "../../screens/run-
 import { HiddenChip } from "./hidden-chip";
 import { pushesLines, toolRulesTail } from "./policy-facts";
 import { WALL_PRESETS } from "../copy/wall-presets";
+import { LOCAL_FOLDERS } from "../copy/local-folders";
+import { RECORDING_LEVEL } from "../copy/recording-level";
+import { RUN_COMPUTER_FOLDER } from "../copy/runners";
+import { fmtBytes } from "../../../lib/format";
+import type { LocalFolderWallLayer } from "../../../lib/types/runs-folder";
+import { WHY_CARD } from "../../../lib/why-card-copy";
 
 export const REDACTED = "<redacted>";
 
@@ -44,6 +50,8 @@ export interface PolicyFacts {
   requestedClass?: ConfinementClass;
   /** Model providers whose gateway checks the run's prompts itself (run page only). */
   inspectionLeftTo?: string[];
+  /** The layer that set each local_folders wall, by wall name (run page only: the run's sync.wall_layers). */
+  localFolderLayers?: Record<string, LocalFolderWallLayer>;
 }
 
 type ChipSpec = { label: string; tone: "neutral" | "warning" | "info"; title?: string };
@@ -113,6 +121,44 @@ const mono = (t: string, extra?: Partial<Value>): Value => ({ text: t, mono: tru
 const hostChip = (inspected: boolean): ChipSpec =>
   inspected ? { label: SUMMARY.inspected, tone: "info" } : { label: SUMMARY.tunnelOnly, tone: "neutral" };
 const partlyChip: ChipSpec = { label: SUMMARY.partlyInspected, tone: "info" };
+
+// A wall's layer in the why card's Set by words (policy-remedy.tsx setByLabel), so a chip and a refusal card never
+// name one layer two ways.
+const wallLayerLabel = (l: LocalFolderWallLayer): string =>
+  l.layer === "boundary" || l.layer === "deployment"
+    ? WHY_CARD.BOUNDARY
+    : l.layer === "unit"
+      ? l.name ? WHY_CARD.TEAM(l.name) : WHY_CARD.TEAM_FALLBACK
+      : WHY_CARD.RUN_POLICY;
+
+// The local_folders walls, one line per wall. A wall's chips name the layer that set it, and are drawn where the
+// layer changes from the line before: walls one layer set share its chips, and two layers each show theirs.
+function localFolderLines(w: Bag, layers: Record<string, LocalFolderWallLayer> | undefined): Value[] {
+  const out: Value[] = [];
+  let shown: string | undefined;
+  const wall = (name: string, line: string) => {
+    const l = layers?.[name];
+    const key = l && `${wallLayerLabel(l)}\n${l.locked === true}`;
+    if (!l || key === shown) return out.push(text(line));
+    shown = key;
+    const chips: ChipSpec[] = [{ label: wallLayerLabel(l), tone: "info" }];
+    if (l.locked) chips.push({ label: RECORDING_LEVEL.LOCKED, tone: "neutral" });
+    return out.push(text(line, { chips }));
+  };
+  const mib = (v: unknown) => {
+    const n = asNumber(v);
+    return n && n > 0 ? fmtBytes(n * 1024 * 1024) : undefined;
+  };
+  if (asBool(w.deny_remote)) wall("deny_remote", LOCAL_FOLDERS.DENY_REMOTE);
+  if (asBool(w.deny_pull)) wall("deny_pull", LOCAL_FOLDERS.DENY_PULL);
+  const push = mib(w.max_push_mib);
+  if (push) wall("max_push_mib", LOCAL_FOLDERS.MAX_PUSH(push));
+  const pull = mib(w.max_pull_mib);
+  if (pull) wall("max_pull_mib", LOCAL_FOLDERS.MAX_PULL(pull));
+  const deny = asStrings(w.deny);
+  if (deny && deny.length > 0) out.push(text(LOCAL_FOLDERS.DENY), mono(deny.join(", ")));
+  return out;
+}
 
 export function cpuText(millis?: number): string {
   return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
@@ -355,6 +401,9 @@ function summarize(
       ),
     );
   }
+  const localFolders = take("local_folders", asBag);
+  const folderLines = localFolders ? localFolderLines(localFolders, facts?.localFolderLayers) : [];
+  if (folderLines.length > 0) files.push(row(RUN_COMPUTER_FOLDER.TITLE, folderLines, "local_folders"));
   const repos = take("workspace_repos", asBags);
   if (repos && repos.length > 0) {
     files.push(

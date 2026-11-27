@@ -75,6 +75,9 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutFolderMsg)
 		return
 	}
+	if s.refuseWalledBringBack(w, r, id, actorType, principal) {
+		return
+	}
 	folder, refusal := s.bringBackRefusal(r.Context(), run)
 	if refusal.write(s, w, r) {
 		return

@@ -302,12 +302,21 @@ func TestSendGitScript_SameHashHalfMadeRepoIsFinished(t *testing.T) {
 }
 
 // oldGitPath is a PATH entry for a sandbox git older than 2.29: in a repository it prints rev-parse's
-// --show-object-format back and succeeds, and it rejects --object-format=sha256 as unknown (rc 129).
-func (g *gitRig) oldGitPath() string {
-	old := g.t.TempDir()
-	g.write(old, "git", "#!/bin/sh\n[ \"$1 ${2:-}\" = 'rev-parse --show-object-format' ] && [ -e .git/HEAD ] && { echo --show-object-format; exit 0; }\n"+
-		"for a in \"$@\"; do [ \"$a\" = --object-format=sha256 ] && { echo \"error: unknown option 'object-format=sha256'\" >&2; exit 129; }; done\n"+
-		"exec "+shellQuote(filepath.Join(g.bin, "git"))+" \"$@\"\n")
+// --show-object-format back and succeeds, and it rejects --object-format=sha256 as unknown (rc 129) with git's
+// real usage of init, many lines long, as such a git does.
+func (g *gitRig) oldGitPath() string { return g.oldGitPathKnowing(false) }
+
+// oldGitPathKnowing is oldGitPath; with showFormat its rev-parse answers --show-object-format as a newer git
+// does, so only init's refusal tells that it cannot make a SHA-256 repository.
+func (g *gitRig) oldGitPathKnowing(showFormat bool) string {
+	old, gitBin := g.t.TempDir(), shellQuote(filepath.Join(g.bin, "git"))
+	echo := "[ \"$1 ${2:-}\" = 'rev-parse --show-object-format' ] && [ -e .git/HEAD ] && { echo --show-object-format; exit 0; }\n"
+	if showFormat {
+		echo = ""
+	}
+	g.write(old, "git", "#!/bin/sh\n"+echo+
+		"for a in \"$@\"; do [ \"$a\" = --object-format=sha256 ] && { echo \"error: unknown option 'object-format=sha256'\" >&2; "+gitBin+" init -h >&2; exit 129; }; done\n"+
+		"exec "+gitBin+" \"$@\"\n")
 	if err := os.Chmod(filepath.Join(old, "git"), 0o755); err != nil {
 		g.t.Fatal(err)
 	}
@@ -333,7 +342,9 @@ func TestSendGitScript_OldGitCannotHoldSHA256(t *testing.T) {
 	for _, c := range []struct {
 		name       string
 		repo, mark bool
-	}{{"a finished repository", true, false}, {"a half-made repository", true, true}, {"no repository yet", false, false}} {
+		showFormat bool
+	}{{"a finished repository", true, false, false}, {"a half-made repository", true, true, false}, {"no repository yet", false, false, false},
+		{"a finished repository, rev-parse knowing the format", true, false, true}} {
 		t.Run(c.name, func(t *testing.T) {
 			g := newGitRigHash(t, true)
 			dir := g.box(t.TempDir())
@@ -345,12 +356,15 @@ func TestSendGitScript_OldGitCannotHoldSHA256(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			out, errs, rc := g.send(dir, g.oldGitPath())
+			out, errs, rc := g.send(dir, g.oldGitPathKnowing(c.showFormat))
 			if rc == 0 || out != "" {
 				t.Fatalf("out %q rc %d stderr %q; want the send refused", out, rc, errs)
 			}
 			if !strings.Contains(errs, gitTooOld) || strings.Contains(errs, "remove .git") || strings.Contains(errs, gitUnfinished) {
 				t.Errorf("stderr %q; want %q, no advice to remove .git and not %q", errs, gitTooOld, gitUnfinished)
+			}
+			if strings.Contains(errs, "usage:") || strings.Contains(errs, "unknown option") {
+				t.Errorf("stderr %q; want git's usage left out", errs)
 			}
 		})
 	}

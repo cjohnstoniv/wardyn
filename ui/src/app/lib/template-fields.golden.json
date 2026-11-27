@@ -152,6 +152,13 @@
       "intercept_tls",
       "block_min_severity"
     ],
+    "LocalFolderRules": [
+      "deny_remote",
+      "deny_pull",
+      "max_push_mib",
+      "max_pull_mib",
+      "deny"
+    ],
     "PushRuleOverride": [
       "provider",
       "host",
@@ -516,6 +523,14 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter.",
+      "section": "run_wide"
+    },
+    {
+      "name": "local_folders",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No walls for folders from a person's computer beyond the organisation's. A template can only add walls.",
       "section": "run_wide"
     },
     {

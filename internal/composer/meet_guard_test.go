@@ -68,6 +68,7 @@ var meetRules = map[string]meetRule{
 	"desktop.download":                 {"blocked", "blocked on either side: blocked"},
 	"recording":                        {"the organisation's level", "the higher level; a lower overlay is a widening"},
 	"data_out":                         {"allowed", "the stricter value; a looser overlay is a widening; blocked also denies drives, kept machines and pushes"},
+	"local_folders":                    {"no walls", "deny bools OR; caps the smaller positive; patterns union; an overlay's omitted field inherits, and only a cap above the base's is a widening"},
 	"push_rules.deny_paths":            {"none", "union"},
 	"push_rules.max_inspect_pack_mib":  {"32 MiB under an active rule", "smaller after normalising against the composed rule"},
 	"push_rules.require_review_paths":  {"none", "union"},
@@ -136,6 +137,7 @@ var atomicMeetTypes = map[reflect.Type]bool{
 	reflect.TypeOf(types.UIApp{}):             true,
 	reflect.TypeOf(types.ToolRule{}):          true,
 	reflect.TypeOf(types.HostRuleSet{}):       true,
+	reflect.TypeOf(types.LocalFolderRules{}):  true,
 }
 
 // leafField is one meetable field: its wire path and the Go name the meet reads.

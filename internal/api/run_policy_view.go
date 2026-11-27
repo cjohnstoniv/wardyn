@@ -78,6 +78,8 @@ type policySourceRecord struct {
 	// knobs stays in memory: which layer set each value as the policy resolved,
 	// carried to the run.policy.resolve row (run_policy_provenance.go).
 	knobs knobProvenance
+	// localFolderLayers stays in memory: each local_folders wall's layer (stepLocalFolderWalls), for the envelope.
+	localFolderLayers map[string]types.LocalFolderWallLayer
 	// applyAudits stays in memory: the policy.*.apply rows a create writes once the run's row is
 	// inserted (recordPolicyApplyAudits), so a refusal before that leaves no row for a run that never began.
 	applyAudits []types.AuditEvent

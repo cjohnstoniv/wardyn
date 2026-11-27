@@ -590,7 +590,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// proxy config is final, so the host marks it carries describe the config the runner is sent.
 	envelope := effectivePolicyDatum{
 		RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
-		Provenance: p.Provenance,
+		Provenance: p.Provenance, LocalFolderLayers: p.LocalFolderLayers,
 	}
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
@@ -775,7 +775,7 @@ func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ce
 	}
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec)
-	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease)
+	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease) && s.keepRunLocalFolderWalls(ctx, run, envelope.LocalFolders, envelope.Provenance["local_folders"], envelope.LocalFolderLayers, stopLease)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only
