@@ -152,9 +152,6 @@ func (s *Server) handleFillMyDrive(w http.ResponseWriter, r *http.Request) {
 	s.handleCreateRun(cw, cr)
 	if cw.status != http.StatusCreated {
 		reason, msg, _ := cw.refused()
-		if reason == reasonWorkspaceSeedNoBaseImage {
-			msg = driveFillNoBaseImageMsg()
-		}
 		if reason == "" {
 			s.driveFillAnswer(w, r, &d, req, driveFillFault("create the fill run", fmt.Errorf("the create answered %d", cw.status)))
 			return
@@ -474,15 +471,17 @@ func (s *Server) driveFillKeeps(ctx context.Context, r *http.Request, g types.Gr
 	return nil
 }
 
-// driveFillCreateRequest is the POST /api/v1/runs the fill makes on the caller's own identity: an exec run that
-// clones the repository outside the drive, mounts the drive writable and carries the one grant.
+// driveFillCreateRequest is the POST /api/v1/runs the fill makes on the caller's own identity: a background command,
+// with no harness, that clones the repository outside the drive, mounts the drive writable and carries the one grant.
+// It names its run type, as a pool with limits admits a run by the type it stores; with no harness it runs on the
+// workspace's base image, or the agent base image when the workspace has none.
 func driveFillCreateRequest(r *http.Request, d types.UserDrive, id uuid.UUID, req client.MemberDriveSeedRequest, plan driveFillPlan) (*http.Request, error) {
 	writable := false
 	repos := []client.RepoSelection{{Repo: req.Repo, Ref: req.Ref}}
 	body, err := json.Marshal(client.CreateRunRequest{
-		TaskMode: "exec",
-		Title:    "Fill " + d.Name,
-		Task:     driveFillTask(plan.target, req.Into),
+		Experience: client.ExperienceBackground,
+		Workload:   &client.RunWorkload{Kind: client.WorkloadCommand, Command: driveFillTask(plan.target, req.Into)},
+		Title:      "Fill " + d.Name,
 		Workspaces: []client.WorkspaceSelection{{
 			WorkspaceID: req.WorkspaceID, Target: driveFillSource, Repos: &repos,
 		}},
@@ -623,10 +622,6 @@ func driveFillWouldDropMsg(repo string) string {
 
 func driveFillEndedMsg(id uuid.UUID) string {
 	return fmt.Sprintf("Wardyn could not give this run only your own GitHub token, so it ended run %s. Ask an admin.", id)
-}
-
-func driveFillNoBaseImageMsg() string {
-	return "This workspace has no base image, so there is nothing to run the fill in. Ask an admin to set one."
 }
 
 func driveFillCappedPoolMsg(pool, name string) string {

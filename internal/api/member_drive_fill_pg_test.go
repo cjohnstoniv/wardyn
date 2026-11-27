@@ -459,17 +459,24 @@ func TestDriveSeed_CreateRefusalIsPassedThrough_PG(t *testing.T) {
 	f.noRunYet()
 }
 
-// TestDriveSeed_NoBaseImageRefuses_PG: a workspace with no base image keeps the create path's status and reason, with
-// the fill's own sentence.
-func TestDriveSeed_NoBaseImageRefuses_PG(t *testing.T) {
+// TestDriveSeed_NoBaseImageFillsOnTheAgentBaseImage_PG: a workspace with no base image fills on the agent base image,
+// as any background command with no harness runs, and the run is otherwise the fill's: exactly the own-token grant
+// and the fill's egress.
+func TestDriveSeed_NoBaseImageFillsOnTheAgentBaseImage_PG(t *testing.T) {
 	f := newFillPG(t)
 	ws := f.workspace(nil, nil)
-	w := f.fillAs(fillPGAlice, f.drive.ID, f.body(ws.ID, fillPGRepo, ""))
-	f.wantReason(w, http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage)
-	if !strings.Contains(w.Body.String(), driveFillNoBaseImageMsg()) {
-		t.Errorf("body = %s, want the fill's sentence", w.Body.String())
+	grants := f.grants(f.accepted(f.fillAs(fillPGAlice, f.drive.ID, f.body(ws.ID, fillPGRepo, ""))))
+	if len(grants) != 1 {
+		t.Fatalf("grants = %+v, want exactly one", grants)
 	}
-	f.noRunYet()
+	wantOwnTokenGrant(t, grants[0])
+	f.wantEgress() // waits for the sandbox
+	f.rn.mu.Lock()
+	image := f.rn.lastSpec.Image
+	f.rn.mu.Unlock()
+	if want := agentImage("base", f.h.srv.cfg.AgentImages); image != want {
+		t.Errorf("sandbox image = %q, want the agent base image %q", image, want)
+	}
 }
 
 // newFillQueuePG is the fill fixture over the pool test environment: the person has a drive, a workspace, an own
