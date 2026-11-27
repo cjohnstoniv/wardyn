@@ -6,6 +6,7 @@ package offline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -19,6 +20,14 @@ import (
 func (m *Manager) stateRows(ctx context.Context, ids []uuid.UUID) ([]runnerwire.RunState, error) {
 	out := make([]runnerwire.RunState, 0, len(ids))
 	for _, id := range ids {
+		m.mu.Lock()
+		r := m.state.Runs[id]
+		m.mu.Unlock()
+		if r.MovedAway != "" && r.MovedAway == r.Ref {
+			// The run was moved to another placement: the organisation holds it there, and this sandbox is
+			// only the move's cleanup to do.
+			continue
+		}
 		row, err := m.observeRun(ctx, id)
 		if err != nil {
 			return nil, err
@@ -154,4 +163,43 @@ func (m *Manager) coversKind(kind types.MachineKind) bool {
 		return true
 	}
 	return false
+}
+
+// MoveUnbound records the organisation's notice that runID was moved away from localRef: that sandbox is
+// left out of the run state this runner reports. A notice for a run this runner does not hold, or for
+// another sandbox of it, changes nothing. The organisation never relies on the notice: it ignores a moved
+// run's rows from the runners its move names.
+func (m *Manager) MoveUnbound(_ context.Context, runID uuid.UUID, localRef string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
+	r, ok := m.state.Runs[runID]
+	if !ok || r.Ref == "" || r.Ref != localRef || r.MovedAway == localRef {
+		return nil
+	}
+	r.MovedAway = localRef
+	m.state.Runs[runID] = r
+	return m.save()
+}
+
+// SpoolDrained reports whether localRef's run has no spooled decision the organisation has not
+// acknowledged, the condition a move needs before it closes the run's spool cursor.
+func (m *Manager) SpoolDrained(ctx context.Context, localRef string) (bool, error) {
+	m.mu.Lock()
+	id, _, ok := m.findRef(localRef)
+	m.mu.Unlock()
+	if !ok {
+		return false, fmt.Errorf("runner: no run holds sandbox %q", localRef)
+	}
+	spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
+	if err != nil {
+		return false, err
+	}
+	depth, _, _, err := spool.Stats(ctx)
+	if err := errors.Join(err, spool.Close()); err != nil {
+		return false, err
+	}
+	return depth == 0, nil
 }

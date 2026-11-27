@@ -32,6 +32,9 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 	}
 	if err == nil {
 		s.recordRunContainmentEvents(ctx, result.Containment)
+		for _, id := range result.MoveIgnored {
+			slog.InfoContext(ctx, "wardynd: ignored a moved run's row from a runner its move names", slog.String("runner_id", runnerID.String()), slog.String("run_id", id.String()))
+		}
 	}
 	if err != nil || !result.Complete {
 		return err

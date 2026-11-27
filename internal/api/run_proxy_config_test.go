@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ type proxyConfigStore struct {
 	mu     sync.Mutex
 	sealed map[uuid.UUID][]byte
 	putErr error
+	// deleteErr is what DeleteRunProxyConfig answers after it deletes; drops counts its calls.
+	deleteErr error
+	drops     int
 }
 
 var _ store.RunProxyConfigs = (*proxyConfigStore)(nil)
@@ -54,7 +58,8 @@ func (s *proxyConfigStore) DeleteRunProxyConfig(_ context.Context, id uuid.UUID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sealed, id)
-	return nil
+	s.drops++
+	return s.deleteErr
 }
 
 func (s *proxyConfigStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) {
@@ -186,6 +191,102 @@ func TestRevive_RebuildsFromTheStoredConfigForEveryKeptKind(t *testing.T) {
 			}
 			if lostAt, _ := f.st.lost(); lostAt == nil {
 				t.Error("a refused revive un-lost the run")
+			}
+		})
+	}
+}
+
+// dropFailOwedStore is owedStore with a proxy config whose delete answers deleteErr.
+type dropFailOwedStore struct {
+	*owedStore
+	deleteErr error
+	drops     int
+}
+
+func (s *dropFailOwedStore) PutRunProxyConfig(context.Context, uuid.UUID, []byte) error { return nil }
+func (s *dropFailOwedStore) GetRunProxyConfig(context.Context, uuid.UUID) ([]byte, error) {
+	return nil, store.ErrNotFound
+}
+func (s *dropFailOwedStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error {
+	s.drops++
+	return s.deleteErr
+}
+func (s *dropFailOwedStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) {
+	return 0, nil
+}
+
+// A kept sealed sandbox spec is no failed containment step: once the proxy config is deleted, a kill answers 202
+// and the revoke cascade ends clean, owes nothing and writes no failure row. A proxy config the delete could not
+// remove still fails the step: the kill answers 500 naming it, and the cascade fails, stays owed and writes a
+// run.revoke failure row naming proxy_config_drop.
+func TestRunProxyConfigDrop_SpecKeptIsNoFailedStep(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		failed bool
+	}{
+		{"spec kept", fmt.Errorf("%w: permission denied for table run_sandbox_specs", store.ErrRunSandboxSpecKept), false},
+		{"proxy config kept", errors.New("permission denied for table run_proxy_configs"), true},
+	} {
+		t.Run(tc.name+"/kill", func(t *testing.T) {
+			srv, ps, run := dispatchWithProxyConfigStore(t, &killRaceRunner{fakeRunner: &fakeRunner{}})
+			ps.deleteErr = tc.err
+			w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/kill", adminToken, "")
+			ps.mu.Lock()
+			drops := ps.drops
+			ps.mu.Unlock()
+			if drops == 0 {
+				t.Fatal("the kill never dropped the proxy config: the test reads nothing")
+			}
+			ev := findAudit(srv.cfg.Audit.(*recRecorder).snapshot(), run.ID, "run.revoke", "failure")
+			if !tc.failed {
+				if w.Code != http.StatusAccepted {
+					t.Errorf("kill: %d %s, want 202", w.Code, w.Body.String())
+				}
+				if ev != nil {
+					t.Errorf("a kept spec wrote a run.revoke failure row: %s", ev.Data)
+				}
+				return
+			}
+			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), `"proxy_config_error"`) {
+				t.Errorf("kill: %d %s, want 500 naming proxy_config_error", w.Code, w.Body.String())
+			}
+			if ev == nil || !strings.Contains(string(ev.Data), `"step":"proxy_config_drop"`) {
+				t.Errorf("run.revoke failure row = %v, want one naming proxy_config_drop", ev)
+			}
+		})
+		t.Run(tc.name+"/cascade", func(t *testing.T) {
+			ctx := context.Background()
+			st, id := &dropFailOwedStore{owedStore: newOwedStore(), deleteErr: tc.err}, uuid.New()
+			srv, rec := revokeOwedServer(t, st, newFlakyBroker(0))
+			err := srv.revokeRunCascade(ctx, id)
+			if st.drops == 0 {
+				t.Fatal("the cascade never dropped the proxy config: the test reads nothing")
+			}
+			ev := findAudit(rec.snapshot(), id, "run.revoke", "failure")
+			if !tc.failed {
+				if err != nil {
+					t.Errorf("revokeRunCascade = %v, want nil", err)
+				}
+				if st.isOwed(id) {
+					t.Error("a kept spec left the revoke owed")
+				}
+				if ev != nil {
+					t.Errorf("a kept spec wrote a run.revoke failure row: %s", ev.Data)
+				}
+				if got := srv.RevokeStoppedRun(ctx, id); len(got) != 0 {
+					t.Errorf("RevokeStoppedRun = %v, want no failed step", got)
+				}
+				return
+			}
+			if err == nil {
+				t.Error("revokeRunCascade hid a proxy config it could not delete")
+			}
+			if !st.isOwed(id) {
+				t.Error("a proxy config the delete could not remove left the revoke settled")
+			}
+			if ev == nil || !strings.Contains(string(ev.Data), `"step":"proxy_config_drop"`) {
+				t.Errorf("run.revoke failure row = %v, want one naming proxy_config_drop", ev)
 			}
 		})
 	}

@@ -229,6 +229,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
 			r.Post("/runs/{id}/resume", s.handleResumeRun)
+			s.registerRunMoveRoutes(r)
 			r.Post("/runs/{id}/exec", s.handleRunExec) // one command, as an SSH exec runs it, by the person who may enter the run (run_exec.go)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
