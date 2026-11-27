@@ -796,6 +796,21 @@ type ImageRemover interface {
 	ImageRemove(ctx context.Context, ref string) error // a ref already absent is NOT an error
 }
 
+// ErrDriveUntouched marks a refusal a DriveReclaimer made before it changed anything: nothing was deleted, and the
+// object is as it was. A caller that issued a delete under a claim may then give the claim up. It rides beside the
+// refusal's own sentinel (see Untouched) and is never answered for a refusal that may have changed something, nor
+// by a Mac, whose answer crosses the wire without it.
+var ErrDriveUntouched = errors.New("runner: the drive's storage was not touched")
+
+// untouched is err that also answers errors.Is(ErrDriveUntouched); its text is err's.
+type untouched struct{ err error }
+
+func (u untouched) Error() string   { return u.err.Error() }
+func (u untouched) Unwrap() []error { return []error{u.err, ErrDriveUntouched} }
+
+// Untouched marks err, a refusal made before anything changed, as ErrDriveUntouched too.
+func Untouched(err error) error { return untouched{err} }
+
 // Containment-pending kinds (a k8s runner, design K1 §3.1 Q2): StopProxy could not prove the proxy
 // stopped, and the run's other pod is either proven stopped (agent_only) or also past its delete
 // bound (pending_delete). Never plain containment: the run stays held until completion evidence.
