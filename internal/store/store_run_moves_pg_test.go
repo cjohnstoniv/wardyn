@@ -35,7 +35,8 @@ func newMoveRig(t *testing.T) *moveRig {
 	t.Helper()
 	pool, st, src, run, _ := spoolPGFixture(t)
 	g := &moveRig{t: t, pool: pool, st: st, src: src, run: run, ref: "runner:" + src.ID.String() + "/sandbox"}
-	g.dst = g.runner("move-dest-owner")
+	// The destination is another runner of the run's owner: a person's runner reports only its owner's runs.
+	g.dst = g.runner(run.CreatedBy)
 	if err := st.SetSandboxRef(t.Context(), run.ID, g.ref); err != nil {
 		t.Fatal(err)
 	}

@@ -265,7 +265,7 @@ func TestPG_RevokeRun_AutoMintedGrant_EmitsRevokeAudit(t *testing.T) {
 	if d.Kind != string(types.GrantGitHubToken) {
 		t.Fatalf("revoke row kind = %q, want github_token (joined off credential_grants)", d.Kind)
 	}
-	if !strings.Contains(d.Note, "github installation tokens expire") {
+	if !strings.Contains(d.Note, "expires on GitHub's own <=1h TTL") {
 		t.Fatalf("revoke note = %q, want the github_token TTL-expiry story", d.Note)
 	}
 }

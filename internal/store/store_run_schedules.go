@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // A run_schedules row is one repeating schedule a person keeps (#3458, migration 0420): the rule, the run
@@ -69,7 +71,7 @@ func (s PG) CreateRunSchedule(ctx context.Context, sc RunSchedule, limit int) er
 	if err != nil {
 		return fmt.Errorf("store: begin run schedule create: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	defer db.Rollback(ctx, tx) // a no-op after Commit
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('run_schedules:' || $1))`, sc.Owner); err != nil {
 		return fmt.Errorf("store: lock an owner's run schedules: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,7 +95,8 @@ func TestRunOutageTerms_SecondWriteAfterBlockedInsertReadsFirst_PG(t *testing.T)
 	pg := store.NewPG(pool)
 	run := persistRun(t, ctx, pool, newRun(types.RunStarting))
 	first := types.OutageTerms{AllowanceSec: 1800, Strict: true}
-	tx, err := pool.Begin(ctx)
+	// The first insert runs on a separate session, so the wait below reads the pool without a nested acquire.
+	tx, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
