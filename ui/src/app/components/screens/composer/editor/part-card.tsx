@@ -42,6 +42,10 @@ export function valueLines(value: unknown): string[] {
 // listed twice; and the one whose rules each name a host (the same host may have several rules, so no twice check).
 const HOST_SECTIONS = new Set(["allowed_domains", "denied_domains"]);
 const RULE_SECTION = "host_rules";
+// A rule's host is one exact host: a DNS name by Guided setup's check, or an IPv4 address written as four decimal
+// numbers with no leading zeros (internal/types/host_rules.go), and never a wildcard.
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+const ruleHostError = (host: string): string | null => (host.includes("*") ? T.RULE_HOST_WILDCARD(host) : IPV4.test(host) ? null : hostError(host));
 
 /**
  * Reads the text a person typed back into a part's value. A list of hosts must be a list of strings that each pass
@@ -66,7 +70,7 @@ export function parsePartText(section: string, text: string): { value: unknown }
       for (const rule of set.rules) {
         const host = (rule as { host?: unknown } | null)?.host;
         if (typeof host !== "string") return { error: T.PART_EDIT_INVALID };
-        const bad = hostError(host);
+        const bad = ruleHostError(host);
         if (bad) return { error: bad };
       }
     }

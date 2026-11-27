@@ -37,8 +37,8 @@ export interface ChecksStripProps {
   kind: AssistantTarget["kind"];
   /** A check is out. */
   busy?: boolean;
-  /** The server's sentence when the checks could not be read. */
-  failed?: string | null;
+  /** The server's sentences for what failed (the checks could not be read, an edit was not taken); each is shown. */
+  failed?: string | null | readonly (string | null)[];
   /** The draft left a host or field out because the ceiling refused it. */
   leftOut?: boolean;
 }
@@ -50,6 +50,7 @@ export function ChecksStrip({ checks, subject, kind, busy, failed, leftOut }: Ch
   const risk = checks?.risk?.after ? { before: checks.risk.before, after: checks.risk.after } : undefined;
   const fresh = risk ? risk.after.items.filter((a) => !(risk.before?.items ?? []).some((b) => sameItem(a, b))) : [];
   const errors = checks?.errors ?? [];
+  const failures = (Array.isArray(failed) ? failed : [failed]).filter((f): f is string => !!f);
   const widens = verdict === "widens" ? (review?.widens ?? []) : [];
   // Said only when the server's review checked the draft and found nothing that widens: a run's review is "not_checked"
   // today, which claims nothing, and a left-out host is outside the ceiling by definition.
@@ -60,11 +61,11 @@ export function ChecksStrip({ checks, subject, kind, busy, failed, leftOut }: Ch
         <h3 className="label-eyebrow">{T.CHECKS}</h3>
         {busy && <span className="text-meta text-muted-foreground">{RAIL_CHECK.CHECKING}</span>}
       </div>
-      {failed && (
-        <p role="alert" className="text-body text-danger">
-          {failed}
+      {failures.map((f, i) => (
+        <p key={i} role="alert" className="text-body text-danger">
+          {f}
         </p>
-      )}
+      ))}
       {checks && (
         <>
           <div className="flex flex-wrap items-center gap-2">

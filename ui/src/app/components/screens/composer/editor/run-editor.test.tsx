@@ -24,7 +24,8 @@ const checks = vi.spyOn(assistant, "postChecks");
 
 beforeEach(() => {
   next++;
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  // Fully fake: wall-clock time never leaks into a debounce assertion, however loaded the machine is.
+  vi.useFakeTimers();
   edits.mockReset().mockResolvedValue({ seq: 1 });
   checks.mockReset().mockResolvedValue(CHECKS);
 });
@@ -110,9 +111,9 @@ describe("accepting, discarding and editing", () => {
     editor();
     accept("allowed_domains");
     expect(edits).toHaveBeenCalledWith(SESSION(), { draft: { allowed_domains: HOSTS.value }, changed: [{ field: "allowed_domains", value: JSON.stringify(HOSTS.value) }] });
-    await settle(390);
+    await settle(300);
     expect(checks).not.toHaveBeenCalled();
-    await settle(10);
+    await settle(200);
     expect(checks).toHaveBeenCalledWith({ target_kind: "run", draft: { allowed_domains: HOSTS.value } }, expect.anything());
     expect(screen.getByTestId("composer-checks")).toBeInTheDocument();
   });
@@ -173,6 +174,31 @@ describe("accepting, discarding and editing", () => {
     await settle(400);
     expect(checks).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("alert")).toHaveTextContent("The session could not take that edit.");
+  });
+
+  it("shows a failed edit and a failed check together", async () => {
+    edits.mockRejectedValue(new Error("The session could not take that edit."));
+    checks.mockRejectedValue(new Error("Could not run the checks."));
+    editor();
+    accept("allowed_domains");
+    await settle(500);
+    const alerts = screen.getAllByRole("alert").map((a) => a.textContent);
+    expect(alerts).toEqual(["The session could not take that edit.", "Could not run the checks."]);
+  });
+
+  it("does not let an older answer to a post of an edit clear or replace a newer one", async () => {
+    const answers: { ok: () => void; no: (e: Error) => void }[] = [];
+    edits.mockImplementation(() => new Promise((ok, no) => answers.push({ ok: () => ok({ seq: 1 }), no })));
+    editor();
+    accept("allowed_domains");
+    accept("eligible_grants");
+    expect(answers).toHaveLength(2);
+    await act(async () => answers[1].no(new Error("The newer edit was refused.")));
+    expect(screen.getByRole("alert")).toHaveTextContent("The newer edit was refused.");
+    await act(async () => answers[0].ok());
+    expect(screen.getByRole("alert")).toHaveTextContent("The newer edit was refused.");
+    await act(async () => answers[0].no(new Error("The older edit was refused.")));
+    expect(screen.getByRole("alert")).toHaveTextContent("The newer edit was refused.");
   });
 
   it("drops an answer for a check a newer change replaced, and its failure too", async () => {
@@ -237,6 +263,16 @@ describe("a new proposal", () => {
     const moved = { parts: [{ section: "allowed_domains", value: ["a", "b"] }], dropped: [] };
     expect(mergeProposal([accepted], moved)).toEqual([{ ...accepted, changedSince: true }]);
     expect(mergeProposal([edited], moved)).toEqual([{ ...edited, changedSince: true }]);
+  });
+
+  it("moves a build-file mark to the newer proposal only when the part holds that value", () => {
+    const part: PartState = { section: "allowed_domains", value: ["a"], proposed: ["a"], status: "accepted", edited: false, fromBuildFile: true };
+    const kept = mergeProposal([part], { parts: [{ section: "allowed_domains", value: ["a", "b"] }], dropped: [] });
+    expect(kept[0]).toMatchObject({ value: ["a"], fromBuildFile: true });
+    const unmarked: PartState = { ...part, fromBuildFile: false };
+    expect(mergeProposal([unmarked], { parts: [{ section: "allowed_domains", value: ["a", "b"], from_build_file: true }], dropped: [] })[0]).toMatchObject({ value: ["a"], fromBuildFile: false });
+    expect(mergeProposal([part], { parts: [{ section: "allowed_domains", value: ["a"] }], dropped: [] })[0].fromBuildFile).toBe(false);
+    expect(mergeProposal([unmarked], { parts: [{ section: "allowed_domains", value: ["a"], from_build_file: true }], dropped: [] })[0].fromBuildFile).toBe(true);
   });
 
   it("offers a part afresh only while it is still just proposed", () => {

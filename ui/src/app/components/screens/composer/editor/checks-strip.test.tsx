@@ -89,6 +89,11 @@ describe("ChecksStrip", () => {
     expect(screen.queryByText(T.WITHIN_CEILING)).toBeNull();
   });
 
+  it("shows every failure it is given, and none that is null", () => {
+    render(<ChecksStrip checks={null} subject="" kind="run" failed={["The edit was refused.", null, "The checks failed."]} />);
+    expect(screen.getAllByRole("alert").map((a) => a.textContent)).toEqual(["The edit was refused.", "The checks failed."]);
+  });
+
   it("shows the server's sentence when the checks could not be read", () => {
     render(<ChecksStrip checks={null} subject="" kind="run" failed="The assistant is off for your organisation." />);
     expect(screen.getByRole("alert")).toHaveTextContent("The assistant is off for your organisation.");

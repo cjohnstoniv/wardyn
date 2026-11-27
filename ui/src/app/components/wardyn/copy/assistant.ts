@@ -149,6 +149,7 @@ export const ASSISTANT = {
   PART_FROM_BUILD_FILE: "From a build file (unverified)", // PROPOSED
   PART_EDIT_DONE: "Done", // PROPOSED: not on the board
   PART_EDIT_INVALID: "That isn't valid JSON.", // PROPOSED: not on the board
+  RULE_HOST_WILDCARD: (h: string) => `"${h}": a rule names one exact host, never a wildcard.`, // PROPOSED: not on the board
   CHANGED_SINCE: "Changed since the assistant's proposal", // PROPOSED
   YOU_CHANGED: (field: string) => `You changed ${field}. Checked again.`, // PROPOSED
   CHECKS: "Checks", // PROPOSED

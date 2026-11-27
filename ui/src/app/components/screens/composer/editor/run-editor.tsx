@@ -66,7 +66,8 @@ export function mergeProposal(current: readonly PartState[], proposal: EditorPro
     if (!next) return p;
     if (p.status !== "accepted") return fresh(next);
     const moved = !same(next.value, p.proposed) && !same(next.value, p.value);
-    return { ...p, fromBuildFile: next.from_build_file === true, changedSince: moved || undefined };
+    // The build-file mark describes the value it came with: it moves to the newer proposal only when the part holds that value.
+    return { ...p, fromBuildFile: same(next.value, p.value) ? next.from_build_file === true : p.fromBuildFile, changedSince: moved || undefined };
   });
   for (const next of proposal.parts) {
     if (!merged.some((p) => p.section === next.section)) merged.push(fresh(next));
@@ -116,6 +117,8 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   const [answered, setAnswered] = React.useState(0);
   const [editedAt, setEditedAt] = React.useState<Record<string, number>>({});
   const changed = React.useRef(0);
+  // The change whose post of the edit was answered last: an older answer arriving late never overrides a newer one.
+  const editAnswered = React.useRef(0);
   const latest = React.useRef(parts);
   latest.current = parts;
   const proposed = React.useRef("");
@@ -130,6 +133,12 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   React.useEffect(() => {
     if (sessionId) kept.set(sessionId, parts);
   }, [sessionId, parts]);
+
+  const answerEdit = (stamp: number, failure: string | null) => {
+    if (stamp < editAnswered.current) return;
+    editAnswered.current = stamp;
+    setEditFailed(failure);
+  };
 
   const act = (section: string, change: (p: PartState) => PartState | null, edit = false) => {
     const next = latest.current.flatMap((p) => {
@@ -146,8 +155,8 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
       const after = next.find((p) => p.section === section);
       assistant
         .postEdits(sessionId, { draft: draftOf(next), changed: [{ field: section, value: JSON.stringify(after ? after.value : null) }] })
-        .then(() => setEditFailed(null))
-        .catch((e: unknown) => setEditFailed(getErrorMessage(e)));
+        .then(() => answerEdit(stamp, null))
+        .catch((e: unknown) => answerEdit(stamp, getErrorMessage(e)));
     }
   };
 
@@ -241,7 +250,7 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
           ))}
         </div>
       )}
-      {(accepted > 0 || checks || failed || editFailed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={editFailed ?? failed} leftOut={left.length > 0} />}
+      {(accepted > 0 || checks || failed || editFailed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={[editFailed, failed]} leftOut={left.length > 0} />}
       {accepted > 0 && (
         <Button type="button" disabled={checks?.valid === false} onClick={review}>
           {NR_SHARED.REVIEW_RUN}

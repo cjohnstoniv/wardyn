@@ -98,6 +98,17 @@ describe("parsePartText", () => {
     expect(parsePartText("host_rules", '{"rules":1}')).toEqual({ error: T.PART_EDIT_INVALID });
   });
 
+  it("takes an IPv4 host in a rule as the server does, and refuses a wildcard or a badly written address", () => {
+    const rules = (host: string) => JSON.stringify([{ rules: [{ host, effect: "deny" }] }]);
+    expect(parsePartText("host_rules", rules("10.0.0.5"))).toEqual({ value: JSON.parse(rules("10.0.0.5")) });
+    expect(parsePartText("host_rules", rules("*.github.com"))).toEqual({ error: T.RULE_HOST_WILDCARD("*.github.com") });
+    expect(parsePartText("host_rules", rules("010.0.0.5"))).toHaveProperty("error");
+    expect(parsePartText("host_rules", rules("300.0.0.5"))).toHaveProperty("error");
+    expect(parsePartText("host_rules", rules("10.0.0.5:80"))).toHaveProperty("error");
+    // A host list is still a DNS-name list: an address is refused there.
+    expect(parsePartText("allowed_domains", '["10.0.0.5"]')).toHaveProperty("error");
+  });
+
   it("wants a list of strings for a host list, and any JSON for another field", () => {
     expect(parsePartText("denied_domains", '{"a":1}')).toEqual({ error: T.PART_EDIT_INVALID });
     expect(parsePartText("workspace_repos", '[{"url":"x"}]')).toEqual({ value: [{ url: "x" }] });
