@@ -269,7 +269,7 @@ func TestComponentPinAnswerRedactsForTier(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := e.call(e.alice, http.MethodPut, componentPinPath(c.ID), pinBody(&u.prod.ID))
-	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "/srv/cpr-host-path") || !strings.Contains(w.Body.String(), mountSourceWithheld) {
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "/srv/cpr-host-path") || !strings.Contains(w.Body.String(), sentinelJSON) {
 		t.Fatalf("pin answer: %d %s, want 200 with the mount source withheld", w.Code, w.Body)
 	}
 	stored, err := e.pg.GetComponent(context.Background(), c.ID, "")

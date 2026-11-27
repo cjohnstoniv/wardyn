@@ -204,7 +204,8 @@ func reviveWithCloneRow(t *testing.T, lost types.LostReason, launcherFile string
 		t.Fatal(err)
 	}
 	cfg, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{
-		RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081", Policy: types.RunPolicySpec{AllowedDomains: []string{"api.example.com"}},
+		// The proxy's policy is the run's, repositories included: a revive records it as the run's next generation.
+		RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081", Policy: types.RunPolicySpec{AllowedDomains: []string{"api.example.com"}, WorkspaceRepos: clonesAsked},
 	}, runner.ProxyListenPort)
 	if err != nil {
 		t.Fatal(err)

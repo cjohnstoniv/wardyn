@@ -176,7 +176,7 @@ func (r *Reader) check(th *tar.Header) (Header, error) {
 	}
 	h := Header{Path: th.Name, Mode: th.Mode & 0o777}
 	switch th.Typeflag {
-	case tar.TypeReg, tar.TypeRegA: //nolint:staticcheck // an old writer's regular file is still one
+	case tar.TypeReg: // archive/tar reads an old writer's '\x00' regular file as TypeReg, or TypeDir under a trailing slash
 		h.Type, h.Size = TypeFile, th.Size
 	case tar.TypeDir:
 		h.Type, h.Path = TypeDir, strings.TrimSuffix(th.Name, "/")

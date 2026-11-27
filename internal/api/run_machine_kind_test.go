@@ -489,7 +489,7 @@ func TestRunnerSettings_MachineKindDenials(t *testing.T) {
 	const entry = `{"trust_class":"personal","machine_kind":"linux_vm"}`
 	for name, body := range map[string]string{
 		"unknown class": `{"machine_kind_denials":[{"trust_class":"laptop","machine_kind":"linux_vm"}]}`,
-		"unknown kind":  `{"machine_kind_denials":[{"trust_class":"personal","machine_kind":"windows_vm"}]}`,
+		"unknown kind":  `{"machine_kind_denials":[{"trust_class":"personal","machine_kind":"freebsd_vm"}]}`,
 		"empty kind":    `{"machine_kind_denials":[{"trust_class":"personal","machine_kind":""}]}`,
 		"duplicate":     `{"machine_kind_denials":[` + entry + `,` + entry + `]}`,
 	} {

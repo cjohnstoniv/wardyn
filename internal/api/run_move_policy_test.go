@@ -292,6 +292,13 @@ func TestMovePolicyNarrowsOrRefuses(t *testing.T) {
 			}
 			f.wantNotStopped(t)
 			moves, _ := f.ms.ListRunMoves(context.Background(), f.run.ID)
+			if c.layer == "resident" || c.layer == "mcp" {
+				// The recorded spec's own refusal is step 1's, before the admitted row: a denied audit row and no move.
+				if len(moves) != 0 || f.moveRows("denied") != 1 {
+					t.Fatalf("run_moves rows = %+v, denied audit rows = %d, want none and 1", moves, f.moveRows("denied"))
+				}
+				return
+			}
 			if len(moves) == 0 {
 				t.Fatal("the refusal left no run_moves row")
 			}
@@ -320,14 +327,14 @@ func TestMovePolicyNarrowsOrRefuses(t *testing.T) {
 	noFiles := runner.Capabilities{Driver: "laptop"}
 	withRules := runSandboxSpecRecord{ManagedFiles: []runner.ManagedFile{{Path: settings}},
 		AgentPolicy: runSandboxSpecAgentPolicy{Path: settings, ToolRules: 2}}
-	if _, _, err := moveSettingsFallback(withRules, noFiles); err == nil || !strings.Contains(err.Error(), settings) {
-		t.Errorf("settings with tool rules at a gap: %v, want a refusal naming %s", err, settings)
+	if _, _, refusal := moveSettingsFallback(withRules, noFiles); !strings.Contains(refusal, settings) {
+		t.Errorf("settings with tool rules at a gap: %q, want a refusal naming %s", refusal, settings)
 	}
 	noRules := withRules
 	noRules.AgentPolicy.ToolRules = 0
-	drop, why, err := moveSettingsFallback(noRules, noFiles)
-	if err != nil || !drop || why == "" {
-		t.Errorf("settings without tool rules: drop %v why %q err %v, want the file left out with its reason", drop, why, err)
+	drop, why, refusal := moveSettingsFallback(noRules, noFiles)
+	if refusal != "" || !drop || why == "" {
+		t.Errorf("settings without tool rules: drop %v why %q refusal %q, want the file left out with its reason", drop, why, refusal)
 	}
 	if spec := moveSandboxSpec(types.AgentRun{}, noRules, local, moveDestPlan{DropSettings: drop}); len(spec.ManagedFiles) != 0 {
 		t.Errorf("destination spec managed files = %v, want none", spec.ManagedFiles)

@@ -633,6 +633,8 @@ func TestInternalAuthStillRefusesExpired(t *testing.T) {
 			t.Fatalf("%s is not among the routes held by internalAuth: %v", route, tested)
 		}
 	}
+	// Off, the gateway mint answers as a path no route holds, before any credential is read.
+	testGatewayIdentityOn(srv)
 	h := panicFails(t, srv.Handler())
 	for _, mp := range routes {
 		r := httptest.NewRequest(mp[0], mp[1], nil)

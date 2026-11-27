@@ -141,7 +141,7 @@ func TestMoveDrives_ReattachedDrivesAreNotCarried(t *testing.T) {
 // the same id, and it is never the run's own kept drive.
 func TestMoveWorkDrive_IDFromRunAndMove(t *testing.T) {
 	run, mv := uuid.New(), uuid.New()
-	if moveWorkDriveID(run, mv) != moveWorkDriveID(run, mv) {
+	if first, again := moveWorkDriveID(run, mv), moveWorkDriveID(run, mv); first != again {
 		t.Error("the same run and move give two ids")
 	}
 	if moveWorkDriveID(run, mv) == moveWorkDriveID(run, uuid.New()) {

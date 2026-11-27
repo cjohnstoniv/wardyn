@@ -881,7 +881,7 @@ func TestRunScheduleCreate_PinnedUnitDenyIsSeen(t *testing.T) {
 }
 
 // A resume refused by the governance profile says why the schedule cannot resume, never "Start the run now", in
-// the body and in its authz.denied row, with the door's policy; the schedule stays paused. The same holds when
+// the body, with the door's policy, and records one authz.denied row; the schedule stays paused. The same holds when
 // only the unit the stored request pins denies.
 func TestRunScheduleResume_DeniedIsRefusedWithItsOwnSentence(t *testing.T) {
 	check := func(t *testing.T, e *schedEnv, id uuid.UUID) {
@@ -897,8 +897,9 @@ func TestRunScheduleResume_DeniedIsRefusedWithItsOwnSentence(t *testing.T) {
 		for _, ev := range e.h.audit.snapshot() {
 			if ev.Action == "authz.denied" && ev.Target == "runs.schedule" {
 				rows++
-				if !strings.Contains(string(ev.Data), runScheduleResumeDeniedMsg) {
-					t.Errorf("the authz.denied row carries %s, want the resume sentence", ev.Data)
+				// An authz.denied row carries no sentence (authz.Datum): it names the reason and the layer that refused.
+				if !strings.Contains(string(ev.Data), `"reason":"governance_unit"`) || !strings.Contains(string(ev.Data), `"layer":`) {
+					t.Errorf("the authz.denied row carries %s, want the governance_unit reason and its layer", ev.Data)
 				}
 			}
 		}

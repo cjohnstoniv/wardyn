@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -357,7 +358,7 @@ func TestLocalFolderWalls_DenyPatternWithComma(t *testing.T) {
 			t.Errorf("cap %d admitted", c)
 		}
 	}
-	if err := validatePolicySpec(types.RunPolicySpec{LocalFolders: &types.LocalFolderRules{MaxPushMiB: 1, Deny: []string{"a,b"}}}); err != nil {
+	if err := validatePolicySpec(types.RunPolicySpec{MinConfinementClass: types.CC2, LocalFolders: &types.LocalFolderRules{MaxPushMiB: 1, Deny: []string{"a,b"}}}); err != nil {
 		t.Errorf("a valid local_folders = %v", err)
 	}
 }
@@ -645,24 +646,65 @@ func newLFWSSH(t *testing.T, rec types.LocalFolderWallsRecord, recErr error, rul
 	return &lfwSSH{h: h, fr: fr, client: client, run: run}
 }
 
-// openSync opens a wardyn-sync channel with its stderr readable.
-func (d *lfwSSH) openSync(t *testing.T, direction string) (*ssh.Session, io.Reader, io.WriteCloser, io.Reader) {
+// openSync opens a wardyn-sync channel with its stderr readable. It is a raw session channel, not an ssh.Session: a
+// Session started by a subsystem request alone never reports its exit status to Wait.
+func (d *lfwSSH) openSync(t *testing.T, direction string) (*lfwSync, io.Reader, io.WriteCloser, io.Reader) {
 	t.Helper()
-	sess, err := d.client.NewSession()
+	ch, reqs, err := d.client.OpenChannel("session", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
-	_ = sess.Setenv("WARDYN_SYNC_DIR", "/home/agent/work/proj")
-	_ = sess.Setenv("WARDYN_SYNC_DIRECTION", direction)
-	stderr, _ := sess.StderrPipe()
-	in, _ := sess.StdinPipe()
-	out, _ := sess.StdoutPipe()
-	if err := sess.RequestSubsystem(sshSyncSubsystem); err != nil {
-		t.Fatalf("wardyn-sync refused at the request: %v", err)
+	t.Cleanup(func() { _ = ch.Close() })
+	s := &lfwSync{status: make(chan int, 1)}
+	go func() {
+		got := -1
+		for r := range reqs {
+			if r.Type == "exit-status" {
+				var m struct{ Status uint32 }
+				if ssh.Unmarshal(r.Payload, &m) == nil {
+					got = int(m.Status)
+				}
+			}
+			if r.WantReply {
+				_ = r.Reply(false, nil)
+			}
+		}
+		s.status <- got
+	}()
+	for _, kv := range [][2]string{{"WARDYN_SYNC_DIR", "/home/agent/work/proj"}, {"WARDYN_SYNC_DIRECTION", direction}} {
+		_, _ = ch.SendRequest("env", true, ssh.Marshal(struct{ Name, Value string }{kv[0], kv[1]}))
 	}
-	return sess, stderr, in, out
+	if ok, err := ch.SendRequest("subsystem", true, ssh.Marshal(struct{ Name string }{sshSyncSubsystem})); err != nil || !ok {
+		t.Fatalf("wardyn-sync refused at the request: %v %v", ok, err)
+	}
+	return s, ch.Stderr(), lfwStdin{ch}, ch
 }
+
+// lfwSync is an open wardyn-sync channel's end: Wait answers nil for exit status 0 and an lfwSyncExit otherwise.
+type lfwSync struct{ status chan int }
+
+type lfwSyncExit struct{ status int }
+
+func (e *lfwSyncExit) Error() string   { return fmt.Sprintf("sync ended with exit status %d", e.status) }
+func (e *lfwSyncExit) ExitStatus() int { return e.status }
+
+func (s *lfwSync) Wait() error {
+	select {
+	case st := <-s.status:
+		if st == 0 {
+			return nil
+		}
+		return &lfwSyncExit{status: st}
+	case <-time.After(10 * time.Second):
+		return errors.New("the sync channel never ended")
+	}
+}
+
+// lfwStdin is the channel's stdin; Close ends the client's half, as an ssh.Session's stdin pipe does.
+type lfwStdin struct{ ch ssh.Channel }
+
+func (w lfwStdin) Write(p []byte) (int, error) { return w.ch.Write(p) }
+func (w lfwStdin) Close() error                { return w.ch.CloseWrite() }
 
 func (d *lfwSSH) wallDenied(t *testing.T, wall string) *types.AuditEvent {
 	t.Helper()
@@ -802,7 +844,7 @@ func TestBridgeSSHSync_ByteCapEndsSession(t *testing.T) {
 		}()
 		_, _ = io.Copy(io.Discard, out)
 		errOut, _ := io.ReadAll(stderr)
-		var exit *ssh.ExitError
+		var exit *lfwSyncExit
 		if err := sess.Wait(); !errors.As(err, &exit) || exit.ExitStatus() != syncCapExitStatus {
 			t.Errorf("%s: Wait = %v, want exit status %d", tc.wall, err, syncCapExitStatus)
 		}

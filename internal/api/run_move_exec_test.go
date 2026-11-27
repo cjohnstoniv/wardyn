@@ -320,6 +320,20 @@ func (s *moveOwedSettle) PauseSettleFor(context.Context, uuid.UUID) (time.Time, 
 	return time.Now().Add(-time.Minute), nil
 }
 
+// The rest of store.PauseSettler, without which the server never asks for the settle above.
+func (s *moveOwedSettle) NotePauseSettle(context.Context, uuid.UUID, time.Duration) (time.Time, error) {
+	return time.Now().Add(-time.Minute), nil
+}
+func (s *moveOwedSettle) NotePauseIntent(context.Context, uuid.UUID, time.Duration) (time.Time, bool, error) {
+	return time.Now().Add(-time.Minute), false, nil
+}
+func (s *moveOwedSettle) DuePauseSettles(context.Context, time.Duration) ([]store.PauseSettle, error) {
+	return nil, nil
+}
+func (s *moveOwedSettle) ClearPauseSettle(context.Context, uuid.UUID, time.Time) error { return nil }
+
+var _ store.PauseSettler = (*moveOwedSettle)(nil)
+
 // moveFreezeFails is a runner whose sandbox cannot be moved to its pause state.
 type moveFreezeFails struct{ *moveRunner }
 
@@ -580,7 +594,7 @@ func TestMoveExec_ExcludedPathsNeverArrive(t *testing.T) {
 func TestMoveExec_KeepsGitAndTranscripts(t *testing.T) {
 	f := newMoveFixture(t)
 	f.fk.carried = moveCarriedSet{Roots: []string{"/home/agent/work", "/home/agent/.claude/projects"}}
-	f.mr.files = append(f.mr.files, moveDir("home/agent/.claude/projects"),
+	f.mr.files = append(f.mr.files, moveDir("home/agent/.claude/projects"), moveDir("home/agent/.claude/projects/run"),
 		moveReg("home/agent/.claude/projects/run/session.jsonl", `{"role":"user"}`+"\n"))
 	if code, body := f.move(t, "org"); code != http.StatusAccepted || f.only(t).State != types.MoveCommitted {
 		t.Fatalf("move = %d %s, want committed", code, body)

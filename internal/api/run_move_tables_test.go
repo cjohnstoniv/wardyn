@@ -17,6 +17,8 @@ import (
 // with its pg subtest in TestMoveExec_RunnerBoundTables.
 var moveRunnerBoundTables = map[string]string{
 	"kept_machines":                 "keep: a run that keeps a machine never moves",
+	"machine_snapshots":             "keep: a snapshot is of a Linux VM run, and a VM run never moves",
+	"run_local_containment":         "keep: a run held contained on its runner is refused at admission and before commit (movePortLocallyContained)",
 	"run_containment_pending":       "keep: commit requires none for the run",
 	"run_node_records":              "keep",
 	"run_teardown_holds":            "keep: commit requires none open",

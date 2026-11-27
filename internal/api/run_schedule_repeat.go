@@ -426,8 +426,8 @@ func (s *Server) schedulePreflight(w http.ResponseWriter, r *http.Request, reque
 	return ok
 }
 
-// scheduleResumeDoorRefusal is scheduleDoorRefusal with the resume's own sentence, so the 403 body and the
-// authz.denied row it records both say why a schedule cannot resume, not "Start the run now".
+// scheduleResumeDoorRefusal is scheduleDoorRefusal with the resume's own sentence, so the 403 body says why a
+// schedule cannot resume, not "Start the run now"; the authz.denied row it records names the reason and the layer.
 func (s *Server) scheduleResumeDoorRefusal(ctx context.Context, c governanceCeiling) *runRefusal {
 	if !c.Limits.DenyScheduledRuns || s.runUngoverned(ctx) {
 		return nil

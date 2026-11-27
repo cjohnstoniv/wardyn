@@ -475,9 +475,9 @@ func (s *Server) judgeMoveDestination(ctx context.Context, run types.AgentRun, r
 	if ref := moveRecordRefusal(rec, run, d, caps, s.cfg.RunnerTarget); ref != nil {
 		return moveDestPlan{}, ref, nil
 	}
-	plan.DropSettings, plan.SettingsWithheld, err = moveSettingsFallback(rec, caps)
-	if err != nil {
-		return refused("managed_files", err.Error())
+	var settingsRefusal string
+	if plan.DropSettings, plan.SettingsWithheld, settingsRefusal = moveSettingsFallback(rec, caps); settingsRefusal != "" {
+		return refused("managed_files", settingsRefusal)
 	}
 	src, err := s.moveStoredSpec(ctx, run.ID)
 	if err != nil {
@@ -594,22 +594,22 @@ func moveKeepDrives(plan moveDestPlan) []types.DriveMount {
 // moveSettingsFallback judges each recorded managed file at the destination's capabilities, under dispatch's two
 // rules: Codex's managed requirements refuse at any gap; Claude Code's managed settings refuse at a gap only when the
 // run has tool rules, and otherwise follow dispatch's fallback (the file is left out where the destination delivers
-// none, and the agent policy row reads why). The error names the file.
-func moveSettingsFallback(rec runSandboxSpecRecord, caps runner.Capabilities) (drop bool, withheld string, err error) {
+// none, and the agent policy row reads why). A refusal is the sentence that names the file, "" for none.
+func moveSettingsFallback(rec runSandboxSpecRecord, caps runner.Capabilities) (drop bool, withheld, refusal string) {
 	reason, deliverable := managedFilesGap(caps, moveClass(rec))
 	gap := !deliverable || reason != ""
 	for _, f := range rec.ManagedFiles {
 		switch {
 		case !gap:
 		case f.Path == agentpolicy.CodexRequirementsPath:
-			return false, "", fmt.Errorf("The destination cannot vouch for the managed file %s: %s", f.Path, reason)
+			return false, "", fmt.Sprintf("The destination cannot vouch for the managed file %s: %s", f.Path, reason)
 		case f.Path == rec.AgentPolicy.Path && rec.AgentPolicy.ToolRules > 0:
-			return false, "", fmt.Errorf("The destination cannot vouch for the managed file %s, which holds the run's tool rules: %s", f.Path, reason)
+			return false, "", fmt.Sprintf("The destination cannot vouch for the managed file %s, which holds the run's tool rules: %s", f.Path, reason)
 		case f.Path == rec.AgentPolicy.Path:
 			drop, withheld = !deliverable, reason
 		}
 	}
-	return drop, withheld, nil
+	return drop, withheld, ""
 }
 
 // moveDestinationPlan is a local destination's classification, as a local revive classifies the stored config: the

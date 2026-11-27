@@ -556,8 +556,10 @@ func (s *Server) attachFinishCtx(ctx context.Context) (context.Context, *types.D
 // holder on the run shares one writer on this replica (touchRunEvery), which stops with the run's last holder: a
 // browser holding eight relay connections writes the row once per interval, not eight times. A TouchRun error is
 // benign here — the worst case is the reaper sees the run as idle, which the never-reap policy escape hatch covers
-// for long unattended sessions.
+// for long unattended sessions. A holder whose ctx is not presence (a preview's connection, keepaliveTouches) keeps
+// the writer running but never makes it write: it writes only while some holder is presence.
 func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
+	present := keepaliveTouches(ctx)
 	k := &s.keepalives
 	k.mu.Lock()
 	r := k.runs[id]
@@ -568,21 +570,28 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 			k.runs = map[uuid.UUID]*runKeepalive{}
 		}
 		k.runs[id] = r
-		go s.touchRunEvery(wctx, id)
+		go s.touchRunEvery(wctx, id, r)
 	}
 	r.holders++
+	if present {
+		r.present++
+	}
 	k.mu.Unlock()
 	<-ctx.Done()
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if present {
+		r.present--
+	}
 	if r.holders--; r.holders == 0 {
 		r.stop()
 		delete(k.runs, id)
 	}
 }
 
-// touchRunEvery is a run's one keepalive writer: TouchRun every attachKeepaliveEvery until ctx ends.
-func (s *Server) touchRunEvery(ctx context.Context, id uuid.UUID) {
+// touchRunEvery is a run's one keepalive writer: TouchRun every attachKeepaliveEvery while r has a holder that is
+// presence, until ctx ends.
+func (s *Server) touchRunEvery(ctx context.Context, id uuid.UUID, r *runKeepalive) {
 	t := time.NewTicker(s.attachKeepaliveEvery())
 	defer t.Stop()
 	for {
@@ -590,7 +599,10 @@ func (s *Server) touchRunEvery(ctx context.Context, id uuid.UUID) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if keepaliveTouches(ctx) { // a preview's connection is not presence (uiDial)
+			s.keepalives.mu.Lock()
+			present := r.present > 0 // a preview's connection is not presence (uiDial)
+			s.keepalives.mu.Unlock()
+			if present {
 				_ = s.cfg.Store.TouchRun(ctx, id)
 			}
 		}
@@ -607,6 +619,7 @@ type runKeepaliveState struct {
 // runKeepalive is one run's writer and how many holders keep it.
 type runKeepalive struct {
 	holders int
+	present int // the holders that are presence (keepaliveTouches)
 	stop    context.CancelFunc
 }
 

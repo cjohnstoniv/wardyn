@@ -142,8 +142,10 @@ func TestDispatch_RecordsSandboxSpec(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.local {
-				if rec.MCPToken || rec.Resident || len(rec.ManagedFiles) != 1 || rec.ManagedFiles[0].Path != claudeMCPInteractivePath {
-					t.Errorf("record %+v: want the local server's MCP file recorded and no MCP token", rec)
+				// A server that starts from a command runs only in a sandbox of its own: the run's sandbox gets no MCP
+				// file and no token for it.
+				if rec.MCPToken || rec.Resident || len(rec.ManagedFiles) != 0 {
+					t.Errorf("record %+v: want no MCP file and no MCP token for a server that starts from a command", rec)
 				}
 				wantMoveRefusal(t, rec, "", "")
 				return

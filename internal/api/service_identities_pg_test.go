@@ -85,6 +85,7 @@ func newSvcEnv(t *testing.T) svcEnv {
 	e.h.srv.cfg.SessionRevocations = e.rev
 	e.ids = &recordingIdentity{Provider: e.h.srv.cfg.Identity}
 	e.h.srv.cfg.Identity = e.ids
+	e.h.srv.router = e.h.srv.routes() // POST /sessions/revoke is mounted only with a revocation store
 	for _, sub := range []string{svcSponsor, svcSponsor2} {
 		e.bind(t, sub, "https://idp.example", "", "")
 	}

@@ -85,7 +85,10 @@ func newWinvmEnv(t *testing.T, max int) (*queueEnv, types.RunnerPool, uuid.UUID,
 	}
 	body := `{"name":"Windows"}`
 	if max > 0 {
-		body = fmt.Sprintf(`{"name":"Windows","limits":{"max_concurrent_runs":%d}}`, max)
+		// A pool's limits allow at least one run type; a Windows VM run is interactive.
+		body = fmt.Sprintf(`{"name":"Windows","limits":{"interactive":{"cpu_millis":{"default":2000,"cap":8000},`+
+			`"memory_mib":{"default":8192,"cap":16384},"lifetime":{"default_sec":3600,"max_sec":28800},"idle":{"default_sec":600,"max_sec":3600}},`+
+			`"max_concurrent_runs":%d}}`, max)
 	}
 	w := e.admin(http.MethodPost, "/api/v1/runner-pools", body)
 	if w.Code != http.StatusCreated {

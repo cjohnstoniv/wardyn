@@ -61,8 +61,10 @@
       "github_capabilities",
       "harness_inner_walls",
       "desktop",
+      "outage",
       "recording",
-      "data_out"
+      "data_out",
+      "local_folders"
     ],
     "ComponentCLI": [
       "kind",
