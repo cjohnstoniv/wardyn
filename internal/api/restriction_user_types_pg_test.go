@@ -80,13 +80,13 @@ func newUTEnv(t *testing.T, mode string, withR bool, mutate ...func(*Config)) (*
 	return e, r
 }
 
-// utCtx is the person's own request: sub, email, the three groups and the stamped type.
-func utCtx() context.Context {
+// utPersonCtx is the person's own request: sub, email, the three groups and the stamped type.
+func utPersonCtx() context.Context {
 	return treeCtx(utSub, []string{"ut-contractors", "ut-engineers", "ut-interns"}, "engineer")
 }
 
-// utTruncated is utCtx with a truncated group snapshot.
-func utTruncated() context.Context { return withOIDCGroupsTruncated(utCtx(), true) }
+// utTruncated is utPersonCtx with a truncated group snapshot.
+func utTruncated() context.Context { return withOIDCGroupsTruncated(utPersonCtx(), true) }
 
 type utAlertRestriction struct {
 	ID   uuid.UUID `json:"id"`
@@ -135,7 +135,7 @@ func deniesX(c governanceCeiling) bool { return slices.Contains(c.Spec.DeniedDom
 // assertAuditOnly: the ceiling resolves without R and one alert names R against the stamped type.
 func assertAuditOnly(t *testing.T, e *utEnv, r types.Restriction) {
 	t.Helper()
-	c := treeCeiling(t, e.govEnv, utCtx())
+	c := treeCeiling(t, e.govEnv, utPersonCtx())
 	if deniesX(c) || slices.Contains(c.RestrictionIDs, r.ID) {
 		t.Errorf("audit: denied %v ids %v, want R not applied", c.Spec.DeniedDomains, c.RestrictionIDs)
 	}
@@ -161,7 +161,7 @@ func TestUserTypeRestrictions_DefaultModeAudits(t *testing.T) {
 
 func TestUserTypeRestrictions_LowerTypeEnforced(t *testing.T) {
 	e, r := newUTEnv(t, identityNarrowingEnforce, true)
-	c := treeCeiling(t, e.govEnv, utCtx())
+	c := treeCeiling(t, e.govEnv, utPersonCtx())
 	if !deniesX(c) {
 		t.Errorf("enforce: denied %v, want x.example", c.Spec.DeniedDomains)
 	}
@@ -183,7 +183,7 @@ func TestUserTypeRestrictions_LowerTypeEnforced(t *testing.T) {
 
 func TestUserTypeRestrictions_DisplayReadWritesNoAlert(t *testing.T) {
 	e, _ := newUTEnv(t, identityNarrowingAudit, true)
-	if c := treeCeiling(t, e.govEnv, withDisplayRead(utCtx())); deniesX(c) {
+	if c := treeCeiling(t, e.govEnv, withDisplayRead(utPersonCtx())); deniesX(c) {
 		t.Errorf("display read: denied %v, want R not applied", c.Spec.DeniedDomains)
 	}
 	if a := e.alerts(t); len(a) != 0 {
@@ -205,7 +205,7 @@ func TestUserTypeRestrictions_NoOtherTypeRestrictionSkipsDerivation(t *testing.T
 	e, _ := newUTEnv(t, identityNarrowingEnforce, false)
 	seedRestriction(t, e.govEnv, "ut-engineer-floor", types.RestrictionSpec{DeniedDomains: strs("y.example")}, types.RestrictionLimits{},
 		types.RestrictionMember{SubjectType: types.CapabilitySubjectUserType, Subject: "engineer"})
-	c := treeCeiling(t, e.govEnv, utCtx())
+	c := treeCeiling(t, e.govEnv, utPersonCtx())
 	if !slices.Contains(c.Spec.DeniedDomains, "y.example") {
 		t.Errorf("the stamped type's restriction: denied %v, want y.example", c.Spec.DeniedDomains)
 	}
@@ -214,7 +214,7 @@ func TestUserTypeRestrictions_NoOtherTypeRestrictionSkipsDerivation(t *testing.T
 	}
 	seedRestriction(t, e.govEnv, "ut-contractor-floor", types.RestrictionSpec{DeniedDomains: strs("x.example")}, types.RestrictionLimits{},
 		types.RestrictionMember{SubjectType: types.CapabilitySubjectUserType, Subject: "contractor"})
-	if c := treeCeiling(t, e.govEnv, utCtx()); !deniesX(c) || e.reads.Load() == 0 {
+	if c := treeCeiling(t, e.govEnv, utPersonCtx()); !deniesX(c) || e.reads.Load() == 0 {
 		t.Errorf("another type restricted: denied %v after %d reads, want x.example from a derivation", c.Spec.DeniedDomains, e.reads.Load())
 	}
 }
@@ -247,7 +247,7 @@ func TestUserTypeRestrictions_StaleGroupsAuditAlerts(t *testing.T) {
 func TestUserTypeRestrictions_OwnerReviveEnforced(t *testing.T) {
 	e, r := newUTEnv(t, identityNarrowingEnforce, true)
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: utSub, UserType: "engineer"}
-	c, rerr := e.srv.reviveCeiling(utCtx(), run, types.ActorHuman, utSub)
+	c, rerr := e.srv.reviveCeiling(utPersonCtx(), run, types.ActorHuman, utSub)
 	if rerr != nil {
 		t.Fatalf("owner revive: %+v", rerr)
 	}
@@ -260,12 +260,12 @@ func TestUserTypeRestrictions_NilOIDCChangesNothing(t *testing.T) {
 	for _, mode := range []string{identityNarrowingAudit, identityNarrowingEnforce} {
 		t.Run(mode, func(t *testing.T) {
 			e, r := newUTEnv(t, mode, true, func(c *Config) { c.OIDC = nil })
-			if c, err := e.srv.effectiveCeiling(utCtx()); err == nil && (deniesX(c) || slices.Contains(c.RestrictionIDs, r.ID)) {
+			if c, err := e.srv.effectiveCeiling(utPersonCtx()); err == nil && (deniesX(c) || slices.Contains(c.RestrictionIDs, r.ID)) {
 				t.Errorf("no sign-in: denied %v ids %v, want R not applied", c.Spec.DeniedDomains, c.RestrictionIDs)
 			}
 			q := contextQuery{users: []string{types.CanonicalUserSubject(utSub)}, groups: []string{"ut-contractors"}, userType: "engineer",
 				email: utSub + "@corp.example"}
-			if got, err := e.srv.userTypeRestrictions(utCtx(), q, nil); err != nil || len(got) != 0 {
+			if got, err := e.srv.userTypeRestrictions(utPersonCtx(), q, nil); err != nil || len(got) != 0 {
 				t.Errorf("no sign-in: userTypeRestrictions = %v %v, want nothing added", got, err)
 			}
 			if a := e.alerts(t); len(a) != 0 {
@@ -280,15 +280,15 @@ func TestUserTypeRestrictions_NilOIDCChangesNothing(t *testing.T) {
 
 func TestUserTypeRestrictions_AlertOncePerPersonSetAndDay(t *testing.T) {
 	e, _ := newUTEnv(t, identityNarrowingAudit, true)
-	treeCeiling(t, e.govEnv, utCtx())
-	treeCeiling(t, e.govEnv, utCtx())
+	treeCeiling(t, e.govEnv, utPersonCtx())
+	treeCeiling(t, e.govEnv, utPersonCtx())
 	if n := len(e.alerts(t)); n != 1 {
 		t.Fatalf("two requests on one day: %d alert rows, want 1", n)
 	}
 	r2 := seedRestriction(t, e.govEnv, "ut-intern-floor", types.RestrictionSpec{DeniedDomains: strs("z.example")}, types.RestrictionLimits{},
 		types.RestrictionMember{SubjectType: types.CapabilitySubjectUserType, Subject: "intern"})
-	treeCeiling(t, e.govEnv, utCtx())
-	treeCeiling(t, e.govEnv, utCtx())
+	treeCeiling(t, e.govEnv, utPersonCtx())
+	treeCeiling(t, e.govEnv, utPersonCtx())
 	a := e.alerts(t)
 	if len(a) != 2 {
 		t.Fatalf("a second restriction on another matched type: %d alert rows, want 2", len(a))
@@ -298,7 +298,7 @@ func TestUserTypeRestrictions_AlertOncePerPersonSetAndDay(t *testing.T) {
 		t.Errorf("the second alert %+v, want both restrictions on contractor and intern", a[1])
 	}
 	*e.now = e.now.Add(24 * time.Hour)
-	treeCeiling(t, e.govEnv, utCtx())
+	treeCeiling(t, e.govEnv, utPersonCtx())
 	if n := len(e.alerts(t)); n != 3 {
 		t.Errorf("the next UTC day: %d alert rows, want 3", n)
 	}
