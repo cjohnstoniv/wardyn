@@ -507,7 +507,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	}
 	// The unit deciders rule that governs this request, how this caller decides under it, and its max_scope
 	// over the scope (deciders_resolve.go), then a unit or group decider's own egress_host grant (approval_authority.go).
-	dv, scope, authorityAlert, ok := s.deciderForDecideWithAuthority(w, r, id, ap, &run, &haveRun, scope, approve)
+	dv, scope, authorityHost, authorityAlert, ok := s.deciderForDecideWithAuthority(w, r, id, ap, &run, &haveRun, scope, approve)
 	if !ok {
 		return
 	}
@@ -616,7 +616,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 				"reason": "admin_token_break_glass", "switch": bypassSwitch,
 			})))
 	}
-	s.recordDeciderAuthorityAlert(r, result.RunID, id, dv, authorityAlert) // nothing when the decider's own grant held
+	s.recordDeciderAuthorityAlert(r, result.RunID, id, dv, authorityHost, authorityAlert) // nothing unless an audit gap is owed one
 	// The decision is already committed. Everything below is its DURABLE ECHO —
 	// the permanent `always` grant on the workspace, the verify loop's
 	// requirement row, and the fail-silent-BUT-AUDITED rows both of them write

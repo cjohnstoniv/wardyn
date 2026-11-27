@@ -113,6 +113,86 @@ func TestApprovalAuthority_GroupDeciderWithoutHostRefusedUnderEnforce(t *testing
 	f.wantAuthorityRefusal(ap, basis)
 }
 
+func TestApprovalAuthority_GroupDeciderWithoutHostAudits(t *testing.T) {
+	t.Setenv(envIdentityNarrowing, "audit")
+	basis := types.DeciderGroupPrefix + dcGroup
+	f := authorityFix(t, basis)
+	ap := f.hold(types.DeciderKindEgressDomain)
+	f.wantStatus("group decider approve", f.decide(dcMember(t, dcLead, dcGroup), ap, "approve", ""), http.StatusOK, "", ap)
+	f.wantAuthorityAlert(ap, dcLead, basis)
+}
+
+// TestApprovalAuthority_OnlyUnitAndGroupBasesCapped: the cap reads unit_admin:<unit> and group:<name> only. The
+// owner meets the grant in resolveDecider already, and an approval rule, the security tier and the admin token
+// are not capped.
+func TestApprovalAuthority_OnlyUnitAndGroupBasesCapped(t *testing.T) {
+	for basis, want := range map[string]bool{
+		"":                                 false,
+		types.DeciderOwner:                 false,
+		deciderBasisPolicy:                 false,
+		deciderBasisSecurity:               false,
+		deciderBasisAdminToken:             false,
+		types.DeciderGroupPrefix:           false,
+		deciderBasisUnitAdminOf + "u-1":    true,
+		types.DeciderGroupPrefix + dcGroup: true,
+	} {
+		if got := deciderAuthorityCapped(basis); got != want {
+			t.Errorf("deciderAuthorityCapped(%q) = %v, want %v", basis, got, want)
+		}
+	}
+}
+
+// TestApprovalAuthority_OwnerNotCappedTwice: under a rule naming owner, the owner's grant is checked once, in
+// resolveDecider. With the grant the approve goes ahead with no alert; without it the member path refuses with
+// one authz.denied that names no decider basis.
+func TestApprovalAuthority_OwnerNotCappedTwice(t *testing.T) {
+	t.Setenv(envIdentityNarrowing, "enforce")
+	f := authorityFix(t, types.DeciderOwner)
+	ap := f.hold(types.DeciderKindEgressDomain)
+	f.wantStatus("granted owner approve", f.decide(dcMember(t, dcOwner), ap, "approve", ""), http.StatusOK, "", ap)
+	f.wantNoRows("approval.authority.alert", ap)
+	f.wantNoRows("authz.denied", ap)
+
+	f.st.grants = nil
+	ap = f.hold(types.DeciderKindEgressDomain)
+	f.wantStatus("ungranted owner approve", f.decide(dcMember(t, dcOwner), ap, "approve", ""), http.StatusForbidden, "capability_egress_host", ap)
+	if _, data := f.authorityData("authz.denied", ap); data["basis"] != nil {
+		t.Errorf("the owner's refusal names basis %v, want none", data["basis"])
+	}
+	f.wantNoRows("approval.authority.alert", ap)
+}
+
+// TestApprovalAuthority_EmptyHost: an egress approval whose RequestedScope names no host is a gap for a decider
+// with no `*` grant: audit approves it and alerts with an empty host, enforce refuses it.
+func TestApprovalAuthority_EmptyHost(t *testing.T) {
+	for _, mode := range []string{"audit", "enforce"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv(envIdentityNarrowing, mode)
+			f := authorityFix(t, types.DeciderUnitAdmins)
+			ap := f.hold(types.DeciderKindEgressDomain)
+			ap.RequestedScope = json.RawMessage(`{}`)
+			f.aps.mu.Lock()
+			f.aps.byID[ap.ID] = ap
+			f.aps.mu.Unlock()
+			w := f.decide(dcMember(t, dcAdmin), ap, "approve", "")
+			basis := deciderBasisUnitAdminOf + f.team.ID.String()
+			if mode == "enforce" {
+				f.wantStatus("enforce empty host", w, http.StatusForbidden, "capability_egress_host", ap)
+				if _, data := f.authorityData("authz.denied", ap); data["basis"] != basis || data["host"] != "" {
+					t.Errorf("authz.denied data = %v, want basis %s and an empty host", data, basis)
+				}
+				f.wantNoRows("approval.authority.alert", ap)
+				return
+			}
+			f.wantStatus("audit empty host", w, http.StatusOK, "", ap)
+			if _, data := f.authorityData("approval.authority.alert", ap); data["basis"] != basis || data["host"] != "" || data["mode"] != "audit" {
+				t.Errorf("alert data = %v, want basis %s, an empty host and mode audit", data, basis)
+			}
+			f.wantNoRows("authz.denied", ap)
+		})
+	}
+}
+
 func TestApprovalAuthority_DeciderWithHostGrantDecides(t *testing.T) {
 	t.Setenv(envIdentityNarrowing, "enforce")
 	f := authorityFix(t, types.DeciderUnitAdmins)

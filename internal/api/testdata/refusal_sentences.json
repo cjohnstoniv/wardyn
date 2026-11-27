@@ -255,6 +255,11 @@
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
   },
   {
+    "reason": "capability_egress_host",
+    "target": "id.String()",
+    "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
+  },
+  {
     "reason": "capability_feature",
     "target": "run.ID.String()",
     "sentence": "\"run not found\""

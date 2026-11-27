@@ -70,6 +70,8 @@ var kernelDoors = map[string][]string{
 	"decidableKindAndOwner": {"capEgressHost"},
 	// A unit's decider rule matching the run's owner on an egress approval: the same egress_host grant.
 	"resolveDecider": {"capEgressHost"},
+	// A unit or group decider's approve of an egress approval: their own egress_host grant on the host (#4073).
+	"admitDeciderAuthority": {"capEgressHost"},
 	// Attaching a component: an org row by id, a person-defined one by feature.
 	"componentAttachRefusal": {"capComponent", "capFeature"},
 	// The hosts a component reaches: the same egress_host rows that bound an
