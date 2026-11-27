@@ -46,7 +46,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[dispatchCeiling]():    strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound modelLimit"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode " +
 		"InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives PortalDrives MainDrive Components " +
-		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart Machine modelLimit"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
+		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart Machine modelLimit LocalFolderLayers"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; LocalFolderLayers: which policy layer set each folder wall; no credential
 	// keptMachinePlan: which kept machine dispatch inserts or claims, on which Mac, from which base; names and ids, no credential.
 	reflect.TypeFor[keptMachinePlan]():            strings.Fields("mode id name owner runner mac base prepared limit idleDays"),
 	reflect.TypeFor[allowedModelsLimit]():         strings.Fields("models profileID profile"), // the run's model list and the profile that set it; no credential
@@ -71,6 +71,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.Integration]():          strings.Fields("ID Name Kind Disabled Secrets Egress Config Docs DisabledCapabilities CreatedAt UpdatedAt legacyTopology"),
 	reflect.TypeFor[types.IntegrationDelivery]():  strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():    strings.Fields("Role SecretName Delivery"),
+	reflect.TypeFor[types.LocalFolderWallLayer](): strings.Fields("Layer Name Locked"),
 	reflect.TypeFor[types.MemberDrivePolicy]():    strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
 	reflect.TypeFor[types.ModelProvider]():        strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC ExtraHeaders"),
 	reflect.TypeFor[types.ProviderOIDC]():         strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding RequireIDToken ServiceGrant"), // ClientSecretRef names an operator secret, never its value
