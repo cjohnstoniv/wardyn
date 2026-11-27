@@ -25,14 +25,14 @@ import (
 )
 
 const governanceChangeCols = `id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-	proposed_by, proposed_by_email, proposed_at, expires_at, state, decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket, required_approvals, require_security`
+	proposed_by, proposed_by_email, proposed_at, expires_at, state, decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket, required_approvals, require_security, drafted_with_session`
 
 // governanceChangeColsRead is governanceChangeCols with an expired-but-unswept pending row reported as
 // expired: a read computes expiry from expires_at, so no sweeper is needed for correctness.
 const governanceChangeColsRead = `id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
 	proposed_by, proposed_by_email, proposed_at, expires_at,
 	CASE WHEN state = 'pending' AND expires_at <= now() THEN 'expired' ELSE state END,
-	decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket, required_approvals, require_security`
+	decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket, required_approvals, require_security, drafted_with_session`
 
 // MaxGovernanceChangeList bounds one list read; the newest changes come first. The store reads one
 // row past it, so a caller can tell a list that was cut from one that ends exactly at the bound. The
@@ -128,11 +128,11 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	}
 	out, err := scanGovernanceChange(tx.QueryRow(ctx, `
 		INSERT INTO governance_changes (id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-			proposed_by, proposed_by_email, expires_at, note_reason, note_ticket, required_approvals, require_security)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond', $12, $13, $14, $15)
+			proposed_by, proposed_by_email, expires_at, note_reason, note_ticket, required_approvals, require_security, drafted_with_session)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond', $12, $13, $14, $15, $16)
 		RETURNING `+governanceChangeCols,
 		ch.ID, ch.TargetKind, ch.Op, ch.TargetKey, ch.Payload, ch.Diff, ch.BaseHash, ch.DeploymentHash,
-		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds(), note.Reason, note.Ticket, max(ch.RequiredApprovals, 1), ch.RequireSecurity))
+		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds(), note.Reason, note.Ticket, max(ch.RequiredApprovals, 1), ch.RequireSecurity, ch.DraftedWithSession))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -426,7 +426,7 @@ func scanGovernanceChangeInto(row pgx.Row, extra *bool) (types.GovernanceChange,
 	dest := []any{&c.ID, &c.TargetKind, &c.Op, &c.TargetKey, &c.Payload, &c.Diff, &c.BaseHash, &c.DeploymentHash,
 		&c.ProposedBy, &c.ProposedByEmail, &c.ProposedAt, &c.ExpiresAt, &c.State,
 		&c.DecidedBy, &c.DecidedByEmail, &c.DecidedAt, &c.Reason, &noteReason, &noteTicket,
-		&c.RequiredApprovals, &c.RequireSecurity}
+		&c.RequiredApprovals, &c.RequireSecurity, &c.DraftedWithSession}
 	if extra != nil {
 		dest = append(dest, extra)
 	}
@@ -441,4 +441,31 @@ func scanGovernanceChangeInto(row pgx.Row, extra *bool) (types.GovernanceChange,
 		c.Note = &types.ChangeNote{Reason: noteReason, Ticket: noteTicket}
 	}
 	return c, nil
+}
+
+// DraftingAssistantSession is the id of principal's newest compose session on target kind and key that the person
+// may have saved from: live, or ended after endedAfter, and holding a proposal followed by a person edit that
+// changed at least one field (an accepted part posts one). A session whose events the retention sweep deleted
+// holds neither, so it never matches. ErrNotFound when there is none, and for an empty principal.
+func (s PG) DraftingAssistantSession(ctx context.Context, principal, kind, key string, endedAfter time.Time) (uuid.UUID, error) {
+	if principal == "" {
+		return uuid.Nil, ErrNotFound
+	}
+	id, err := scanUUID(s.Pool.QueryRow(ctx, `
+		SELECT s.id FROM assistant_sessions s
+		WHERE s.principal = $1 AND s.purpose = 'compose' AND s.target_kind = $2 AND s.target_key = $3
+		  AND (s.state <> 'ended' OR s.ended_at > $4)
+		  AND EXISTS (
+			SELECT 1 FROM assistant_session_events e
+			WHERE e.session_id = s.id AND e.kind = 'person_edit'
+			  AND jsonb_typeof(e.payload->'changed') = 'array' AND e.payload->'changed' <> '[]'::jsonb
+			  AND e.seq > (SELECT min(p.seq) FROM assistant_session_events p WHERE p.session_id = s.id AND p.kind = 'proposal'))
+		ORDER BY s.created_at DESC, s.id LIMIT 1`, principal, kind, key, endedAfter))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("store: read the drafting assistant session: %w", err)
+	}
+	return id, nil
 }

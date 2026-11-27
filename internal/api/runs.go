@@ -362,7 +362,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
-	createData := s.runCreateAuditData(ctx, runCreateAudit{req: req, f: f, created: created, enforced: enforced, reqCC: reqCC,
+	draftedID, draftedBy, _ := s.assistantProvenance(r, types.AssistantTargetRun, "create", provenanceNewKey)
+	createData := s.runCreateAuditData(ctx, runCreateAudit{drafted: draftedID, draftedBy: draftedBy, req: req, f: f, created: created, enforced: enforced, reqCC: reqCC,
 		jti: id.JTI, policyWarns: policyWarns, autonomy: autonomy, belowFloor: belowFloor, mpChoice: mpChoice, gw: gw, comps: comps,
 		intent: intent, runID: runID, createdByType: createdByType, createdBy: createdBy})
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
@@ -607,6 +608,10 @@ type runCreateAudit struct {
 	runID         uuid.UUID
 	createdByType types.ActorType
 	createdBy     string
+	// drafted is the assistant session the run was drafted in, when the server verified one: its id, empty for
+	// none, and how it was found.
+	drafted   uuid.UUID
+	draftedBy string
 }
 
 // runCreateAuditData is handleCreateRun's run.create row data: createRunAuditData, then each stamp in turn.
@@ -630,6 +635,9 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	stampWindowsLicence(createData, f.windowsLaunch)
 	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
 	stampIdempotencyKey(ctx, createData)
+	if a.drafted != uuid.Nil {
+		stampDrafted(createData, a.drafted, a.draftedBy)
+	}
 	return createData
 }
 

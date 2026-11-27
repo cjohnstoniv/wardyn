@@ -431,6 +431,8 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	data := s.unitWriteSuccessData(r, id, saved, effective, unitAdmin, putCreates)
+	// A save applied here makes no change record, so the mark rides this row alone.
+	s.stampAssistantProvenance(r, data, govKindUnit, "update", saved.ID.String())
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
 	if mode == govBypass {

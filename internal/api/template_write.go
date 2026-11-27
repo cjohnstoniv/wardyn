@@ -150,6 +150,15 @@ func (s *Server) auditTemplate(r *http.Request, action string, t types.RunTempla
 	if t.Owner.Group != "" {
 		data["group_id"] = t.Owner.Group
 	}
+	_, isCopy := data["from_id"] // a copy of a saved template is not a draft
+	switch action {
+	case "template.create":
+		if !isCopy {
+			s.stampAssistantProvenance(r, data, types.AssistantTargetTemplate, "create", provenanceNewKey)
+		}
+	case "template.update":
+		s.stampAssistantProvenance(r, data, types.AssistantTargetTemplate, "update", t.ID.String())
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, t.ID.String(), "success", mustJSON(data)))
 }

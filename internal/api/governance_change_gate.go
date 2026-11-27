@@ -344,6 +344,12 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		ProposedByEmail: oidcEmailFromContext(r.Context()),
 		Note:            p.note,
 	}
+	// A unit save drafted in an assistant session carries the session's id. The mark is informational: nothing
+	// below reads it.
+	draftedID, draftedBy, drafted := s.assistantProvenance(r, p.kind, p.op, p.key)
+	if drafted {
+		ch.DraftedWithSession = &draftedID
+	}
 	if ch.RequiredApprovals, ch.RequireSecurity, err = s.requiredApprovals(r.Context(), p.kind, p.key); err != nil {
 		writeServerError(w, r, "read governance approval counts", err)
 		return
@@ -383,6 +389,9 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	}
 	if s.GovernanceMinApprovals() > 0 && !singleDecider(p.kind) {
 		proposed["required"], proposed["require_security"] = saved.RequiredApprovals, saved.RequireSecurity
+	}
+	if drafted {
+		stampDrafted(proposed, draftedID, draftedBy)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success", mustJSON(proposed)))
 	if p.answer != nil {

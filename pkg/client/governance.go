@@ -138,6 +138,9 @@ type GovernanceChange struct {
 	Diff       GovernanceChangeDiff `json:"diff"`
 	DecidedBy  string               `json:"decided_by,omitempty"`
 	DecidedAt  *time.Time           `json:"decided_at,omitempty"`
+	// DraftedWithSession is the assistant session the change was drafted in, set only when the server verified
+	// it. It is informational: it changes no verdict, risk or approval count.
+	DraftedWithSession *uuid.UUID `json:"drafted_with_session,omitempty"`
 	// Reason is a rejection's optional explanation.
 	Reason string `json:"reason,omitempty"`
 	// Note is the proposer's reason and ticket for the change; absent when none was written.

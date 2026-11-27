@@ -31,6 +31,8 @@ export interface GovernanceChange {
   diff: GovernanceChangeDiff;
   decided_by?: string;
   decided_at?: string;
+  // The assistant session the change was drafted in, set only when the server verified it. Informational.
+  drafted_with_session?: string | null;
   reason?: string;
   // The proposer's reason and ticket (PUT /governance/changes/{id}/note); absent when none was written.
   // Free text: render it as text, never a link.
