@@ -69,6 +69,7 @@ const keepAssistant = "two purpose switches, the run-history switch, record kind
 var auditHostReviewed = map[string]auditHostKeep{
 	"agent_rules.delete":                         {[]string{"spec"}, keepAgentRules},
 	"agent_rules.write":                          {[]string{"after", "before"}, keepAgentRules},
+	"approval.authority.alert":                   {[]string{"host"}, keepEgress},
 	"approval.decide":                            {[]string{"host"}, keepEgress},
 	"assistant.settings.write":                   {[]string{"after", "before"}, keepAssistant},
 	"authz.denied":                               {[]string{"host"}, keepEgress},

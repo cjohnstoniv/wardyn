@@ -25,7 +25,7 @@ The security tier is a security admin or a super admin ([what admin-only still m
 
 | What is decided | Who may consent | When a second person is needed |
 |---|---|---|
-| An `egress_domain` approval at `once`, `run` or `until` | The run's owner, who also needs an `egress_host` grant on the host once that kind is enforced; the security tier; a person a unit's deciders rule names | `WARDYN_EGRESS_SECOND_HUMAN`: never the run's creator. A deciders rule's `second_human`: none of the run's own people |
+| An `egress_domain` approval at `once`, `run` or `until` | The run's owner, who also needs an `egress_host` grant on the host once that kind is enforced; the security tier; a person a unit's deciders rule names, who needs the same grant to approve under `WARDYN_IDENTITY_NARROWING=enforce` | `WARDYN_EGRESS_SECOND_HUMAN`: never the run's creator. A deciders rule's `second_human`: none of the run's own people |
 | An `egress_domain` approval at `always` | The security tier only, whoever owns the run. No deciders rule allows `always` | As for the other scopes |
 | An Azure DevOps escalation, one MCP call under `approve_each`, one held Kubernetes call | The run's owner; the security tier; a person a unit's deciders rule names | `WARDYN_CAPABILITY_SECOND_HUMAN`, for an Azure DevOps escalation and an MCP call. A deciders rule's `second_human` |
 | A host rule `hold` | The run's owner or the security tier. A unit's `egress_domain` deciders rule governs it | Either second-human switch, `WARDYN_EGRESS_SECOND_HUMAN` or `WARDYN_CAPABILITY_SECOND_HUMAN` |

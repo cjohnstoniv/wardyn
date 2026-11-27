@@ -72,8 +72,8 @@
 | Entry | Matches |
 |---|---|
 | `owner` | the person who created the run. For `egress_domain` they still need the `egress_host` grant on the host |
-| `unit_admins` | a person with a unit-admin grant on the run's unit or one above it |
-| `group:<name>` | a person whose session holds the group or App Role, from a complete snapshot |
+| `unit_admins` | a person with a unit-admin grant on the run's unit or one above it. For `egress_domain`, with `WARDYN_IDENTITY_NARROWING=enforce`, they also need the `egress_host` grant on the host to approve; under `audit` an approve without it writes `approval.authority.alert` |
+| `group:<name>` | a person whose session holds the group or App Role, from a complete snapshot. For `egress_domain`, with `WARDYN_IDENTITY_NARROWING=enforce`, they also need the `egress_host` grant on the host to approve; under `audit` an approve without it writes `approval.authority.alert` |
 
 - A device, a service identity and a delegated portal token match none of these. The admin token, local mode and a stale or truncated group snapshot match neither `unit_admins` nor a group.
 - `unit_admins` and `group:<name>` never match the run's own people: its creator, the sponsor of a service identity that created it, or its recorded author. The creator decides only through `owner`, so the `egress_host` grant still stands between them and a host. The sponsor of a service identity and the recorded author decide none of the run's holds.

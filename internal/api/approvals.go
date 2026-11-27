@@ -511,6 +511,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if !ok {
 		return
 	}
+	authorityAlert, ok := s.admitDeciderAuthority(w, r, id, ap, dv, approve) // a unit or group decider's own egress_host grant
+	if !ok {
+		return
+	}
 	if scope == "" && isHostCallRow(ap) { // a bodyless host rule hold no cap made once is decided for the run (hostCallDecisionRule)
 		scope = types.ScopeRun
 	}
@@ -615,6 +619,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 			"approval.second_human.bypass", id.String(), "success", mustJSON(map[string]any{
 				"reason": "admin_token_break_glass", "switch": bypassSwitch,
 			})))
+	}
+	if authorityAlert != "" {
+		s.recordDeciderAuthorityAlert(r, result.RunID, id, dv, authorityAlert)
 	}
 	// The decision is already committed. Everything below is its DURABLE ECHO —
 	// the permanent `always` grant on the workspace, the verify loop's

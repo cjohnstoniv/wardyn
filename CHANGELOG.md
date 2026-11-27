@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - An optional mutual TLS check on the proxy-to-control-plane hop (`WARDYN_INTERNAL_MTLS`, off by default; needs the SPIRE identity provider and the Kubernetes runner); the run token is still checked on every request (#4074).
+- A unit or group decider approving an egress host request needs the same `egress_host` grant on that host as the run's owner. By default this is recorded only (`approval.authority.alert`); `WARDYN_IDENTITY_NARROWING=enforce` refuses the approve. Other approval kinds are unchanged (#4073).
 
 ### Changed
 
