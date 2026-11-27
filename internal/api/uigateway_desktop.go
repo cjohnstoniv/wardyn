@@ -92,8 +92,9 @@ const (
 	desktopCloseWindowOpen websocket.StatusCode = 4006
 )
 
-// desktopWindowOpenMsg is desktopCloseWindowOpen's reason.
-const desktopWindowOpenMsg = "A window is open on the Mac, so this desktop only watches. Open the desktop again from the run page to watch it."
+// desktopWindowOpenMsg is desktopCloseWindowOpen's reason, for a window on the Mac or on the person's own
+// computer. A close reason holds at most 123 bytes; a longer one drops the connection with no close frame.
+const desktopWindowOpenMsg = "A window is open on the person's computer, so this desktop only watches. Open it again from the run page to watch it."
 
 // uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: a cache
 // of those known closed (until the cookie would have expired anyway) and the streams still open.
@@ -243,7 +244,7 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	// A background run reaches here only through the watch door; interactive sessions stay unpinned.
 	sess.ViewOnly = run.BackgroundOnly() && ticketOpensBackgroundWatch(ta, uiDesktopAppName)
 	data := withBackgroundWatch(sess.backgroundWatch(), map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)})
-	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.macOSDesktopViewOnly(run), data), "/", redirectStatus)
+	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.desktopViewOnly(run), data), "/", redirectStatus)
 }
 
 // handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
@@ -293,7 +294,7 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil {
 			if run.MachineKind != "" {
 				boot["machine_kind"] = string(run.MachineKind)
-				if s.macOSDesktopViewOnly(run) {
+				if s.desktopViewOnly(run) {
 					boot["view_only"] = true
 				}
 			}
@@ -493,15 +494,16 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		go s.attachKeepalive(ctx, sess.Run)
 	}
 	opened := s.cfg.Now()
-	viewOnly := sess.ViewOnly || s.macOSDesktopViewOnly(run)
+	// One keyboard at a time: while a window is open on the Mac or on the person's own computer, this stream only watches.
+	viewOnly := sess.ViewOnly || s.desktopViewOnly(run)
 	yielded := func() {} // forgets this stream's control; a window waits for it, never for the close frame
-	if !viewOnly && run.MachineKind.IsMacOSVM() {
-		// A stream with control is known to a window that opens (macWindowYieldControl). Registered before the
-		// window is looked for once more, so a window that opened since viewOnly was read ends this stream
-		// instead of running beside it.
+	if !viewOnly && run.MachineKind.IsVM() {
+		// A stream with control is known to a window that opens (macWindowYieldControl), a Mac's or a local one.
+		// Registered before the windows are looked for once more, so a window that opened since viewOnly was read
+		// ends this stream instead of running beside it.
 		yielded = s.desktopControl.track(sess.Run, func() { yield(errMacWindowTookControl) })
 		defer yielded()
-		if s.macWindows.open(sess.Run) != nil {
+		if s.macWindows.open(sess.Run) != nil || s.localWindows.open(sess.Run) != nil {
 			yielded()
 			_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 			return

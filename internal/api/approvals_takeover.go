@@ -145,7 +145,8 @@ type takeoverResponse struct {
 
 // takeoverSurface is where a takeover of run puts the person: its declared desktop, or a desktop VM
 // run's built-in desktop (the gateway's __desktop app) while the browser can drive it, else its terminal.
-// A macOS VM run whose desktop is view only in the browser keeps the terminal, as does one whose agent
+// A run whose desktop is view only in the browser (desktopViewOnly: a macOS VM the Mac keeps view only, or a run
+// while a window onto it is open on the person's own computer) keeps the terminal, as does one whose agent
 // allows no desktop sign-ins (the door the desktop would open is refused), as does a run whose governance
 // profile denies UI apps.
 func (s *Server) takeoverSurface(ctx context.Context, run types.AgentRun) string {
@@ -163,7 +164,7 @@ func (s *Server) takeoverSurface(ctx context.Context, run types.AgentRun) string
 			}
 		}
 	}
-	if run.MachineKind.IsVM() && !run.BackgroundOnly() && !s.macOSDesktopViewOnly(run) && !s.macOSDesktopSignInsOff(ctx, run) {
+	if run.MachineKind.IsVM() && !run.BackgroundOnly() && !s.desktopViewOnly(run) && !s.macOSDesktopSignInsOff(ctx, run) {
 		return "desktop"
 	}
 	return "terminal"

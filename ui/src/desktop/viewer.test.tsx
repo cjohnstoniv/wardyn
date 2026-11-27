@@ -319,6 +319,35 @@ describe("DesktopViewer", () => {
     expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
   });
 
+  it("names the kind when a window is open", () => {
+    for (const [kind, title, other] of [
+      ["macos_vm", DESKTOP.windowOpenTitle, DESKTOP.windowOpenTitleLinuxVM],
+      ["linux_vm", DESKTOP.windowOpenTitleLinuxVM, DESKTOP.windowOpenTitle],
+    ] as const) {
+      const sockets: FakeSocket[] = [];
+      render(<DesktopViewer boot={{ ...OPEN, machine_kind: kind }} connect={() => { const s = new FakeSocket(); sockets.push(s); return s; }} small={false} />);
+      sockets[0].end(WINDOW_OPEN);
+      expect(screen.getByText(title)).toBeInTheDocument();
+      expect(screen.queryByText(other)).toBeNull();
+      expect(screen.getByText(DESKTOP.windowOpenBody)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("a Linux VM desktop watched while a window is open says why in its view-only strip, on any screen", () => {
+    for (const small of [false, true]) {
+      const sockets: FakeSocket[] = [];
+      render(<DesktopViewer boot={{ ...OPEN, machine_kind: "linux_vm", view_only: true }} connect={() => { const s = new FakeSocket(); sockets.push(s); return s; }} small={small} />);
+      sockets[0].serve(HANDSHAKE);
+      expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
+      expect(screen.getByText(DESKTOP.viewOnlyBodyWindow)).toBeInTheDocument();
+      expect(screen.queryByText(DESKTOP.viewOnlyBody)).toBeNull();
+      expect(screen.queryByText(DESKTOP.phoneBody)).toBeNull();
+      expect(screen.getByTestId("desktop-canvas")).toHaveAttribute("tabindex", "-1");
+      cleanup();
+    }
+  });
+
   it("stops on what the desktop sent, says the viewer's reason, and dials again only on Try again", () => {
     vi.useFakeTimers();
     const { sockets, connect } = open();

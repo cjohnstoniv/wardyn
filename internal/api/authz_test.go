@@ -1326,9 +1326,7 @@ func authzMatrixFeatureHooks(t *testing.T) {
 	for k, h := range siteFeatureHooks {
 		hooks[k] = h
 	}
-	for _, k := range []siteFeatureKey{
-		featureLocalWindow,
-	} {
+	for _, k := range []siteFeatureKey{} {
 		h := hooks[k]
 		h.available = func() bool { return true }
 		hooks[k] = h
