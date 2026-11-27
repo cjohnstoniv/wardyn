@@ -26,6 +26,17 @@ func deciderAuthorityCapped(basis string) bool {
 	return ok
 }
 
+// deciderForDecideWithAuthority is deciderForDecide followed by admitDeciderAuthority, so decide takes both
+// with one refusal branch. It answers the verdict, the scope and the host an audit alert names ("" for none).
+func (s *Server) deciderForDecideWithAuthority(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run *types.AgentRun, haveRun *bool, scope types.ApprovalScope, approve bool) (deciderVerdict, types.ApprovalScope, string, bool) {
+	dv, scope, ok := s.deciderForDecide(w, r, id, ap, run, haveRun, scope)
+	if !ok {
+		return dv, scope, "", false
+	}
+	alertHost, ok := s.admitDeciderAuthority(w, r, id, ap, dv, approve)
+	return dv, scope, alertHost, ok
+}
+
 // admitDeciderAuthority caps a unit or group decider's approve of an egress_domain hold by their own egress_host
 // grant on the approval's host, the check the run's owner meets in resolveDecider and a member meets with no
 // rule in authorizeUserDecision. The host is the approval's own RequestedScope, never the body. A deny narrows
@@ -66,7 +77,11 @@ func (s *Server) admitDeciderAuthority(w http.ResponseWriter, r *http.Request, i
 
 // recordDeciderAuthorityAlert writes approval.authority.alert for a decision admitDeciderAuthority let through
 // under audit: the decider approved a host their own egress_host grants do not cover, and the approval stands.
+// An empty host is no alert: the cap did not apply or held.
 func (s *Server) recordDeciderAuthorityAlert(r *http.Request, runID uuid.UUID, id uuid.UUID, dv deciderVerdict, host string) {
+	if host == "" {
+		return
+	}
 	actorType, actor := actorFromRequest(r)
 	s.recordAudit(r.Context(), s.auditEvent(&runID, actorType, actor, "approval.authority.alert", id.String(), "success",
 		mustJSON(map[string]any{
