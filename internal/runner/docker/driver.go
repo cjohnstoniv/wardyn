@@ -149,6 +149,8 @@ type Config struct {
 	// 28), so runs stop using up the daemon's default address pools. Unset, the daemon picks the subnet.
 	RunSubnetPool netip.Prefix
 	RunSubnetBits int
+	// GPU (WARDYN_DOCKER_GPU) is the GPU kinds the operator turned on; nil = off.
+	GPU []types.GPUKind
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -374,6 +376,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
 		// Per-class Freeze/Thaw support — see capabilitiesForWith.
 		Freeze:          c.Freeze,
+		GPU:             d.gpuByClass(infoRes.Info),
 		MCPSandboxKinds: mcpKinds, // mcp_sandbox.go
 	}, nil
 }

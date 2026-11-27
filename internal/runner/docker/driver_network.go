@@ -70,6 +70,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		enforced = types.CC1
 	}
 
+	if err := d.gpuAdmits(spec.Resources.GPU, runtimeName, info); err != nil {
+		return runner.Sandbox{}, err
+	}
+
 	if err := d.preflightSpec(spec); err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -142,6 +146,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// NetworkMode is the per-run internal network (NOT "none"): it is gatewayless, so it provides no
 	// default route. The endpoint carries the "agent" alias so the proxy can identify its segment.
 	agentHost := hardenedHostConfig(internalNetName(spec.RunID), runtimeName, spec.Resources, info)
+	applyGPU(agentHost, spec.Resources.GPU)
 	if spec.DesktopSignins {
 		agentHost.Tmpfs[runner.SigninStorePath] = runner.SigninStoreTmpfs
 	}

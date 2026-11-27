@@ -70,6 +70,9 @@ func init() {
 		if cfg.RunSubnetPool, cfg.RunSubnetBits, err = RunSubnetPoolFromEnv(os.Getenv); err != nil {
 			return nil, err
 		}
+		if cfg.GPU, err = GPUFromEnv(os.Getenv); err != nil {
+			return nil, err
+		}
 		s, err := New(cfg)
 		if err != nil {
 			return nil, err
