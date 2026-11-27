@@ -101,8 +101,8 @@ func TestPG_TeamDrive_NonMemberGetsNoMount(t *testing.T) {
 }
 
 // TestPG_TeamDrive_CheckKeepsItAnAdminShare: the schema refuses a team flag on a
-// person's own drive (so the leaver purge, which deletes a person's own drives,
-// never reaches one) and on a ReadWriteOnce k8s_pvc claim.
+// ReadWriteOnce k8s_pvc claim, and on a person's own drive of any backend but a
+// Docker volume (0407 allows a person's own team drive only as a Docker volume).
 func TestPG_TeamDrive_CheckKeepsItAnAdminShare(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -110,8 +110,8 @@ func TestPG_TeamDrive_CheckKeepsItAnAdminShare(t *testing.T) {
 	uniq := uuid.NewString()[:8]
 	d := seedUserDrive(t, st, "plain-"+uniq)
 	for name, q := range map[string]string{
-		"a team k8s_pvc row":           `UPDATE user_drives SET team = true, backend = 'k8s_pvc' WHERE id = $1`,
-		"a team row owned by a person": `UPDATE user_drives SET team = true, owner_subject = 'sub-` + uniq + `' WHERE id = $1`,
+		"a team k8s_pvc row":          `UPDATE user_drives SET team = true, backend = 'k8s_pvc' WHERE id = $1`,
+		"a person's team k8s_pvc row": `UPDATE user_drives SET team = true, backend = 'k8s_pvc', owner_subject = 'sub-` + uniq + `' WHERE id = $1`,
 	} {
 		if _, err := pool.Exec(ctx, q, d.ID); err == nil || !strings.Contains(err.Error(), "user_drives_team_shape") {
 			t.Errorf("%s: err = %v, want the user_drives_team_shape check", name, err)

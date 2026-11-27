@@ -327,7 +327,14 @@ func TestStoreRunPreviewsRevokeAbove(t *testing.T) {
 func TestPG_StoreRunPreviews_FirstRowClashRetried(t *testing.T) {
 	f := newPreviewFixture(t)
 	r := f.run()
-	tx, err := f.pool.Begin(f.ctx)
+	// The other write holds its transaction on a pool of its own: this goroutine reads pg_stat_activity from
+	// f.pool while it holds it (WARDYN_TEST_POOL_GUARD).
+	side, err := pgxpool.NewWithConfig(f.ctx, f.pool.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer side.Close()
+	tx, err := side.Begin(f.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,15 @@ const (
 )
 
 var salt64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// applyHashV2 runs 0410 and 0412 on a fixture built from part of the migration list. Every deployment has
+// them, and the sweeps read hash_format and hash_salt, so a fixture that skips them cannot be verified.
+func applyHashV2(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, f := range []string{hashV2Migration, hashV2ChainSwitch} {
+		execMigrationFile(t, pool, f)
+	}
+}
 
 // appendViaFunction writes one row through audit_append, the one way a row enters the log.
 func appendViaFunction(t *testing.T, pool *pgxpool.Pool, action string) int64 {
@@ -165,11 +175,11 @@ func TestAuditChainTrigger_RefusesUnknownFormat_PG(t *testing.T) {
 		if err := tx.QueryRow(ctx, `SELECT nextval('audit_events_seq')`).Scan(&seq); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `SELECT pg_catalog.set_config('wardyn.audit_seq', $1::text, true)`, seq)
+		_, err = tx.Exec(ctx, `SELECT pg_catalog.set_config('wardyn.audit_seq', $1::text, true)`, strconv.FormatInt(seq, 10))
 		if err == nil {
 			_, err = tx.Exec(ctx, `INSERT INTO audit_events (seq, id, "time", actor_type, actor, action, outcome, recorded_at, hash_format, hash_salt)
-				SELECT $1, gen_random_uuid(), now(), 'system', 'probe', 'hash.bad', 'success',
-				       greatest(clock_timestamp(), m.hw_recorded_at, m.cutover), $2, $3 FROM audit_partition_meta m`, seq, c.format, c.salt)
+				SELECT $1::bigint, gen_random_uuid(), now(), 'system', 'probe', 'hash.bad', 'success',
+				       greatest(clock_timestamp(), m.hw_recorded_at, m.cutover), $2::smallint, $3::text FROM audit_partition_meta m`, seq, c.format, c.salt)
 		}
 		_ = tx.Rollback(ctx)
 		if err == nil || !strings.Contains(err.Error(), c.want) {

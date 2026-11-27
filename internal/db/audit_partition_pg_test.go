@@ -60,13 +60,20 @@ func appendAudit(t *testing.T, pool *pgxpool.Pool, action string) (int64, string
 
 // chainBreaks counts the rows whose stored hash does not match a recomputation, or whose prev_hash is
 // not the preceding hashed row's row_hash: the same two rules VerifyAuditChain applies, in SQL, so the
-// db package can check a chain without importing the store.
+// db package can check a chain without importing the store. From 0410 on a row is recomputed by its own
+// hash format and salt, as the sweep does; a schema from before 0410 has only format 1.
 func chainBreaks(t *testing.T, pool *pgxpool.Pool) int {
 	t.Helper()
+	calc := `audit_row_hash(prev_hash, id, "time", run_id, actor_type, actor, action, target, outcome, source_ip, data)`
+	if pgScalar[bool](t, pool, `SELECT EXISTS (SELECT 1 FROM pg_attribute
+			WHERE attrelid = 'audit_events'::regclass AND attname = 'hash_format' AND NOT attisdropped)`) {
+		calc = `audit_row_hash_any(hash_format, hash_salt, prev_hash, id, "time", run_id, actor_type, actor, action, target,
+			outcome, source_ip, data)`
+	}
 	return pgScalar[int](t, pool, `
 		SELECT count(*)::int FROM (
 			SELECT prev_hash, row_hash, lag(row_hash) OVER (ORDER BY seq) AS expect_prev,
-			       audit_row_hash(prev_hash, id, "time", run_id, actor_type, actor, action, target, outcome, source_ip, data) AS calc
+			       `+calc+` AS calc
 			  FROM audit_events WHERE row_hash IS NOT NULL) x
 		 WHERE calc IS DISTINCT FROM row_hash OR (expect_prev IS NOT NULL AND prev_hash IS DISTINCT FROM expect_prev)`)
 }

@@ -84,6 +84,7 @@ func newSplitFixture(t *testing.T) *splitFixture {
 	for _, name := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql", "0140_audit_legacy_manifest.sql", "0146_audit_retention_drop_actor_type.sql"} {
 		execMigrationFile(t, pool, name)
 	}
+	applyHashV2(t, pool)
 	for i := 0; i < 3; i++ {
 		ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: "split-probe", Action: fmt.Sprintf("split.post.%d", i), Outcome: "success"}
 		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {

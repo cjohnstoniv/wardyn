@@ -60,6 +60,7 @@ func newPartChain(t *testing.T) *partChain {
 	for _, f := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql"} {
 		execMigrationFile(t, pool, f)
 	}
+	applyHashV2(t, pool)
 	for i, action := range []string{"test.post.1", "test.post.2", "test.post.3"} {
 		ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Add(-time.Duration(i) * time.Hour), ActorType: types.ActorSystem,
 			Actor: "part-probe", Action: action, Outcome: "success"}

@@ -1054,6 +1054,8 @@ func TestPG_InboundFederation_QFormsRollBack(t *testing.T) {
 	f.identity(t, "ci-bot", "")
 	first := f.trust(t, "first-trust", "ci-bot", nil)
 	for _, commit := range []bool{false, true} {
+		// Built before the transaction: newTrust reads the revocation seq from the pool.
+		held := f.newTrust(t, "held-trust", "ci-bot", "admin")
 		tx, err := f.pool.Begin(f.ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -1061,7 +1063,7 @@ func TestPG_InboundFederation_QFormsRollBack(t *testing.T) {
 		if _, err := store.SetInboundFederationQ(f.ctx, tx, true, "admin"); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := store.CreateInboundTrustQ(f.ctx, tx, f.newTrust(t, "held-trust", "ci-bot", "admin")); err != nil {
+		if _, _, err := store.CreateInboundTrustQ(f.ctx, tx, held); err != nil {
 			t.Fatal(err)
 		}
 		if commit {
@@ -1078,15 +1080,15 @@ func TestPG_InboundFederation_QFormsRollBack(t *testing.T) {
 			t.Fatalf("commit %v: switch %v, %d trusts; want both written only on commit", commit, sw.Enabled, n)
 		}
 	}
+	sameName := f.newTrust(t, "first-trust", "ci-bot", "admin")
+	sameName.Subject = "repo:another"
+	sameTriple := f.newTrust(t, "triple-trust", "ci-bot", "admin")
+	sameTriple.Issuer, sameTriple.Audience, sameTriple.Subject = first.Issuer, first.Audience, first.Subject
 	tx, err := f.pool.Begin(f.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(f.ctx) }()
-	sameName := f.newTrust(t, "first-trust", "ci-bot", "admin")
-	sameName.Subject = "repo:another"
-	sameTriple := f.newTrust(t, "triple-trust", "ci-bot", "admin")
-	sameTriple.Issuer, sameTriple.Audience, sameTriple.Subject = first.Issuer, first.Audience, first.Subject
 	for _, in := range []types.InboundTrust{sameName, sameTriple} {
 		if _, _, err := store.CreateInboundTrustQ(f.ctx, tx, in); !errors.Is(err, store.ErrInboundTrustExists) {
 			t.Fatalf("held create %s = %v; want ErrInboundTrustExists", in.Name, err)

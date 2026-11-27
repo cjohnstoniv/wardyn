@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // TestAudit_SpooledRowStampedFromStoredRun: a row a runner spooled is stamped from the stored run in the
@@ -28,7 +29,15 @@ func TestAudit_SpooledRowStampedFromStoredRun(t *testing.T) {
 				if _, err := pool.Exec(ctx, `INSERT INTO service_identities (name, sponsor, created_by) VALUES ('ci-bot', $1, 'admin')`, tc.sponsor); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := pool.Exec(ctx, `UPDATE agent_runs SET created_by = $2 WHERE id = $1`, run.ID, owner); err != nil {
+				// A service owns no runner: its local run reports through an organisation runner (runnerReportsOn).
+				org, err := st.CreateRunner(ctx, newOrgRunner())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if rn, err = st.ClaimOrgRunner(ctx, org.ID, org.KeyFingerprint, org.OrgURLSHA256, "admin", time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `UPDATE agent_runs SET created_by = $2, runner_id = $3 WHERE id = $1`, run.ID, owner, rn.ID); err != nil {
 					t.Fatal(err)
 				}
 			}

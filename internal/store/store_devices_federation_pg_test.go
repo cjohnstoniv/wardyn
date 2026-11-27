@@ -106,8 +106,8 @@ func TestPG_Devices_IngestRecordsTheObservedPeerAndBothChainsVerify(t *testing.T
 	q := `
 		SELECT e.seq, e.source_ip, e.data->'device_origin'->>'source_ip',
 		       ` + store.FederatedClaimHashSQL + ` = e.data->'device_origin'->>'row_hash',
-		       e.row_hash = audit_row_hash(e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
-		                                   e.action, e.target, e.outcome, e.source_ip, e.data),
+		       e.row_hash = audit_row_hash_any(e.hash_format, e.hash_salt, e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
+		                                       e.action, e.target, e.outcome, e.source_ip, e.data),
 		       COALESCE(e.prev_hash, '') = COALESCE((SELECT p.row_hash FROM audit_events p
 		                                             WHERE p.seq < e.seq AND p.row_hash IS NOT NULL ORDER BY p.seq DESC LIMIT 1), '')
 		FROM audit_events e
@@ -267,8 +267,8 @@ func storedFederated(t *testing.T, pool *pgxpool.Pool, deviceID uuid.UUID) []sto
 	q := `
 		SELECT e.seq, e.target, e.data::text,
 		       ` + store.FederatedClaimHashSQL + ` = e.data->'device_origin'->>'row_hash',
-		       e.row_hash = audit_row_hash(e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
-		                                   e.action, e.target, e.outcome, e.source_ip, e.data),
+		       e.row_hash = audit_row_hash_any(e.hash_format, e.hash_salt, e.prev_hash, e.id, e.time, e.run_id, e.actor_type, e.actor,
+		                                       e.action, e.target, e.outcome, e.source_ip, e.data),
 		       COALESCE(e.prev_hash, '') = COALESCE((SELECT p.row_hash FROM audit_events p
 		                                             WHERE p.seq < e.seq AND p.row_hash IS NOT NULL ORDER BY p.seq DESC LIMIT 1), '')
 		FROM audit_events e WHERE e.actor = $1 ORDER BY e.seq`
