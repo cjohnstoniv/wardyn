@@ -443,7 +443,7 @@ describe("source parity — five more flat structs", () => {
     expect(siteConfigGo).toMatch(/Components\s+\*ComponentSettings\s+`json:"components,omitempty"`/);
     expect(siteTs).toMatch(/components\?: ComponentSettings;/);
     const goTags = goJSONTags(siteConfigGo, "ComponentSettings");
-    expect(goTags.length).toBe(3);
+    expect(goTags.length).toBe(4);
     expect(new Set(tsInterfaceKeys(siteTs, "ComponentSettings"))).toEqual(new Set(goTags));
   });
 

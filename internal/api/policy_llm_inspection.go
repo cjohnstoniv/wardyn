@@ -32,9 +32,8 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	// this field, internally, in memory, on the ephemeral copy handed to the
 	// proxy sidecar (resolveLLMInspectionSecrets, runs_dispatch.go). An
 	// operator authors workspace_secret_names instead (types.LLMInspectionSpec).
-	if len(li.WorkspaceSecretValues) > 0 {
-		return fmt.Errorf("llm_inspection.workspace_secret_values may not be set on a policy write " +
-			"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
+	if err := li.AuthoredSecretValuesProblem(); err != nil {
+		return err
 	}
 	// The write-time half of the SINK guard. workspace_secret_names is
 	// resolved to PLAINTEXT onto the policy copy handed to the proxy sidecar
