@@ -101,7 +101,6 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 
 	// The wrappers' callers. Each carries its wrapper's guard; a caller with a stronger guard of its own may name
 	// that instead.
-	{"internal/api/run_held_seed.go", "Server.releaseHeldSeed", "stopSandboxOrAudit"}:                                {1, "unguarded: K11, K12"},
 	{"internal/api/run_kept_stop_forced.go", "Server.retryForcedStop", "stopSandboxOrAudit"}:                         {1, "unguarded: K11, K12"},
 	{"internal/api/run_local_folder.go", "Server.failLocalFolderRun", "stopSandboxOrAudit"}:                          {1, "unguarded: K11, K12"},
 	{"internal/api/run_proxy_readback.go", "Server.abortUnconfirmedSandbox", "stopSandboxOrAudit"}:                   {1, "unguarded: K11, K12"},
@@ -129,6 +128,13 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_tail_owner.go", "Server.tailFinalize", "finalizeRunEffects"}:                                  {1, "unguarded: K16"},
 	{"internal/api/runner_exits.go", "Server.applyRunnerExit", "finalizeRunEffects"}:                                 {1, "unguarded: K16"},
 	{"internal/api/runs_lifecycle.go", "Server.finalizeRunTailOrdered", "finalizeRunEffects"}:                        {1, "unguarded: K16"},
+}
+
+// releaseHeldSeed's stop of a held run whose task could not be released, in dispatchRun once the readback
+// confirmed: it adds no guard of its own, so it carries its wrapper's, read from stopSandboxOrAudit's row.
+func init() {
+	wrapper := destructiveCallCensus[destructiveSite{"internal/api/runs_lifecycle.go", "Server.stopSandboxOrAudit", "StopSandbox"}]
+	destructiveCallCensus[destructiveSite{"internal/api/run_held_seed.go", "Server.releaseHeldSeed", "stopSandboxOrAudit"}] = destructiveRow{1, wrapper.guard}
 }
 
 // destructiveCallSites counts each function's destructive references in files, keyed by their path.
