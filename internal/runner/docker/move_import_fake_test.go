@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/movepack"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // importStream is a movepack stream of the root /work holding one file of n bytes.
@@ -199,5 +200,39 @@ func TestMoveImport_ManyShortLinksTripTheBound(t *testing.T) {
 	_ = pr.CloseWithError(errors.New("test done"))
 	if !errors.Is(err, movepack.ErrCarriedTooLarge) || !strings.Contains(err.Error(), "of symlinks") {
 		t.Fatalf("reemit of 900,000 short links = %v; want the held-link bound", err)
+	}
+}
+
+// TestMoveImport_RefusesCarriedRootOnDrive: a carried root at or under the target of a drive of the spec, or above a
+// target the set does not leave out, is refused before anything is created, since every such drive existed before
+// the move; a root the set leaves out whole, one above a target it leaves out, or one that only shares a prefix with a
+// drive's target, is not.
+func TestMoveImport_RefusesCarriedRootOnDrive(t *testing.T) {
+	notes := types.DriveMount{DriveName: "notes", Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-notes", Target: "/work"}
+	for _, root := range []string{"/work", "/work/sub", "/"} {
+		f := newImportFake()
+		spec := importSpec()
+		spec.Drives = []types.DriveMount{notes}
+		stream, _ := importStream(t, 10)
+		_, _, err := newTestDriver(f).ImportSandbox(context.Background(), spec, runner.CarriedSet{Roots: []string{root}}, 16<<10, stream)
+		if !errors.Is(err, runner.ErrMoveCreate) || !strings.Contains(err.Error(), `"notes"`) || len(f.containers) != 0 {
+			t.Errorf("root %s on the drive = %v, %d containers; want ErrMoveCreate naming the drive and nothing created", root, err, len(f.containers))
+		}
+	}
+	for _, c := range []struct {
+		name string
+		set  runner.CarriedSet
+	}{
+		{"a root left out whole", runner.CarriedSet{Roots: []string{"/work"}, Exclude: []string{"work"}}},
+		{"a root beside the drive", runner.CarriedSet{Roots: []string{"/workspace"}}},
+		{"no drive under the root's path", runner.CarriedSet{Roots: []string{"/home/agent/work"}}},
+		{"a root above a drive it leaves out", runner.CarriedSet{Roots: []string{"/"}, Exclude: []string{"work"}}},
+	} {
+		if root, drive, ok := carriedRootOnDrive(c.set, []types.DriveMount{notes}); ok {
+			t.Errorf("%s: refused %s on %q", c.name, root, drive)
+		}
+	}
+	if _, _, ok := carriedRootOnDrive(runner.CarriedSet{Roots: []string{"/work"}}, nil); ok {
+		t.Error("a spec with no drive refused its root")
 	}
 }

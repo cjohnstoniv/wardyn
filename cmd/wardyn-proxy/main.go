@@ -80,6 +80,9 @@ func main() {
 	if *narrow {
 		os.Exit(runNarrow(os.Stdin, os.Stdout))
 	}
+	// The move helper's modes, whose flags are in move_helper.go: wardynd's Kubernetes driver reads and writes a moved
+	// run's files with them. It exits when one is named.
+	exitIfMoveHelper()
 
 	if *egressCanary != "" {
 		conn, err := net.DialTimeout("tcp", *egressCanary, egressCanaryTimeout)
