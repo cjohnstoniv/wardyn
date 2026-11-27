@@ -53,6 +53,18 @@ func TestKeepDriverIsTheProxyReviver(t *testing.T) {
 	}
 }
 
+// runnerd serves the plain *Driver, so a registered Kubernetes runner never offers itself as a proxy reviver.
+func TestServedInRunnerModeIsThePlainDriver(t *testing.T) {
+	d := &Driver{cfg: Config{RunnerID: "runner-1"}}
+	s := served(d)
+	if got, ok := s.(*Driver); !ok || got != d {
+		t.Fatalf("served in runner mode = %T, want the plain *Driver", s)
+	}
+	if _, ok := s.(runner.ProxyReviver); ok {
+		t.Error("served in runner mode is a runner.ProxyReviver")
+	}
+}
+
 func TestCanReplaceProxyRefusesARunNotKept(t *testing.T) {
 	k, _, _, ref := keptRun(t)
 	if err := k.CanReplaceProxy(context.Background(), ref); err != nil {

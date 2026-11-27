@@ -1486,7 +1486,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - at least `WARDYN_LAPSE_MASS_MIN` of them, and at least `WARDYN_LAPSE_MASS_SHARE` percent, lapsed within the last 30 minutes.
 - In an outage the server's own Docker runs are kept, unattended ones as interactive ones are: the proxy is stopped, and the agent and its files stay. Revive brings one back.
 - Outside those cases a proxy that dies on its own is ended as before.
-- Server Kubernetes runs cannot be kept, so an outage still ends them.
+- A run on the server's own cluster is kept after a long outage only on a namespace whose network policy check passed. Elsewhere, and for a run started before 0.11.0-rc.4, it is deleted as before ([details](operations/run-lifetime.md#kubernetes-keep-revive-restart-and-pause)).
 - A kept unattended run never finishes on its own: a pipeline sees it running until its own timeout, and it holds a concurrent-run slot while its agent runs.
 - On a server with one run of its own, every lapse of that run is read as an outage (no renewal for 20 minutes), so it is kept, not ended.
 - The server pings its database every 5 seconds. A ping that does not answer within 3 seconds, or fails, is not a good ping.

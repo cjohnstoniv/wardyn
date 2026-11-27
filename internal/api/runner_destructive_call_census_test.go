@@ -94,7 +94,9 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	// The unfenced lost-run stops: a failed revive or edit (endUnconfirmedRun's callers, reloseRun), the fence-0
 	// sweeps (sweepLapsedRunTokens, keepRebootedRun, the gone-runner end), the lease sweep's re-stop; and the stop
 	// after a lost mark that could not be written (loseWriteFailed).
-	{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopProxy"}:       {1, "unguarded: K11, K14"},
+	{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopProxy"}: {1, "unguarded: K11, K14"},
+	// A server-cluster run's lost-run stop at generation 0 can stop a just-revived proxy; it fails closed: the agent
+	// is kept with no network.
 	{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopLostProxyAt"}: {1, "unguarded: K11, K14"},
 	// The lost-run stops that name a policy generation: the runner refuses a call for an older proxy generation.
 	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "StopProxyAt"}:     {1, guardFenced},

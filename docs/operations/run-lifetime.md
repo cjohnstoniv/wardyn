@@ -97,7 +97,7 @@ When the database or the server is unreachable, a run's proxy cannot renew its t
 | Where the run runs | After an outage |
 | --- | --- |
 | The server's own Docker | Kept, headless runs too: the proxy is stopped, and the agent and its files stay. |
-| The server's Kubernetes | Ended: the run is `FAILED` and torn down, as an interactive Kubernetes run is. |
+| The server's Kubernetes | Kept on a namespace whose NetworkPolicy check is proven: the proxy stops and the agent stays, with no network, until revived. Elsewhere, or if started before 0.11.0-rc.4, `FAILED` and torn down ([details](#kubernetes-keep-revive-restart-and-pause)). |
 | Registered runners | Unchanged. An interactive run, and a headless run on a person's own runner, are kept; a headless run on an organisation runner is ended as before. |
 
 - A run is read as lost to an outage, and kept, in three cases. Any one is enough:
