@@ -23,7 +23,7 @@ import (
 
 // Inbound federation (#3787): the switch, the trusts and the tokens exchanged under them. Guarded by WARDYN_TEST_PG.
 
-const inboundMigration = "0400_inbound_federation.sql"
+const inboundMigration = "0409_inbound_federation.sql"
 
 // inboundFix is one migrated database with two bound sponsors.
 type inboundFix struct {

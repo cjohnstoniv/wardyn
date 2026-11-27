@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const sweeperFamiliesMigration = "0420"
+const sweeperFamiliesMigration = "0419"
 
 // TestMigration_SweeperFamilies_PG: the migration grants sweeper_families to the role that already writes
 // sweeper_leader, found from the catalog: SELECT and UPDATE only. A role that only reads sweeper_leader gets

@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-const orgSitesMigration = "0400"
+const orgSitesMigration = "0414"
 
 // The site migration grants its three tables, found from the catalog: every role but runner_pools' owner that
 // holds UPDATE on runner_pools gets SELECT, INSERT, UPDATE and DELETE on each, and nothing more. A role that
 // holds every other verb on runner_pools but UPDATE gets nothing, and neither does runner_pools' owner when it is
 // not the migrator.
-func TestPG_Migration0400_GrantsTheAppRole(t *testing.T) {
+func TestPG_Migration0414_GrantsTheAppRole(t *testing.T) {
 	pool, schema := partialSchemaPool(t, orgSitesMigration)
 	ctx := context.Background()
 	app, _ := auditRole(t, pgPool(t), "wardyn_pg_app")
@@ -46,7 +46,7 @@ func TestPG_Migration0400_GrantsTheAppRole(t *testing.T) {
 		t.Fatal("runner_pools' new owner does not hold UPDATE on it; the owner case would prove nothing")
 	}
 
-	migrateBefore(t, pool, "0401")
+	migrateBefore(t, pool, "0415")
 
 	for _, table := range []string{"org_sites", "org_site_pools", "org_site_drives"} {
 		if got := pgScalar[string](t, pool, `SELECT tableowner::text FROM pg_tables WHERE schemaname = $1 AND tablename = $2`, schema, table); got != migrator {

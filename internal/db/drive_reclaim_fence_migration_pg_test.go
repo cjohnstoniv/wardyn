@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-const driveReclaimFenceMigration = "0427"
+const driveReclaimFenceMigration = "0418"
 
 // TestMigration_DriveReclaimFence_SplitRoleGrants_PG: the app role, found from the catalog as a role holding UPDATE on
 // user_drives, gets SELECT, INSERT, UPDATE and DELETE on drive_reclaims (a settled claim is deleted) and SELECT and
 // INSERT on drive_object_holds (a hold goes only with its run); a role that holds nothing on user_drives gets none of
-// them. The fixture sets no default privileges. migrateBefore stops at the first file at or after "0428", so 0427 is
+// them. The fixture sets no default privileges. migrateBefore stops at the first file at or after "0419", so 0418 is
 // the last one applied; both constants move with the file if it is renumbered.
 func TestMigration_DriveReclaimFence_SplitRoleGrants_PG(t *testing.T) {
 	pool, schema := partialSchemaPool(t, driveReclaimFenceMigration)
@@ -24,7 +24,7 @@ func TestMigration_DriveReclaimFence_SplitRoleGrants_PG(t *testing.T) {
 	}
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE, DELETE ON user_drives TO `+app)
 
-	migrateBefore(t, pool, "0428")
+	migrateBefore(t, pool, "0419")
 
 	for table, privs := range map[string]map[string]bool{
 		"drive_reclaims":     {"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": true, "TRUNCATE": false},

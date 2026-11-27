@@ -10,16 +10,16 @@ import (
 	"testing"
 )
 
-const machineSnapshotsMigration = "0400"
+const machineSnapshotsMigration = "0416"
 
-// TestMigration0400_GrantsTheAppRole: on a split-role install the migration gives each of its four tables, with
+// TestMigration0416_GrantsTheAppRole: on a split-role install the migration gives each of its four tables, with
 // exactly the verbs the server's SQL uses on it, to every role that may delete attach leases, read from the
 // catalog. A role holding every other verb on the leases, and the leases table's owner, which the catalog lists
 // among the roles holding DELETE once the table has any grant, get nothing. The three tables granted fewer than
 // all four verbs first lose whatever a role held on them, as default privileges hand every new table out, so a
 // re-run over ALL granted on them ends with exactly the same verbs. Each verb is checked on each table, held and
 // not held.
-func TestMigration0400_GrantsTheAppRole(t *testing.T) {
+func TestMigration0416_GrantsTheAppRole(t *testing.T) {
 	pool, schema := partialSchemaPool(t, machineSnapshotsMigration)
 	app, _ := auditRole(t, pgPool(t), "wardyn_pg_app")
 	other, _ := auditRole(t, pgPool(t), "wardyn_pg_other")
@@ -36,7 +36,7 @@ func TestMigration0400_GrantsTheAppRole(t *testing.T) {
 		t.Fatal("the leases table's owner holds no DELETE entry in its acl, so the owner case proves nothing")
 	}
 
-	migrateBefore(t, pool, "0401")
+	migrateBefore(t, pool, "0417")
 
 	granted := map[string][]string{
 		"machine_snapshots":         {"SELECT", "INSERT", "UPDATE", "DELETE"},

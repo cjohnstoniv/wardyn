@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// OrgSiteStore is the optional store capability behind organisation sites (migration 0400_org_sites): the
+// OrgSiteStore is the optional store capability behind organisation sites (migration 0414_org_sites): the
 // site catalogue, which organization pools are at which site, and which admin drives are homed where. A store
 // without it has no sites, as a store without RunnerPoolStore has no pools.
 type OrgSiteStore interface {

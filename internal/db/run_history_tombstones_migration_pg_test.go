@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const runHistoryTombstonesMigration = "0400"
+const runHistoryTombstonesMigration = "0411"
 
 // TestMigration_RunHistoryTombstones_PG: the migration grants SELECT, INSERT and UPDATE (person erasure blanks a
 // tombstone's creator) on the tombstone table to the role that already writes agent_runs, found from the catalog,
@@ -26,7 +26,7 @@ func TestMigration_RunHistoryTombstones_PG(t *testing.T) {
 	const runsACL = `SELECT coalesce(relacl::text, '') FROM pg_catalog.pg_class WHERE oid = 'agent_runs'::regclass`
 	before := pgScalar[string](t, pool, runsACL)
 
-	migrateBefore(t, pool, "0401")
+	migrateBefore(t, pool, "0412")
 
 	for priv, want := range map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": false, "TRUNCATE": false} {
 		if got := pgScalar[bool](t, pool, `SELECT has_table_privilege($1, 'run_history_tombstones', $2)`, app, priv); got != want {

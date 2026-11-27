@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The disk drive hold record (migration 0401) against a throwaway Postgres database. Guarded by WARDYN_TEST_PG;
+// The disk drive hold record (migration 0408) against a throwaway Postgres database. Guarded by WARDYN_TEST_PG;
 // skipped cleanly when unset.
 
 package store_test
@@ -157,7 +157,7 @@ func TestMacDiskHold_Grants_PG(t *testing.T) {
 	if _, err := pool.Exec(ctx, `GRANT SELECT ON user_drives TO `+other); err != nil {
 		t.Fatal(err)
 	}
-	sql, err := os.ReadFile("../db/migrations/0401_mac_disk_holds.sql")
+	sql, err := os.ReadFile("../db/migrations/0408_mac_disk_holds.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
