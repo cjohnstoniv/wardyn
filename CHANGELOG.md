@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- An optional mutual TLS check on the proxy-to-control-plane hop (`WARDYN_INTERNAL_MTLS`, off by default; needs the SPIRE identity provider and the Kubernetes runner); the run token is still checked on every request (#4074).
+
 ## [0.11.0-rc.5] — 2026-11-27
 
 ### Added

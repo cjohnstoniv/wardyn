@@ -334,6 +334,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CONFINEMENT_MAP` | string | (unset) | per-class substrate/runtime pins, e.g. `CC2=runsc;CC3=kata-qemu` (flag `-confinement-map`) |
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
+| `WARDYN_INTERNAL_MTLS` | bool | `false` | require each run's proxy to present its run's SPIFFE certificate on the internal listener, beside its run token (flag `-internal-mtls`). [Details](#wardyn_internal_mtls) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) (or `runnerd.json` `proxy_image`) (lock: `lock_security_settings`) |
 | `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd`**: `setup` writes it beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it; `serve` then keeps that image. Unmarked, the registration image and this project's release images are not pins: they follow the organisation's answer at connect (or `runnerd.json` `proxy_image`, a pin) |
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
@@ -1641,6 +1642,19 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Listen address of the proxy-facing TLS listener: `/api/v1/internal/*` and `/healthz` only, served with a certificate from wardynd's own internal CA (secret-store row `wardyn-internal-ca`, minted on first boot, kept across restarts and upgrades).
 - Runs whenever `WARDYN_CONTROL_PLANE_URL` is `https://`, and while it does the console listener refuses `/api/v1/internal/*` (404); a bind failure ends the daemon.
 - Never publish it outside the network your proxies share with wardynd (flag `-internal-listen`).
+
+### `WARDYN_INTERNAL_MTLS`
+
+- Off by default. On, the internal listener asks each client for a certificate, and every request from a run's proxy must present that run's X.509-SVID beside its run token.
+- The certificate must verify against the SPIRE trust bundle and name the same run as the token. Otherwise the request is refused (`internal_peer_required`, `internal_peer_invalid`, `internal_peer_not_a_run`, `internal_peer_mismatch`).
+- Boot refuses it on unless `WARDYN_CONTROL_PLANE_URL` is `https://` (so the internal listener runs), `WARDYN_IDENTITY` is `spire`, and `WARDYN_RUNNER` is `k8s`.
+- A run whose requests come through a runner's relay is bound by that runner instead and presents no certificate.
+- The bearer and the denylist are always checked; a certificate never admits a request on its own.
+- With it on, a run on an organization pool's remote-hosted runner is refused `internal_peer_required` at its proxy's first control-plane call, because that proxy has no run certificate. Estates with remote-hosted runners leave it off.
+- A run already running when the switch is turned on has a proxy with no run certificate, so it is refused the same way.
+- Certificates are not revoked at the kill: a certificate lasts until it expires, and the denied run token is what stops the run.
+- A run's last upload after it ends also needs an unexpired certificate, so one sent more than the certificate lifetime (`x509_svid_ttl`) after the kill is refused.
+- The handshake is checked by unit tests in this release; it has not been run end to end on a cluster.
 
 ### `WARDYN_PROXY_IMAGE`
 

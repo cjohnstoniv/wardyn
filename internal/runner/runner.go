@@ -192,6 +192,10 @@ type ProxyConfig struct {
 	RunToken          string // authenticates the sidecars to the control plane (NOT usable outside the platform)
 	ControlPlaneURL   string // where sidecars stream decisions/recordings
 	ControlPlaneCAPEM string // wardynd's internal CA; empty with a loopback http URL only
+	// ControlPlanePeerID is the run's SPIFFE ID the proxy presents to the control plane as its client
+	// certificate; set only for this daemon's own Kubernetes proxies with WARDYN_INTERNAL_MTLS on. Unset, it
+	// stays out of the bytes an older runner is sent.
+	ControlPlanePeerID string `json:"control_plane_peer_id,omitempty"`
 	// Policy is the run's egress policy, handed verbatim to the wardyn-proxy
 	// sidecar. Drivers MUST deliver it at launch: a proxy without a policy
 	// fails closed and the sandbox has no working egress at all.

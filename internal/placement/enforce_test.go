@@ -195,6 +195,10 @@ func TestEveryTableRuleIsEnforced(t *testing.T) {
 				if li == nil || li.WorkspaceSecretNames != nil || li.WorkspaceSecretValues != nil {
 					t.Errorf("%s keeps resolved inspection secrets: %+v", where, li)
 				}
+			case f.Name == "ControlPlanePeerID":
+				if out.ProxyConfig.ControlPlanePeerID != "" {
+					t.Errorf("%s keeps a run's SPIFFE ID in the laptop copy: %q", where, out.ProxyConfig.ControlPlanePeerID)
+				}
 			case rs.strip:
 				t.Errorf("%s has a strip row this guard does not know how to observe", where)
 			default:

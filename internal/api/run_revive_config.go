@@ -190,11 +190,13 @@ func interceptionEntryHost(entry string) string {
 // control-plane hop (URL and CA) set to this deployment's current pair BEFORE
 // the strict loader validates it. A config rendered before the TLS hop names
 // an http control plane the loader now refuses, and every reader here (revive,
-// extend) hands the proxy the current pair anyway. Only those two fields change,
-// on the raw JSON object: every other field, an unknown one included, still
-// meets the loader as written, and the run id and the per-run MITM CA are read
-// back exactly as rendered.
-func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
+// extend) hands the proxy the current pair anyway. The run certificate's peer ID
+// follows the current switch too (proxyPeerID): set for this daemon's own
+// Kubernetes proxy with WARDYN_INTERNAL_MTLS on, removed otherwise. Only those
+// three fields change, on the raw JSON object: every other field, an unknown one
+// included, still meets the loader as written, and the run id and the per-run
+// MITM CA are read back exactly as rendered.
+func (s *Server) loadRenderedProxyConfig(raw []byte, run types.AgentRun) (*proxy.Config, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -208,6 +210,11 @@ func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
 			return nil, err
 		}
 		fields[k] = b
+	}
+	if id := s.proxyPeerID(run); id != "" {
+		fields["control_plane_peer_id"] = mustJSON(id)
+	} else {
+		delete(fields, "control_plane_peer_id")
 	}
 	b, err := json.Marshal(fields)
 	if err != nil {

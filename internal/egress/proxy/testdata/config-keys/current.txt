@@ -43,6 +43,7 @@ bedrock_routes
 brokered_pat_grant_ids
 canonical_push_repos
 control_plane_ca_pem
+control_plane_peer_id
 control_plane_url
 decision_buffer_size
 decision_sink

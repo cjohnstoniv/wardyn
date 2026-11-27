@@ -66,7 +66,7 @@ func (s *Server) moveWorkDriveGates(ctx context.Context, run types.AgentRun, rec
 	if !plan.WorkDrive {
 		return nil, nil, nil
 	}
-	spec, err := s.moveStoredSpec(ctx, run.ID)
+	spec, err := s.moveStoredSpec(ctx, run)
 	if err != nil {
 		return nil, nil, err
 	}

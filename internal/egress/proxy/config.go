@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
@@ -52,6 +53,10 @@ type Config struct {
 	// root this sidecar trusts for control-plane calls. Required with an
 	// https ControlPlaneURL.
 	ControlPlaneCAPEM string `json:"control_plane_ca_pem,omitempty"`
+	// ControlPlanePeerID is the run's SPIFFE ID. Set, every control-plane call presents that run's
+	// X.509-SVID from the SPIRE agent as its client certificate (control_mtls.go), beside the run token;
+	// the internal CA pin is unchanged. Needs an https ControlPlaneURL.
+	ControlPlanePeerID string `json:"control_plane_peer_id,omitempty"`
 	// RunToken authenticates internal calls (Authorization: Bearer <token>).
 	RunToken string `json:"run_token"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
@@ -601,6 +606,18 @@ func UpstreamProxyURLHostRefused(raw string) bool {
 	return err == nil && up != nil && ValidConfigHost(up.host) != nil
 }
 
+// validateControlPlanePeerID: a peer ID, when set, is a SPIFFE ID and goes with an https control-plane URL,
+// the only hop on which the proxy presents it.
+func (c *Config) validateControlPlanePeerID() error {
+	if c.ControlPlanePeerID == "" {
+		return nil
+	}
+	if _, err := spiffeid.FromString(c.ControlPlanePeerID); err != nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.ControlPlaneURL)), "https://") {
+		return errors.New("config: control_plane_peer_id needs an https control-plane URL and a spiffe:// ID")
+	}
+	return nil
+}
+
 // validateSigninListen: the sign-in lane, when set, is a host:port of its own.
 func (c *Config) validateSigninListen() error {
 	if c.SigninListen == "" {
@@ -628,7 +645,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
 	}
-	if err := c.validateSigninListen(); err != nil {
+	if err := errors.Join(c.validateSigninListen(), c.validateControlPlanePeerID()); err != nil {
 		return err
 	}
 	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {

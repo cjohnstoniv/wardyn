@@ -131,7 +131,7 @@ func TestInternalHostsOnRunnerDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := srv.loadRenderedProxyConfig(raw)
+	cfg, err := srv.loadRenderedProxyConfig(raw, run)
 	if err != nil {
 		t.Fatal(err)
 	}

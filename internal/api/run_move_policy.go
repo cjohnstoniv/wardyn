@@ -258,7 +258,7 @@ func (s *Server) moveCapsRefusal(ctx context.Context, run types.AgentRun, rec ru
 			return runner.Capabilities{}, refuseMove(http.StatusConflict, reasonMoveDestinationSubstrate,
 				"The destination runner's substrate cannot hold a moved run before it starts."), nil
 		}
-		if setting, err := s.moveProxySettingMissing(ctx, run.ID, c); err != nil || setting != "" {
+		if setting, err := s.moveProxySettingMissing(ctx, run, c); err != nil || setting != "" {
 			if err != nil {
 				return runner.Capabilities{}, nil, err
 			}
@@ -296,8 +296,8 @@ func moveClass(rec runSandboxSpecRecord) types.ConfinementClass {
 
 // moveProxySettingMissing names the first proxy setting the run's stored config sets that the runner's caps do not
 // carry, as a create refuses one; "" when there is none.
-func (s *Server) moveProxySettingMissing(ctx context.Context, runID uuid.UUID, c runnerwire.Caps) (string, error) {
-	spec, err := s.moveStoredSpec(ctx, runID)
+func (s *Server) moveProxySettingMissing(ctx context.Context, run types.AgentRun, c runnerwire.Caps) (string, error) {
+	spec, err := s.moveStoredSpec(ctx, run)
 	if err != nil {
 		return "", err
 	}
@@ -315,12 +315,12 @@ func missingProxySetting(pc runner.ProxyConfig, c runnerwire.Caps) string {
 }
 
 // moveStoredSpec is the run's stored proxy config as a spec, the input a local revive classifies.
-func (s *Server) moveStoredSpec(ctx context.Context, runID uuid.UUID) (runner.SandboxSpec, error) {
-	raw, err := s.loadRunProxyConfig(ctx, runID)
+func (s *Server) moveStoredSpec(ctx context.Context, run types.AgentRun) (runner.SandboxSpec, error) {
+	raw, err := s.loadRunProxyConfig(ctx, run.ID)
 	if err != nil {
 		return runner.SandboxSpec{}, err
 	}
-	cfg, err := s.loadRenderedProxyConfig(raw)
+	cfg, err := s.loadRenderedProxyConfig(raw, run)
 	if err != nil {
 		return runner.SandboxSpec{}, err
 	}
@@ -474,7 +474,7 @@ func (s *Server) judgeMoveDestination(ctx context.Context, run types.AgentRun, r
 	if err != nil {
 		return refused("managed_files", err.Error())
 	}
-	src, err := s.moveStoredSpec(ctx, run.ID)
+	src, err := s.moveStoredSpec(ctx, run)
 	if err != nil {
 		return moveDestPlan{}, nil, err
 	}

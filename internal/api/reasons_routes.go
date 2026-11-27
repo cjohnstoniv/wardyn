@@ -187,6 +187,19 @@ const (
 	reasonViaOrgUpstreamProxyRefused = "via_org_upstream_proxy_refused"
 )
 
+// internalAuth's run-certificate check (internal_peer.go), only with WARDYN_INTERNAL_MTLS on: a request that
+// did not come through a runner's relay must also present its run's certificate.
+const (
+	// No client certificate was presented.
+	reasonInternalPeerRequired = "internal_peer_required"
+	// The certificate did not verify against the SPIRE bundle, or has expired.
+	reasonInternalPeerInvalid = "internal_peer_invalid"
+	// The certificate's SPIFFE ID is not a run's in this trust domain.
+	reasonInternalPeerNotARun = "internal_peer_not_a_run"
+	// The certificate names a different run than the token.
+	reasonInternalPeerMismatch = "internal_peer_mismatch"
+)
+
 // The credential-injection sinks' own closed set (injection.go's
 // storeReadRefusal and its callers across injection_provider_key.go,
 // injection_awssso.go, provider_subscription.go, internal.go): one reason per

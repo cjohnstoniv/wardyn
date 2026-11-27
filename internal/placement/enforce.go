@@ -60,6 +60,8 @@ var strippers = map[string]stripper{
 			delete(s.Env, key)
 		}
 	},
+	// A laptop-bound proxy is never this daemon's Kubernetes proxy, so it presents no run certificate.
+	"ProxyConfig.ControlPlanePeerID": func(_ LocalPlan, s *runner.SandboxSpec) { s.ProxyConfig.ControlPlanePeerID = "" },
 	// Every interception entry needs an own admitted injection or a via_org
 	// destination; an org-only interception entry must not silently retain
 	// authority after credentials strip.

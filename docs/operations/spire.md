@@ -109,6 +109,25 @@
 - To regain the console while SPIRE is down, set `WARDYN_IDENTITY=embedded` and turn `WARDYN_INTERNAL_MTLS` off if it is on, because `embedded` does not boot with it on. Every spire-minted token is then refused, so those runs stop at their next renew.
 - The ground-truth sensor's token is minted through the same provider. Its rotator retries every minute; the sensor keeps the token it holds until it expires (1 hour), and its events are not ingested after that until a mint lands.
 
+## Mutual TLS on the proxy hop
+
+- `WARDYN_INTERNAL_MTLS=true` (off by default) makes each run's proxy present its run's X.509-SVID to wardynd's internal listener beside its run token. A request that did not come through a runner's relay is refused unless the certificate verifies against the SPIRE trust bundle and names the same run as the token ([ENV.md](../ENV.md#wardyn_internal_mtls)).
+- wardynd exits at boot with it on unless `WARDYN_IDENTITY` is `spire`, `WARDYN_RUNNER` is `k8s` and `WARDYN_CONTROL_PLANE_URL` is `https://`.
+- Runs whose requests come through a runner's relay are bound by that runner and present no certificate.
+- The bearer and the denylist are always checked; a certificate never admits a request on its own.
+- With it on, a run on an organization pool's remote-hosted runner is refused `internal_peer_required` at its proxy's first control-plane call, because that proxy has no run certificate. Estates with remote-hosted runners leave it off.
+- A run already running when it is turned on has a proxy with no run certificate, so it is refused the same way.
+- Certificates are not revoked at the kill: one lasts until it expires, and the denied run token is what stops the run.
+- A run's last upload after it ends also needs an unexpired certificate, so one sent more than the certificate lifetime (`x509_svid_ttl`) after the kill is refused.
+- To turn it on, add it to the chart's `env`:
+
+  ```yaml
+  env:
+    WARDYN_INTERNAL_MTLS: "true"
+  ```
+
+- The handshake is checked by unit tests in this release; it has not been run end to end on a cluster.
+
 ## Scope
 
 - Kubernetes only in this release. Docker and remote runners keep the bearer token.

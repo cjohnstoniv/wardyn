@@ -146,6 +146,9 @@ type bootFlags struct {
 	// runs whenever controlURL is https.
 	internalListen *string
 	policyPath     *string
+	// internalMTLS is WARDYN_INTERNAL_MTLS: the internal listener also asks each run's proxy for its run
+	// certificate, which internalAuth then requires (internal_mtls.go). Off by default.
+	internalMTLS *bool
 	// siteConfigSeedFile is WARDYN_SITE_CONFIG_SEED_FILE: a PATH to the network
 	// settings restored into an empty site config at boot (api.LoadSiteConfigSeed).
 	siteConfigSeedFile *string
@@ -569,6 +572,7 @@ func parseBootFlags() *bootFlags {
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
 		internalListen:         flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
+		internalMTLS:           flagBool("internal-mtls", "WARDYN_INTERNAL_MTLS", false, "require each run's proxy to present its run's SPIFFE certificate on the proxy-facing TLS listener, beside its run token; needs -identity spire, an https -control-plane-url and the Kubernetes runner (default false)"),
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		siteConfigSeedFile:     flagEnv("site-config-seed-file", "WARDYN_SITE_CONFIG_SEED_FILE", "", "path to a JSON file of network settings (upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy, internal_hosts) written at boot into a site config that does not have them; a setting the database has is never overwritten. Any other key, or a malformed file, refuses boot. Empty (default) seeds nothing"),
 		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
