@@ -9,6 +9,7 @@
 import * as React from "react";
 import { Button } from "../../../ui/button";
 import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
+import { sectionLabel } from "./part-card";
 
 /** One left-out entry: a host or a field, the unit whose ceiling refused it, and what a change to that ceiling waits for. */
 export interface DroppedItem {
@@ -16,6 +17,10 @@ export interface DroppedItem {
   readonly field?: string;
   readonly unit?: string;
   readonly admin_change_approvals?: number;
+  /** The server's code for why it was left out (internal/assistant/dropped.go). */
+  readonly code?: string;
+  /** A field the server set itself because the draft did not: information, not something the person left out. */
+  readonly filled?: boolean;
 }
 
 function Dropped({ item }: { item: DroppedItem }) {
@@ -24,7 +29,7 @@ function Dropped({ item }: { item: DroppedItem }) {
   const askable = !!item.host && typeof item.admin_change_approvals === "number";
   return (
     <div data-testid="composer-left-out" className="space-y-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2.5 py-2">
-      <p className="text-body text-foreground">{T.LEFT_OUT(item.host ?? item.field ?? "", unit)}</p>
+      <p className="text-body text-foreground">{item.filled ? T.DEFAULT_FILLED(sectionLabel(item.field ?? "")) : T.LEFT_OUT(item.host ?? item.field ?? "", unit)}</p>
       {askable && (
         <>
           <Button type="button" size="sm" variant="outline" aria-expanded={open} onClick={() => setOpen((o) => !o)}>

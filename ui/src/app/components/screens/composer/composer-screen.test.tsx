@@ -402,6 +402,34 @@ describe("when the assistant stops", () => {
     await waitFor(() => expect(message).toHaveBeenCalledWith(expect.any(String), "now allow it"));
   });
 
+  it("sends no chat message after the session's last edit post failed, shows why and keeps what was typed", async () => {
+    edits.mockReset().mockRejectedValue(new Error("The session could not take that edit."));
+    create.mockResolvedValue({ ...SESSION, id: "5b1d2f3a-0000-4000-8000-0000000000c1" });
+    await ready();
+    await push(ev("proposal", { parts: [{ section: "allowed_domains", value: ["github.com"] }], dropped: [] }));
+    await userEvent.click(within(await screen.findByTestId("composer-draft-panel")).getByRole("button", { name: T.PART_ACCEPT }));
+    await userEvent.type(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER }), "now allow it");
+    await userEvent.click(screen.getByRole("button", { name: T.SEND }));
+    await waitFor(() => expect(screen.getAllByRole("alert").map((a) => a.textContent)).toContain("The session could not take that edit."));
+    expect(message).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER })).toHaveValue("now allow it");
+  });
+
+  it("drops a chat message that waited for an edit while its session ended", async () => {
+    let answer: () => void = () => undefined;
+    edits.mockReset().mockImplementation(() => new Promise((ok) => (answer = () => ok({ seq: 1 }))));
+    create.mockResolvedValue({ ...SESSION, id: "5b1d2f3a-0000-4000-8000-0000000000c2" });
+    await ready();
+    await push(ev("proposal", { parts: [{ section: "allowed_domains", value: ["github.com"] }], dropped: [] }));
+    await userEvent.click(within(await screen.findByTestId("composer-draft-panel")).getByRole("button", { name: T.PART_ACCEPT }));
+    await userEvent.type(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER }), "now allow it");
+    await userEvent.click(screen.getByRole("button", { name: T.SEND }));
+    await userEvent.click(screen.getByRole("button", { name: T.END }));
+    await act(async () => answer());
+    await waitFor(() => expect(end).toHaveBeenCalled());
+    expect(message).not.toHaveBeenCalled();
+  });
+
   it("answers a message refused with assistant_off by ending the chat with that reason, keeping the draft", async () => {
     await withDraft();
     message.mockRejectedValueOnce(new HttpError(409, "off", "assistant_off"));

@@ -156,7 +156,9 @@ export const ASSISTANT = {
     `"${h}" is not a host the proxy can match. Write a name like example.com, *.example.com, or an IP address, each with an optional :port.`, // PROPOSED: not on the board
   RULE_HOST_WILDCARD: (h: string) => `"${h}": a rule names one exact host, never a wildcard.`, // PROPOSED: not on the board
   RULE_HOST_BAD: (h: string) => `"${h}": a rule's host is a lower-case host name or an IPv4 address, with no port, path or trailing dot.`, // PROPOSED: not on the board
+  DEFAULT_FILLED: (field: string) => `The server filled in its own default for ${field}, which your draft does not set.`, // PROPOSED
   REVIEW_HELD_LEFT_OUT: "A host in your draft is left out by your ceiling. Take it out of the draft before you review the run.", // PROPOSED
+  REVIEW_HELD_FIELD: (field: string) => `The server narrowed or refused ${field} in your draft. Change it or take it out before you review the run.`, // PROPOSED
   REVIEW_HELD_CHECKING: "Review opens once the checks have answered valid for this draft.", // PROPOSED
   CHANGED_SINCE: "Changed since the assistant's proposal", // PROPOSED
   YOU_CHANGED: (field: string) => `You changed ${field}. Checked again.`, // PROPOSED

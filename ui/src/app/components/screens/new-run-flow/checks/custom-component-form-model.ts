@@ -130,7 +130,8 @@ export function hostError(entry: string): string | null {
  */
 export function hostListError(hosts: readonly string[], judge: (entry: string) => string | null = hostError): string | null {
   for (let i = 0; i < hosts.length; i++) {
-    const e = judge(hosts[i]) ?? (hosts.indexOf(hosts[i]) < i ? T.ERR.HOST_TWICE(hosts[i]) : null);
+    // Entries are read trimmed, so " a.example" and "a.example" are one host.
+    const e = judge(hosts[i]) ?? (hosts.findIndex((h) => h.trim() === hosts[i].trim()) < i ? T.ERR.HOST_TWICE(hosts[i].trim()) : null);
     if (e) return e;
   }
   return null;

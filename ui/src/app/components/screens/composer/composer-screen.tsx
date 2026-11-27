@@ -200,12 +200,19 @@ export function ComposerScreen() {
 
   const send = async (text: string) => {
     if (phase.name !== "session") return;
+    // The session this message was written for: whatever happens while it waits, it is only ever this one's.
+    const id = phase.session.id;
     setChatError(null);
     try {
-      // The person's edits to the draft go first, so the assistant's next turn reads the draft they are looking at.
-      await flushEdits(phase.session.id);
-      await assistant.postMessage(phase.session.id, text);
+      // The person's edits to the draft go first, so the assistant's next turn reads the draft they are looking at; a
+      // draft the session could not take is said, and the message stays in the box.
+      const unsaved = await flushEdits(id);
+      if (live.current !== id) throw new Error("");
+      if (unsaved) throw new Error(unsaved);
+      await assistant.postMessage(id, text);
     } catch (e) {
+      // The session ended or was replaced while the message waited: nothing here belongs to the one now on screen.
+      if (live.current !== id) throw e;
       if (e instanceof HttpError && (e.status === 409 || e.reason === "assistant_role_denied")) {
         // The session is over: the assistant was turned off, its provider no longer serves this person, the person's
         // role no longer allows it, or it ended meanwhile. The chat ends the way an end does, with the assistant's own

@@ -38,6 +38,12 @@ describe("DroppedHosts", () => {
     for (const s of spies) expect(s).not.toHaveBeenCalled();
   });
 
+  it("says a default the server filled in as that, never as something the ceiling disallows", () => {
+    render(<DroppedHosts items={[{ field: "first_use_approval", code: "clamped", unit: "Payments", admin_change_approvals: 2, filled: true }]} />);
+    expect(screen.getByText(T.DEFAULT_FILLED("Any other host"))).toBeInTheDocument();
+    expect(screen.queryByText(T.LEFT_OUT("first_use_approval", "Payments"))).toBeNull();
+  });
+
   it("offers no note for a left-out field, which no admin can add to a ceiling", () => {
     render(<DroppedHosts items={[{ field: "image", unit: "Payments", admin_change_approvals: 2 }]} />);
     expect(screen.getByText(T.LEFT_OUT("image", "Payments"))).toBeInTheDocument();

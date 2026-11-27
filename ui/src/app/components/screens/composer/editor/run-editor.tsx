@@ -19,7 +19,7 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RAIL_CHECK } from "../../../wardyn/copy/new-run-rail";
 import { NEW_RUN_PATH } from "../../new-run-flow/draft/new-run-url";
 import { ChecksStrip } from "./checks-strip";
-import { flushEdits, postEdit } from "./edit-queue";
+import { flushEdits, onEditFailure, postEdit } from "./edit-queue";
 import { DroppedHosts, type DroppedItem } from "./dropped-hosts";
 import { PartCard, sectionLabel, valueLines } from "./part-card";
 
@@ -88,7 +88,7 @@ export function carryKept(from: string, to: string): void {
   kept.set(to, parts);
   // The new session has never seen the draft: it is told once, through the session's own queue, so its next turn does.
   const draft = draftOf(parts);
-  if (Object.keys(draft).length > 0) postEdit(to, draft, new Map(Object.entries(draft).map(([k, v]) => [k, JSON.stringify(v)])), () => undefined);
+  if (Object.keys(draft).length > 0) postEdit(to, draft, new Map(Object.entries(draft).map(([k, v]) => [k, JSON.stringify(v)])));
 }
 
 export { flushEdits };
@@ -148,6 +148,8 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   React.useEffect(() => {
     if (sessionId) kept.set(sessionId, parts);
   }, [sessionId, parts]);
+  // A refused post of an edit, from this editor or from one that was open before it (or the carry post), stays on screen.
+  React.useEffect(() => (sessionId ? onEditFailure(sessionId, setEditFailed) : undefined), [sessionId]);
 
   const act = (section: string, change: (p: PartState) => PartState | null, edit = false) => {
     const next = latest.current.flatMap((p) => {
@@ -163,7 +165,7 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
     setChecks(null);
     if (sessionId) {
       const after = next.find((p) => p.section === section);
-      postEdit(sessionId, draftOf(next), new Map([[section, JSON.stringify(after ? after.value : null)]]), setEditFailed);
+      postEdit(sessionId, draftOf(next), new Map([[section, JSON.stringify(after ? after.value : null)]]));
     }
   };
 
@@ -205,14 +207,19 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
 
   const edited = parts.filter((p) => p.status === "accepted" && p.edited && !same(p.value, p.proposed));
   const checkedAgain = edited.filter((p) => (editedAt[p.section] ?? Infinity) <= answered);
-  const left = mergeDropped(proposal?.dropped ?? [], checks?.dropped);
+  // A clamped field the draft does not set is the server filling in a default: shown as that.
+  const setBy = (field?: string) => !!field && draft[field] !== undefined && draft[field] !== null;
+  const left = mergeDropped(proposal?.dropped ?? [], checks?.dropped).map((d) => (d.code === "clamped" && !setBy(d.field) ? { ...d, filled: true } : d));
 
   // New run gets only what the person saw checked: the checks of this very draft answered valid and left nothing out.
   // The answer carries no clamped policy to hand on instead, so a draft with a left-out host waits for the person.
-  // A host the ceiling refused is the person's to take out; any other entry (a field the server set itself) is shown and
-  // changes nothing they can do.
-  const checkedLeftOut = (checks?.dropped ?? []).some((d) => !!d.host);
-  const reviewable = checks?.valid === true && !checkedLeftOut;
+  // What the person must act on: a host the ceiling refused, a field their grants leave out or the server refuses, and a
+  // field they set that the server narrowed. A clamped field the draft does not set is the server filling in a default:
+  // shown, never held. (Codes: internal/assistant/dropped.go.)
+  const heldBy = (checks?.dropped ?? []).filter((d) => !!d.host || d.code === "not_granted" || d.code === "invalid" || d.code === "unknown_section" || (d.code === "clamped" && setBy(d.field)));
+  const checkedLeftOut = heldBy.some((d) => !!d.host);
+  const heldFields = [...new Set(heldBy.filter((d) => !d.host).map((d) => sectionLabel(d.field ?? "")))];
+  const reviewable = checks?.valid === true && heldBy.length === 0;
 
   const checkAgain = () => {
     setChecks(null);
@@ -281,9 +288,9 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
           <Button type="button" disabled={!reviewable} onClick={review}>
             {NR_SHARED.REVIEW_RUN}
           </Button>
-          {!reviewable && (
-            <p className="text-meta text-muted-foreground">{checkedLeftOut ? T.REVIEW_HELD_LEFT_OUT : T.REVIEW_HELD_CHECKING}</p>
-          )}
+          {checkedLeftOut && <p className="text-meta text-muted-foreground">{T.REVIEW_HELD_LEFT_OUT}</p>}
+          {heldFields.length > 0 && <p className="text-meta text-muted-foreground">{T.REVIEW_HELD_FIELD(heldFields.join(", "))}</p>}
+          {!reviewable && heldBy.length === 0 && <p className="text-meta text-muted-foreground">{T.REVIEW_HELD_CHECKING}</p>}
         </>
       )}
     </div>

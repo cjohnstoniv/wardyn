@@ -21,6 +21,7 @@ describe("Composer components render no copy of their own", () => {
     "composer-phone.tsx",
     "editor/checks-strip.tsx",
     "editor/dropped-hosts.tsx",
+    "editor/edit-queue.ts",
     "editor/part-card.tsx",
     "editor/repo-confirm.tsx",
     "editor/run-editor.tsx",

@@ -13,7 +13,8 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RAIL_CHECK } from "../../../wardyn/copy/new-run-rail";
 import { NEW_RUN_PATH } from "../../new-run-flow/draft/new-run-url";
 import { SUMMARY } from "../../run-detail/policy-tab-copy";
-import { draftOf, flushEdits, mergeDropped, mergeProposal, RunEditor, type EditorProposal, type PartState } from "./run-editor";
+import { sectionLabel } from "./part-card";
+import { carryKept, draftOf, flushEdits, mergeDropped, mergeProposal, RunEditor, type EditorProposal, type PartState } from "./run-editor";
 
 const HOSTS = { section: "allowed_domains", value: ["github.com", "api.github.com"] };
 const CRED = { section: "eligible_grants", value: [{ kind: "git_pat", host: "github.com" }] };
@@ -282,7 +283,7 @@ describe("accepting, discarding and editing", () => {
     await settle(400);
     expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeEnabled();
     expect(screen.queryByText(T.REVIEW_HELD_LEFT_OUT)).toBeNull();
-    expect(screen.getByText(T.LEFT_OUT("first_use_approval", "Payments"))).toBeInTheDocument();
+    expect(screen.getByText(T.DEFAULT_FILLED(sectionLabel("first_use_approval")))).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN }));
     expect(screen.getByTestId("arrived")).toBeInTheDocument();
   });
@@ -331,7 +332,81 @@ describe("accepting, discarding and editing", () => {
     await waiting;
     expect(done).toBe(true);
     expect(edits).toHaveBeenCalledTimes(2);
-    await expect(flushEdits("a-session-that-never-posted")).resolves.toBeUndefined();
+    await expect(flushEdits("a-session-that-never-posted")).resolves.toBeNull();
+  });
+
+  describe("what holds Review", () => {
+    const NET = { section: "allow_all_egress", value: false };
+    const review = () => screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN });
+    const answered = async (dropped: AssistantChecks["dropped"], proposal: EditorProposal = { parts: [NET, HOSTS], dropped: [] }, set = true) => {
+      checks.mockResolvedValue({ ...CHECKS, dropped });
+      editor({ proposal });
+      accept("allow_all_egress");
+      if (set) edit("allow_all_egress", "true");
+      await settle(400);
+    };
+
+    it("holds Review for a field the person set that the server narrowed", async () => {
+      await answered([{ field: "allow_all_egress", code: "clamped", unit: "Payments", admin_change_approvals: 2 }]);
+      expect(review()).toBeDisabled();
+      expect(screen.getByText(T.REVIEW_HELD_FIELD(sectionLabel("allow_all_egress")))).toBeInTheDocument();
+      expect(screen.queryByText(T.REVIEW_HELD_LEFT_OUT)).toBeNull();
+    });
+
+    it("holds Review for a field the person's grants leave out", async () => {
+      await answered([{ field: "allow_all_egress", code: "not_granted", admin_change_approvals: 0 }]);
+      expect(review()).toBeDisabled();
+      expect(screen.getByText(T.REVIEW_HELD_FIELD(sectionLabel("allow_all_egress")))).toBeInTheDocument();
+    });
+
+    it.each(["invalid", "unknown_section"])("holds Review for a value the server refuses as %s", async (code) => {
+      await answered([{ field: "allow_all_egress", code, admin_change_approvals: 0 }]);
+      expect(review()).toBeDisabled();
+    });
+
+    it("holds Review for allowed_methods the server narrowed", async () => {
+      checks.mockResolvedValue({ ...CHECKS, dropped: [{ field: "allowed_methods", code: "clamped", admin_change_approvals: 0 }] });
+      editor({ proposal: { parts: [{ section: "allowed_methods", value: ["GET", "DELETE"] }], dropped: [] } });
+      accept("allowed_methods");
+      await settle(400);
+      expect(review()).toBeDisabled();
+      expect(screen.getByText(T.REVIEW_HELD_FIELD(sectionLabel("allowed_methods")))).toBeInTheDocument();
+    });
+
+    it("lets Review go ahead when the server only filled in a default for a field the draft does not set", async () => {
+      await answered([{ field: "first_use_approval", code: "clamped", unit: "Payments", admin_change_approvals: 2 }]);
+      expect(review()).toBeEnabled();
+      expect(screen.getByText(T.DEFAULT_FILLED(sectionLabel("first_use_approval")))).toBeInTheDocument();
+      expect(screen.queryByText(T.REVIEW_HELD_FIELD(sectionLabel("first_use_approval")))).toBeNull();
+    });
+
+    it("lets Review go ahead when the field the server clamped holds no value in the draft", async () => {
+      await answered([{ field: "allow_all_egress", code: "clamped", admin_change_approvals: 0 }], { parts: [{ section: "allow_all_egress", value: null }, HOSTS], dropped: [] }, false);
+      expect(review()).toBeEnabled();
+    });
+  });
+
+  it("reports a failed last post when a caller waits for the session's edits, and nothing once a later one is taken", async () => {
+    edits.mockRejectedValueOnce(new Error("The session could not take that edit."));
+    editor();
+    accept("allowed_domains");
+    await expect(flushEdits(SESSION())).resolves.toBe("The session could not take that edit.");
+    accept("eligible_grants");
+    await expect(flushEdits(SESSION())).resolves.toBeNull();
+  });
+
+  it("shows a refused carry post to the editor that opens for the session", async () => {
+    const from = SESSION();
+    const to = `${from}-carried`;
+    edits.mockImplementation((id) => (id === to ? Promise.reject(new Error("The new session could not take the draft.")) : Promise.resolve({ seq: 1 })));
+    const first = editor();
+    accept("allowed_domains");
+    await settle();
+    first.unmount();
+    carryKept(from, to);
+    await settle();
+    render(<MemoryRouter><RunEditor proposal={PROPOSAL} sessionId={to} /></MemoryRouter>);
+    expect(screen.getByRole("alert")).toHaveTextContent("The new session could not take the draft.");
   });
 
   it("takes a discarded part out of the draft and tells the session", async () => {
