@@ -117,6 +117,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	extras.windowsVM = enableWindowsVM(ctx, sub, extras.linuxVM, os.Getenv)
 	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, stateDir, sub.EndVM)
@@ -407,7 +408,8 @@ type runtimeExtras struct {
 	closeAlso func() error
 	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
 	// runner's caps offer; nil offers none and refuses create_vm.
-	linuxVM *runnerwire.VMCaps
+	linuxVM   *runnerwire.VMCaps
+	windowsVM *runnerwire.VMCaps // enableWindowsVM: Windows VM sandboxes beside Linux ones; nil offers none
 	// macOSVM, set when the operator turned macOS VM sandboxes on (enableMacOSVM), builds the caps'
 	// macos_vm and resends them when they change; nil offers none.
 	macOSVM *macOSVMs
@@ -467,12 +469,14 @@ func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keysto
 }
 
 // hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
-// supports, its name, version and arch, whether it keeps a sandbox after the run ends, and whether it can
-// cut an agent off its networks (ProxyFence: the substrate's, never the process's).
+// supports, its name, version and arch, whether it keeps a sandbox after the run ends, whether it can
+// cut an agent off its networks (ProxyFence: the substrate's, never the process's), and whether a run
+// moved to it reads present before it starts (MoveImportPresent: the substrate's too).
 func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
 	_, keeps := sub.(runner.SandboxEnder)
 	_, fences := sub.(runner.ProxyFencer)
 	_, narrows := sub.(runner.ProxyNarrower)
+	_, importPresent := sub.(runner.MoveImportPresenter)
 	support, err := sub.Classes(ctx)
 	if err != nil {
 		return runnerwire.Caps{}, err
@@ -482,7 +486,8 @@ func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runner
 	if arch == "" {
 		arch = engineArch(ctx)
 	}
-	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows}, nil
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows,
+		MoveState: true, MoveImportPresent: importPresent}, nil
 }
 
 // checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
@@ -555,7 +560,8 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
-		WorkloadStatus: extra.workloadStatus,
+		WorkloadStatus: extra.workloadStatus, WindowsVM: extra.windowsVM != nil,
+		SpoolDrained: manager.SpoolDrained, MoveUnbound: manager.MoveUnbound,
 	})
 	if err != nil {
 		return runnerRuntime{}, err

@@ -107,6 +107,12 @@ const (
 	MethodAbortSnapshot   = "abort_snapshot"
 	MethodDeleteSnapshot  = "delete_snapshot"
 	MethodListSnapshots   = "list_snapshots"
+	// MethodMoveExport, MethodMoveImport and MethodMoveUnbound carry a paused run's files to another placement
+	// (move.go). They are sent only to a runner whose caps carry MoveState; an older runner would refuse them
+	// as unknown calls.
+	MethodMoveExport  = "move_export"
+	MethodMoveImport  = "move_import"
+	MethodMoveUnbound = "move_unbound"
 )
 
 // kept_machine's ops. KeptMachineOpDelete removes a machine whatever its deadline says: a person's or an

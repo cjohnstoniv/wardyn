@@ -658,3 +658,90 @@ func TestEverySealLayerIsListed(t *testing.T) {
 		t.Errorf("seal layers = %v, want sealLayerCensus %v", got, sealLayerCensus)
 	}
 }
+
+// moveImportViolations is the move's import census over files: every call of ImportSandbox or ImportSandboxOn
+// outside createMoveDestination, and every ProxyConfig the destination's spec could carry (a ProxyConfig set in
+// createMoveDestination or in moveSandboxSpec, the builder whose spec it imports). A moved run's policy comes only
+// from the sealed revive that starts it after commit.
+func moveImportViolations(fset *token.FileSet, files map[string]*ast.File) []string {
+	var out []string
+	builders := []string{"createMoveDestination", "moveSandboxSpec"}
+	for name, f := range files {
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.CallExpr:
+					if sel, ok := n.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "ImportSandbox" || sel.Sel.Name == "ImportSandboxOn") &&
+						fn.Name.Name != "createMoveDestination" {
+						out = append(out, fmt.Sprintf("%s %s calls %s", name, fn.Name.Name, sel.Sel.Name))
+					}
+				case *ast.KeyValueExpr:
+					if id, ok := n.Key.(*ast.Ident); ok && id.Name == "ProxyConfig" && slices.Contains(builders, fn.Name.Name) {
+						out = append(out, fmt.Sprintf("%s %s sets ProxyConfig at %s", name, fn.Name.Name, fset.Position(n.Pos())))
+					}
+				case *ast.AssignStmt:
+					for _, lhs := range n.Lhs {
+						if isField(lhs, "ProxyConfig") && slices.Contains(builders, fn.Name.Name) {
+							out = append(out, fmt.Sprintf("%s %s sets ProxyConfig at %s", name, fn.Name.Name, fset.Position(n.Pos())))
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestMoveImportHandsNoPolicy: createMoveDestination is the only caller of the import, and the spec it imports
+// carries no proxy config.
+func TestMoveImportHandsNoPolicy(t *testing.T) {
+	fset, files := parsePackageSources(t, ".")
+	if got := moveImportViolations(fset, files); len(got) != 0 {
+		t.Errorf("the move's import hands a policy or has another caller: %v", got)
+	}
+	var calls int
+	for _, d := range files["run_move_dest.go"].Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "createMoveDestination" {
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "ImportSandbox" || sel.Sel.Name == "ImportSandboxOn") {
+						calls++
+					}
+				}
+				return true
+			})
+		}
+	}
+	if calls == 0 {
+		t.Error("createMoveDestination no longer imports: the census reads nothing")
+	}
+}
+
+// TestMoveImportHandsNoPolicy_Planted: a second importer and a proxy config in the destination's spec are each seen.
+func TestMoveImportHandsNoPolicy_Planted(t *testing.T) {
+	for name, src := range map[string]string{
+		"second caller": `package api
+func (s *Server) importTwin() { s.cfg.Runner.(runner.StateImporter).ImportSandbox(nil, spec, set, 0, nil) }`,
+		"proxy config in the builder": `package api
+func moveSandboxSpec() runner.SandboxSpec { return runner.SandboxSpec{ProxyConfig: cfg} }`,
+		"proxy config assigned": `package api
+func (s *Server) createMoveDestination() { b.spec.ProxyConfig = cfg }`,
+	} {
+		fset, files := parsePackageSources(t, ".")
+		delete(files, "run_move_dest.go")
+		f, err := parser.ParseFile(fset, "planted.go", src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files["planted.go"] = f
+		if got := moveImportViolations(fset, files); len(got) != 1 || !strings.HasPrefix(got[0], "planted.go") {
+			t.Errorf("%s went unseen: %v", name, got)
+		}
+	}
+}

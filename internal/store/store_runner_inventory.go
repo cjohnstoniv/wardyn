@@ -90,6 +90,7 @@ type RunnerInventoryResult struct {
 	Containment []RunContainmentEvent
 	// LocalContain lists the runs the page first reported a local operator contained, audited after it commits.
 	LocalContain []LocalContainEvent
+	MoveIgnored  []uuid.UUID // runs whose rows were skipped as a move left them (moveIgnoredRowTx), logged by the caller
 }
 
 // LocalContainEvent is one run a runner first reported contained by a local operator on its host
@@ -195,6 +196,11 @@ func (s PG) IntakeRunnerStatePage(ctx context.Context, runnerID uuid.UUID, sessi
 		return out, err
 	}
 	for _, row := range page.Runs {
+		if skip, err := moveIgnoredRowTx(ctx, tx, runnerID, row.RunID, &out.MoveIgnored); err != nil {
+			return out, err
+		} else if skip {
+			continue
+		}
 		// The latch is recorded first, on this transaction, so this row's STATE judge already reads it.
 		lc, err := intakeLocalContainTx(ctx, tx, runnerID, row)
 		if err != nil {

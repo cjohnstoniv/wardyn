@@ -135,8 +135,8 @@ func (s *Server) imageAdmissionOf(r *http.Request, ref string, kind types.Machin
 	if siteEnforced || len(profile) > 0 {
 		held = types.ImageAdmissionEnforce
 	}
-	// A macOS VM never runs the member image (its only container is the egress proxy), so there is nothing to check.
-	if kind.IsMacOSVM() {
+	// A macOS VM (its only container is the egress proxy) and a Windows VM (its registered ref) never run the member image.
+	if !kind.RunsMemberImage() {
 		return &types.ImageAdmissionVerdict{Mode: held, Verdict: types.ImageAdmissionNotApplicable}, "", nil
 	}
 	var verdict *types.ImageAdmissionVerdict
@@ -308,7 +308,7 @@ func siteImageAdmission(sc types.SiteConfig) *types.SiteImageAdmission {
 // it would not: no member image and no extra container, an operator or the break-glass admin, a macOS VM, or the site mode off with no profile
 // signer. It reads no registry. An unreadable site config reports the check, since launch then refuses.
 func (s *Server) imageAdmissionPreview(ctx context.Context, req createRunRequest, carried string, profile []string) client.ImageAdmissionFact {
-	if (createDigestInput(req, carried) == "" && len(req.Containers) == 0) || s.runUngoverned(ctx) || types.MachineKind(req.MachineKind).IsMacOSVM() {
+	if (createDigestInput(req, carried) == "" && len(req.Containers) == 0) || s.runUngoverned(ctx) || !types.MachineKind(req.MachineKind).RunsMemberImage() {
 		return ""
 	}
 	if sc, ok := s.siteConfigSnapshot(ctx); ok || s.cfg.Store == nil {

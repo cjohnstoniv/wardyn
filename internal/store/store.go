@@ -67,16 +67,18 @@ func runInsertFor(r types.AgentRun, plain string) string {
 // admission and the row. $43 and $44 are the pool id and revision columns' own placeholders.
 const runnerPoolFence = `(SELECT id FROM runner_pools WHERE id = $43 AND revision = $44 AND state = 'active' FOR SHARE)`
 
-// runInsertErr names a pool-fence failure (ErrRunnerPoolStale, store_runner_pools.go) and a portal-fence failure
-// (ErrPortalRevoked); any other error passes through unchanged.
+// runInsertErr names a pool-fence failure (ErrRunnerPoolStale, store_runner_pools.go), a portal-fence failure
+// (ErrPortalRevoked) and a Windows licence fence failure (windowsInsertErr); any other error passes through unchanged.
 func runInsertErr(err error) error {
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) && pe.Code == "23514" {
-		switch pe.ConstraintName {
-		case "agent_runs_runner_pool_binding":
+		switch cn := pe.ConstraintName; {
+		case cn == "agent_runs_runner_pool_binding":
 			return ErrRunnerPoolStale
-		case "agent_runs_portal_drive_fence":
+		case cn == "agent_runs_portal_drive_fence":
 			return ErrPortalRevoked
+		case strings.HasPrefix(cn, "windows_"):
+			return windowsInsertErr(cn)
 		}
 	}
 	return err
@@ -406,8 +408,8 @@ func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 // SetRunImage scoped-writes ONLY the resolved-image provenance column, once
 // the image resolves after the row is inserted.
 func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
-	return s.execRun(ctx, "set run image",
-		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id)
+	return windowsFenceErr(s.execRun(ctx, "set run image",
+		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id))
 }
 
 // SetRunImageArches scoped-writes ONLY the architectures the run's prewrapped image was checked on, once

@@ -41,6 +41,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn-runnerd contain --run <id>` or `--all` stops a run's proxy on its runner host and drops its later leases while the organisation cannot be reached; the organisation records it from the runner's next STATE page and refuses the run's revive (#4083).
 - Machine kinds at a site: a `machine_kind_denials` entry can name a `site_id`, so a super admin can deny a machine kind on runners of one trust class at one site and allow it at another. The entry holds only on runners whose pool is at that site, and only while sites are on; the refusal names the site.
 - `WARDYN_IDENTITY_NARROWING` (`audit` by default) records, and under `enforce` applies, two narrowings by the identities behind a request (#4073).
+- Windows VM sandboxes (`machine_kind: "windows_vm"`, `windows_image`): a desktop-only Windows guest on an organization runner, started from an image your organisation registers, with one seat of a licence pool per running VM. Admins manage pools, holders and images under `/windows-licence-pools` and `/windows-images` ([Windows VM sandboxes](docs/operations/windows-vm-sandboxes.md)). Windows VM sandboxes have not yet been tried with a real Windows image on a real host. The checks that run on every backend change cover the VM's settings, the licence pool's limits, the network path and the start of the VM's firmware. They do not boot Windows. A Windows VM run needs recording off in the policy that launches it: on an install that keeps recordings and sets no level, a plain launch is refused until that policy says off.
 
 ### Changed
 
@@ -148,6 +149,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Preview URLs for a run's ports are new and off by default. Turn them on with `features.preview_urls.enabled` in site config. `features.preview_urls.max_visibility` (`private`, the default, or `org`) is the widest any preview may be. Organisation previews need per-run hosts (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`). Viewing a preview does not keep its run awake or wake a paused run; work the run does to answer it counts as the run's own activity. Migration `0406_run_previews` adds a table. On a split-role install, run it as the migrator: it grants the app role the new table the way the role already has `run_attach_leases`.
 - Opening a Linux VM run in a window on your own computer (`wardyn window <run>`) is new and off by default. Turn it on with `features.local_window.enabled` in site config; a runner that is already connected picks the change up when it next connects. Update the runner on that computer and the `wardyn` CLI to 0.11.0 first: an older runner cannot open the window. The window needs a Linux computer.
 - Run proxies older than this release cannot pause or recover: an operator who pins the proxy image keeps today's one-hour outage limit for those runs. A runner agent older than this release also stops a pausing proxy at that limit: upgrade runner agents with the server.
+- Moving a paused run to another machine is new and cannot be switched on yet: site config refuses `features.run_move` until a later release candidate.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on
+  `run_moves`, `SELECT, INSERT` on `run_placements`, and `SELECT, INSERT, DELETE` on `run_sandbox_specs`, to every role
+  that was granted `DELETE` on the attach leases table (run_attach_leases), other than that table's owner. If the app
+  role is not one of those roles or a member of one, grant it the same on each table as soon as the migration has run.
+  The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover these three tables: the migration takes every other
+  privilege on them away from every role but their owner. Until the app role is granted `DELETE` on
+  `run_sandbox_specs`, a terminal run's sealed spec is not deleted; its proxy config still is.
+- Windows VM sandboxes are off until an admin sets `features.windows_vm.enabled` in the site config and a runner's operator sets `WARDYN_RUNNER_WINDOWS_VM=1`. Wardyn does not supply, download or activate Windows: your organisation registers its own image and is responsible for its licences. Migrations `0400_windows_licences` and `0401_windows_vm_kind` add the tables `windows_licence_pools`, `windows_licence_holders`, `windows_images` and `windows_licence_leases`, three triggers on `agent_runs`, and `windows_vm` to `agent_runs.machine_kind`; split-role installs grant the app role the new tables (read only on `windows_licence_leases`). Stop every wardynd older than 0.11 first: an older server cannot read a `windows_vm` run. Runners that offer Windows VMs need the 0.11 QEMU image. Windows VM sandboxes have not yet been tried with a real Windows image on a real host.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT` on `windows_licence_leases`, and
+  `SELECT, INSERT, UPDATE, DELETE` on `windows_licence_pools`, `windows_licence_holders` and `windows_images`, to every role that
+  was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, grant it the same on each table as soon as the migration has run: the `ALTER DEFAULT PRIVILEGES` step in
+  Operations no longer covers the leases, since the migration takes back every other grant on them. Seats are taken and
+  freed only by the migrations' triggers, which run as the table owner.
 
 ## [0.11.0-rc.4] — 2026-11-26
 

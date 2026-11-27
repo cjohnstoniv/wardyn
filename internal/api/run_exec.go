@@ -140,6 +140,11 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	at, actor := actorFromRequest(r)
+	if rf := windowsVMDoorRefusal(run, "exec"); rf != nil { // the kind never changes after insert, so this read holds
+		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": rf.body.Error})
+		rf.write(s, w, r)
+		return
+	}
 	fresh, start, msg := s.execFreshRun(ctx, run.ID, actor)
 	if msg != "" {
 		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).

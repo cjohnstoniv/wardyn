@@ -229,7 +229,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		if s.refuseSupportTicket(w, r, run, purpose) {
 			return
 		}
-	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt); !ok {
+	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt, purpose); !ok {
 		return
 	}
 	// A sponsor reaches the terminal and the UI app only: no SSH or port forward ticket (the only purposes a scope

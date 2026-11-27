@@ -111,7 +111,7 @@ func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe,
 	caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = c.capacity(ctx), c.dispatcher.Selftests(), true, c.dispatcher.Residents()
 	caps.ViaOrgADO = true
 	caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = c.extra.proxySettings(), c.extra.driveRoots, c.extra.localModelPorts
-	caps.LinuxVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.macOSVM.current(), c.hasLocal
+	caps.LinuxVM, caps.WindowsVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.windowsVM, c.extra.macOSVM.current(), c.hasLocal
 	caps.LocalWindow = c.hasLocal && c.extra.linuxVM != nil
 	_, snapshots := c.sub.(runner.Snapshotter)
 	caps.Snapshots = snapshots && c.extra.linuxVM != nil // a Docker runner's Linux VMs

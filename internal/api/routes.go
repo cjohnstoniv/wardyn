@@ -230,6 +230,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
 			r.Post("/runs/{id}/resume", s.handleResumeRun)
+			s.registerRunMoveRoutes(r)
 			r.Post("/runs/{id}/exec", s.handleRunExec) // one command, as an SSH exec runs it, by the person who may enter the run (run_exec.go)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
@@ -300,10 +301,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/audit/export", s.handleExportAudit)
 			// Tamper-evidence sweep over the audit hash chain (migration 0047), plus the sandbox sweep: one per tier.
 			s.adminRoutes(operatorOnly, securityOps)
-			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
-			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
-			s.registerOrgSiteRoutes(r, operatorOnly, securityOps) // org_sites.go: adds refused while features.org_sites is off
-			s.mountWorkloadRoutes(r, securityOps)                 // workloads.go: the caller's own workloads; the bindings are the security tier's
+			s.mountRunnerRevokeRoutes(r, securityOps)                    // runner_revoke.go: the security tier, or the runner's own owner
+			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps)        // runner_pools.go: 501 until the pool storage lands
+			s.registerWindowsLicenceRoutes(r, operatorOnly, securityOps) // windows_licences.go: pools and holders SUPER, images the security tier
+			s.registerOrgSiteRoutes(r, operatorOnly, securityOps)        // org_sites.go: adds refused while features.org_sites is off
+			s.mountWorkloadRoutes(r, securityOps)                        // workloads.go: the caller's own workloads; the bindings are the security tier's
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
 			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust
 			s.mountTemplateRoutes(r, operatorOnly)

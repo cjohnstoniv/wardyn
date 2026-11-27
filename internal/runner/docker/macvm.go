@@ -162,6 +162,8 @@ func (d *Driver) CoversKind(kind types.MachineKind) bool {
 		return true
 	case types.MachineMacOSVM:
 		return d.macVMConfig() != nil
+	case types.MachineWindowsVM:
+		return d.winVMConfig() != nil
 	}
 	return false
 }

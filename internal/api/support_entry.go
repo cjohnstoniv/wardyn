@@ -109,6 +109,7 @@ const (
 	supportIneligibleService    = "service"
 	supportIneligibleBackground = "background"
 	supportIneligibleReserved   = "reserved_task"
+	supportIneligibleWindowsVM  = "windows_vm"
 )
 
 // supportRunIneligible names why run cannot take a helper, or "" when it can: it must be RUNNING and not lost, a
@@ -132,6 +133,8 @@ func (s *Server) supportRunIneligible(run types.AgentRun) string {
 		return supportIneligibleBackground
 	case reservedRunTasks[run.Task]:
 		return supportIneligibleReserved
+	case run.MachineKind == types.MachineWindowsVM: // its one desktop is newest-wins: a helper would close the owner's
+		return supportIneligibleWindowsVM
 	}
 	return ""
 }

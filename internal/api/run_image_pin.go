@@ -72,7 +72,7 @@ func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRu
 		return "", refusal
 	}
 	mode := adm.EffectiveMode()
-	if image == "" || run.MachineKind.IsMacOSVM() || mode == types.ImageAdmissionOff ||
+	if image == "" || !run.MachineKind.RunsMemberImage() || mode == types.ImageAdmissionOff ||
 		adm.EffectiveScope() != types.ImageAdmissionScopeAll || s.runUngoverned(ctx) {
 		return image, s.recordImageOrigin(ctx, run, mode, types.ImageOriginConvention)
 	}

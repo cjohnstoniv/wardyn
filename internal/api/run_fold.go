@@ -128,6 +128,8 @@ type runFold struct {
 	// and the run.create row carry; nil when no check applied.
 	admission  *types.ImageAdmissionVerdict
 	containers []types.RunExtraContainer // the run's extras with their verdicts (stepContainerAdmission); nil for none
+	// windowsFold is stepWindowsImage's: a windows_vm run's registered image and the seat it takes.
+	windowsFold
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -209,6 +211,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPortalUnit, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
+	{(*Server).stepWindowsImage, foldAll},
 	{(*Server).stepComputerFolderDataOut, foldAll},
 	{(*Server).stepLocalFolderWalls, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
@@ -234,6 +237,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepContainersPlacement, foldAll},
 	{(*Server).stepMCPSandbox, foldAll},
+	{(*Server).stepWindowsPlacement, foldAll},
 	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepDenyLists, foldAll},

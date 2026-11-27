@@ -5,9 +5,13 @@ package runneragent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,9 +19,11 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestDispatcherChecksRunnerAndDurableGuardBeforeCreate(t *testing.T) {
@@ -336,4 +342,237 @@ func TestDispatch_NarrowProxyRoutes(t *testing.T) {
 	if _, err := callRefArgs(t, d, runnerwire.MethodNarrowProxy, runnerwire.NarrowProxyArgs{Ref: ref, Deny: []string{"a.example"}}); !errors.Is(err, runner.ErrNarrowNotSent) {
 		t.Errorf("a substrate's ErrNarrowNotSent came back as %v", err)
 	}
+}
+
+// movingFake is runnertest's fake with a substrate's export and import, recording what reached them.
+type movingFake struct {
+	*runnertest.Fake
+	mu       sync.Mutex
+	exported []string
+	imported []string
+}
+
+func (m *movingFake) ExportState(_ context.Context, ref string, _ runner.CarriedSet) (runner.StateExport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exported = append(m.exported, ref)
+	return runner.StateExport{Stream: io.NopCloser(strings.NewReader("exported files")), SpoolDrained: true}, nil
+}
+
+func (m *movingFake) ImportSandbox(_ context.Context, spec runner.SandboxSpec, _ runner.CarriedSet, _ int64, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
+	b, err := io.ReadAll(carried)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.imported = append(m.imported, spec.RunID.String()+":"+string(b))
+	return runner.Sandbox{Ref: "imported-ref", Driver: "fake"}, runner.CarriedManifest{Entries: 1, Digest: "d"}, err
+}
+
+// TestDispatch_MoveMethodsRoute: each of the three move methods reaches its handler through Call's move
+// case (the substrate's export and import, and the unbound notice), end to end from the org's client. Without
+// the case they fall to refCall and none does. A substrate without an export or import is refused, and so are
+// a call the runner cannot serve (no run id, another runner, a VM, no byte bound, a foreign or unproven ref)
+// and one the org's client must not send (no MoveState in the caps, a foreign ref, a stream of another kind).
+func TestDispatch_MoveMethodsRoute(t *testing.T) {
+	runnerID := uuid.NewString()
+	sub := &movingFake{Fake: runnertest.NewFake()}
+	var unbound []string
+	var mu sync.Mutex
+	d, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: sub,
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+		SpoolDrained: func(context.Context, string) (bool, error) { return true, nil },
+		MoveUnbound: func(_ context.Context, id uuid.UUID, ref string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			unbound = append(unbound, id.String()+":"+ref)
+			return nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := movingOrg(t, runnerID, d)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	set := runner.CarriedSet{Roots: []string{"/home/agent/work"}}
+	ref := placement.RunnerRefPrefix(runnerID) + "fake-ref"
+
+	out, err := org.ExportState(ctx, ref, set)
+	if err != nil {
+		t.Fatalf("move_export = %v; want the substrate's export", err)
+	}
+	got, err := io.ReadAll(out.Stream)
+	_ = out.Stream.Close()
+	if err != nil || string(got) != "exported files" || !out.SpoolDrained {
+		t.Errorf("export stream = %q, %v, drained %v; want the substrate's bytes, drained", got, err, out.SpoolDrained)
+	}
+
+	runID := uuid.New()
+	sb, m, err := org.ImportSandbox(ctx, runner.SandboxSpec{RunID: runID, RunnerID: runnerID, Image: "agent:1"}, set, 1<<20, strings.NewReader("carried files"))
+	if err != nil {
+		t.Fatalf("move_import = %v; want the substrate's import", err)
+	}
+	if sb.Ref != placement.RunnerRefPrefix(runnerID)+"imported-ref" || m.Digest != "d" {
+		t.Errorf("import answered %+v, %+v; want the runner's ref and the importer's manifest", sb, m)
+	}
+
+	if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: ref}); err != nil {
+		t.Fatalf("move_unbound = %v; want nil", err)
+	}
+
+	sub.mu.Lock()
+	exported, imported := sub.exported, sub.imported
+	sub.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(exported) != 1 || exported[0] != "fake-ref" {
+		t.Errorf("exports reaching the substrate = %v; want [fake-ref]", exported)
+	}
+	if len(imported) != 1 || imported[0] != runID.String()+":carried files" {
+		t.Errorf("imports reaching the substrate = %v; want the run's carried files", imported)
+	}
+	if len(unbound) != 1 || unbound[0] != runID.String()+":fake-ref" {
+		t.Errorf("notices reaching the runner = %v; want the run's local ref", unbound)
+	}
+
+	// A substrate that can neither export nor import refuses both, and touches nothing.
+	bare, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: struct{ substrate.Substrate }{runnertest.NewFake()},
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	borg := movingOrg(t, runnerID, bare)
+	var refusal *runnerwire.Error
+	if _, err := borg.ExportState(ctx, ref, set); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+		t.Errorf("export on a substrate without one = %v; want a refusal", err)
+	}
+	if _, _, err := borg.ImportSandbox(ctx, runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID}, set, 1<<20, strings.NewReader("x")); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+		t.Errorf("import on a substrate without one = %v; want a refusal", err)
+	}
+
+	// The runner refuses a call it cannot serve before any substrate call or stream.
+	refused := func(t *testing.T, d *Dispatcher, method string, args any) {
+		t.Helper()
+		var refusal *runnerwire.Error
+		if _, err := callRefArgs(t, d, method, args); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+			t.Fatalf("%s = %v; want a refusal", method, err)
+		}
+	}
+	good := runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID, Image: "agent:1"}
+	for _, row := range []struct {
+		name   string
+		method string
+		args   any
+	}{
+		{"an import with no run id", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: runner.SandboxSpec{RunnerID: runnerID}, Set: set, MaxBytes: 1 << 20}},
+		{"an import for another runner", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: uuid.NewString()}, Set: set, MaxBytes: 1 << 20}},
+		{"an import of a VM", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID, MachineKind: types.MachineLinuxVM}, Set: set, MaxBytes: 1 << 20}},
+		{"an import with no byte bound", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: good, Set: set}},
+		{"an export of another runner's ref", runnerwire.MethodMoveExport, runnerwire.MoveExportArgs{Ref: placement.RunnerRefPrefix(uuid.NewString()) + "fake-ref", Set: set}},
+		{"a notice for another runner's ref", runnerwire.MethodMoveUnbound, runner.MoveUnbound{RunID: runID, Ref: placement.RunnerRefPrefix(uuid.NewString()) + "fake-ref"}},
+	} {
+		t.Run(row.name, func(t *testing.T) { refused(t, d, row.method, row.args) })
+	}
+	t.Run("an export of a sandbox this runner cannot prove its own", func(t *testing.T) {
+		unowned, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: &movingFake{Fake: runnertest.NewFake()},
+			HoldsSandbox: func(string) bool { return false },
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused(t, unowned, runnerwire.MethodMoveExport, runnerwire.MoveExportArgs{Ref: ref, Set: set})
+	})
+
+	// The organisation's client refuses before the wire: a runner whose caps lack MoveState, a ref of
+	// another runner, and a runner that answers with a stream of another kind.
+	t.Run("caps without MoveState", func(t *testing.T) {
+		quiet := &movingFake{Fake: runnertest.NewFake()}
+		var notices atomic.Int32
+		qd, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: quiet,
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+			// The runner would record a notice, so only the org's client gate refuses one.
+			MoveUnbound: func(context.Context, uuid.UUID, string) error { notices.Add(1); return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		org := movingOrg(t, runnerID, qd)
+		caps, _ := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}})
+		org.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+		if _, err := org.ExportState(ctx, ref, set); err == nil {
+			t.Error("export to a runner without MoveState was sent")
+		}
+		if _, _, err := org.ImportSandbox(ctx, good, set, 1<<20, strings.NewReader("x")); err == nil {
+			t.Error("import to a runner without MoveState was sent")
+		}
+		if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: ref}); err == nil {
+			t.Error("notice to a runner without MoveState was sent")
+		}
+		if len(quiet.exported)+len(quiet.imported) != 0 || notices.Load() != 0 {
+			t.Errorf("calls reached the runner: exports %v, imports %v, %d notices", quiet.exported, quiet.imported, notices.Load())
+		}
+	})
+	t.Run("a ref of another runner", func(t *testing.T) {
+		foreign := placement.RunnerRefPrefix(uuid.NewString()) + "fake-ref"
+		if _, err := org.ExportState(ctx, foreign, set); !errors.Is(err, remote.ErrForeignRef) {
+			t.Errorf("export of a foreign ref = %v; want ErrForeignRef", err)
+		}
+		if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: foreign}); !errors.Is(err, remote.ErrForeignRef) {
+			t.Errorf("notice for a foreign ref = %v; want ErrForeignRef", err)
+		}
+	})
+	t.Run("a stream of another kind", func(t *testing.T) {
+		wrong := wrongKindOrg(t, runnerID)
+		if _, err := wrong.ExportState(ctx, ref, set); err == nil || !strings.Contains(err.Error(), "stream") {
+			t.Errorf("export answered with an exec stream = %v; want it refused", err)
+		}
+		if _, _, err := wrong.ImportSandbox(ctx, good, set, 1<<20, strings.NewReader("x")); !errors.Is(err, runner.ErrMoveFiles) ||
+			!strings.Contains(err.Error(), `with a "exec" stream`) {
+			t.Errorf("import answered with an exec stream = %v; want it refused for the stream's kind", err)
+		}
+	})
+}
+
+// movingOrg is the org's client of d over a loopback link, with caps that say the runner serves moves.
+func movingOrg(t *testing.T, runnerID string, d *Dispatcher) *remote.Substrate {
+	t.Helper()
+	link := &remote.Link{}
+	org := remote.New(runnerID, link, remote.Options{})
+	caps, _ := json.Marshal(runnerwire.Caps{MoveState: true, Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}})
+	org.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+	orgEnd, runEnd := runnerwire.Loopback()
+	op := link.Attach(t.Context(), orgEnd)
+	var rp *runnerwire.Peer
+	rp = runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{OnCall: func(ctx context.Context, call uint32, method string, raw json.RawMessage) (any, error) {
+		return d.Call(ctx, rp, call, method, raw)
+	}})
+	go rp.Run(t.Context())
+	t.Cleanup(func() { rp.Close(); op.Close() })
+	return org
+}
+
+// wrongKindOrg is the org's client of a runner that answers both move stream calls with an exec stream.
+func wrongKindOrg(t *testing.T, runnerID string) *remote.Substrate {
+	t.Helper()
+	link := &remote.Link{}
+	org := remote.New(runnerID, link, remote.Options{})
+	caps, _ := json.Marshal(runnerwire.Caps{MoveState: true, Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}})
+	org.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+	orgEnd, runEnd := runnerwire.Loopback()
+	op := link.Attach(t.Context(), orgEnd)
+	var rp *runnerwire.Peer
+	rp = runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{OnCall: func(ctx context.Context, call uint32, method string, _ json.RawMessage) (any, error) {
+		st, err := rp.Open(ctx, runnerwire.Open{Kind: runnerwire.KindExec, Call: call})
+		if err != nil {
+			return nil, err
+		}
+		if method == runnerwire.MethodMoveExport {
+			return runnerwire.MoveExportResult{Stream: st.ID()}, nil
+		}
+		return runnerwire.StreamResult{Stream: st.ID()}, nil
+	}})
+	go rp.Run(t.Context())
+	t.Cleanup(func() { rp.Close(); op.Close() })
+	return org
 }

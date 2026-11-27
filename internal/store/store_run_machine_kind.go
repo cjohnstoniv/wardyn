@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// SetRunVMMachine scoped-writes the virtual hardware a VM run (either kind) was started with, once, after
+// SetRunVMMachine scoped-writes the virtual hardware a VM run (any VM kind) was started with, once, after
 // its create. A container run's row is never touched.
 func (s PG) SetRunVMMachine(ctx context.Context, id uuid.UUID, m types.VMMachine) error {
 	b, err := json.Marshal(m)
@@ -21,7 +21,7 @@ func (s PG) SetRunVMMachine(ctx context.Context, id uuid.UUID, m types.VMMachine
 		return fmt.Errorf("store: marshal vm machine: %w", err)
 	}
 	return s.execRun(ctx, "set run vm machine",
-		`UPDATE agent_runs SET vm_machine=$1, updated_at=now() WHERE id=$2 AND machine_kind IN ('linux_vm','macos_vm')`, b, id)
+		`UPDATE agent_runs SET vm_machine=$1, updated_at=now() WHERE id=$2 AND machine_kind IN ('linux_vm','macos_vm','windows_vm')`, b, id)
 }
 
 // scanRunMachine sets a run's machine kind and, for a VM run, the machine recorded for it, from

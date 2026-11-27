@@ -659,6 +659,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
 		return
 	}
+	s.keepRunSandboxSpec(ctx, run.ID, spec, resident, orgConfigKeys, agentPolicy)
 	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, siteCfgErr, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
 		return
 	}

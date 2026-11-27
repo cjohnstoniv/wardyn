@@ -1475,6 +1475,49 @@ sending `error` alone — completing the sweep this issue tracks:
 | `run_output_tail_invalid` / `run_output_interactive` / `run_output_not_captured` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive with no pane snapshot (`409`): with recording off the sentence says nothing was kept, with it on it points at the recording; the runner exposes no direct stdout and no authorized recording-derived output is available (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — it finished before output was persisted, its runner captures none and no recording arrived, or it is still being captured and a later read serves it (`409`); a sign-in run is interactive and answers `run_output_interactive`; the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
 | `run_sign_in_not_aws` / `run_sign_in_unreadable` | `GET /runs/{id}/sign-in` (`run_sign_in.go`): the run is not an AWS sign-in run (`409`); the sign-in pane, or the capture's audit row, could not be read in time — a read a moment later may answer (`503`). |
 | `run_resume_not_running` / `run_resume_failed` | `POST /runs/{id}/resume` (`run_pause.go`): the run is not in a resumable state, or thawing it for exec failed. A resume refused by its owner check answers that check's own reason instead (such as `identity_deactivated` or `placement_denied`). |
+| `move_unavailable` | `409` on `POST /runs/{id}/move` and `GET /runs/{id}/placements`: moving a run is off in site config, or this release cannot turn it on. |
+| `move_not_running` | `409` on `POST /runs/{id}/move`: the run is not running, a Resume holds it, or it is still stopped where a move left it. |
+| `move_not_interactive` | `409` on `POST /runs/{id}/move`: only an interactive run moves. |
+| `move_kept_machine` | `409` on `POST /runs/{id}/move`: a run that keeps its machine does not move. |
+| `move_harness_login` | `409` on `POST /runs/{id}/move`: a run someone signed in to a harness inside does not move. |
+| `move_machine_kind_unsupported` | `409` on `POST /runs/{id}/move`: a macOS, Linux VM or Windows VM run. |
+| `move_spec_unrecorded` | `409` on `POST /runs/{id}/move`: the run has no recorded sandbox spec. |
+| `move_pause_refused` | `409` on `POST /runs/{id}/move`, and a failed move's reason: the run cannot be stopped, or its pause's revoke is not complete. |
+| `move_locally_contained` | `409` on `POST /runs/{id}/move`, and a failed move's reason: the run is held contained on its runner. |
+| `move_containment_unreadable` | `503` on `POST /runs/{id}/move`: whether the run is contained could not be read. |
+| `move_policy_unreadable` | `503` on `POST /runs/{id}/move`: a read the destination's judgement needs failed; nothing was stopped. |
+| `move_busy` | `409` on `POST /runs/{id}/move`: a move holds the run, or too many moves are in flight. |
+| `move_runner_too_old` | `409` on `POST /runs/{id}/move`: a runner cannot carry a move. |
+| `move_destination_substrate` | `409` on `POST /runs/{id}/move`: the destination cannot hold an imported, unstarted sandbox. |
+| `move_sites_off` | `409` on `POST /runs/{id}/move`: a site was named and sites are off. |
+| `move_destination_unknown` | `422` on `POST /runs/{id}/move`: the destination names nothing the run's owner can use. |
+| `move_to_personal_off` | `403` on `POST /runs/{id}/move`: moving onto a person's own runner is off in site config. |
+| `move_destination_refused` | `403` on `POST /runs/{id}/move`: the destination's policy refuses the run; the message names the layer. |
+| `move_work_drive_refused` | `403` or `422` on `POST /runs/{id}/move`, and a failed move's reason: the destination keeps the work folder on a new drive of the run's person, and it cannot be made; the layer names the door. |
+| `move_resident_credential` | `403` on `POST /runs/{id}/move`: the run holds a credential where it runs. |
+| `move_mcp_token` | `403` on `POST /runs/{id}/move`: the run has a per-run MCP token. |
+| `move_policy_changed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination's judgement changed before commit. |
+| `move_source_unsettled` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the source runner had not settled the run. |
+| `move_source_spool_pending` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the source runner had not delivered the run's spool. |
+| `move_archive_refused` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: an entry of the carried files was refused. |
+| `move_carried_too_large` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the carried files passed a size bound. |
+| `move_scan_uncovered` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the run's masking manifest does not cover it. |
+| `move_scan_unreadable` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a git file could not be decoded. |
+| `move_scan_hit` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a secret value was found in the carried files. |
+| `move_git_outside_roots` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a git directory points outside what is carried. |
+| `move_digest_mismatch` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the carried files' digests differ. |
+| `move_plain_link` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a runner link is not TLS. |
+| `move_run_ended` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the run was killed, ended or lost during the move. |
+| `move_pause_changed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a Resume took the run during the move. |
+| `move_orphaned` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the move's executor stopped answering. |
+| `move_stop_failed` | A failed move's reason, and `503` on `POST /runs/{id}/move` for a run already paused: the run could not be stopped. |
+| `move_create_failed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination's sandbox could not be created. |
+| `move_export_failed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the source's files could not be read. |
+| `move_relay_failed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the stream broke between a runner and the server. |
+| `move_import_failed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination could not take the files. |
+| `move_lease_refused` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination runner's lease was refused. |
+| `move_identity_refused` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination's identity could not be minted. |
+| `move_revoke_refused` | `409` on `POST /runs/{id}/move`, and a failed move's reason: a source credential's revoke was refused. |
 | `internal_decision_log_invalid` / `internal_decision_unrecorded` / `groundtruth_batch_invalid` / `groundtruth_batch_too_large` / `groundtruth_action_not_kernel` / `groundtruth_write_failed` / `internal_approval_request_invalid` / `unsupported_internal_approval_kind` / `missing_requested_scope` / `reserved_scope_key` / `mcp_call_scope_invalid` / `mcp_call_too_large` / `kube_call_scope_invalid` / `host_call_scope_invalid` / `internal_approval_count_unavailable` / `internal_approval_cap_reached` / `broker_not_configured` / `mint_grant_id_required` / `brokered_forge_single_lane` / `brokered_forge_single_lane_unverifiable` / `grant_run_mismatch` / `grant_not_found` / `grant_requires_spire` / `grant_run_revoked` / `grant_not_approved` / `grant_ref_ruleset_required` / `grant_kind_unsupported` / `run_renew_store_unavailable` / `run_renew_read_failed` / `run_renew_stamp_failed` / `run_renew_lease_busy` / `internal_liveness_read_failed` | `POST /internal/*` (`internal.go`, `internal_live_run.go`): the sidecar/proxy surface, not the member-facing API. Most values are already the exact strings each route's own audit row wrote before #656 slice 3 put them on the wire too; `internal_liveness_read_failed` is the shared `/internal/*` liveness gate every sidecar door runs through, and `internal_decision_unrecorded` is the decision door's retryable `503` for a decision whose row it could neither write nor spool. |
 | `recovery_unsupported` / `token_not_expired` / `token_too_old` / `run_revoked` / `run_not_found` / `run_not_running` / `run_past_lifetime` / `run_token_cut` / `run_containment_pending` / `run_held_contained` / `strict_allowance_spent` / `token_lineage_retired` / `outage_window_pending` / `recovery_read_failed` | `POST /internal/token/recover` (`internal_token_recover.go`), a run proxy asking for a fresh token after its own expired while Wardyn could not be reached (#4082). `501`: this server cannot recover a token (its identity provider or store has no recovery). `409`: the token has not expired; renew it instead. `403`, final: the token expired more than 24 hours ago, the run's tokens were revoked, the run does not exist any more, the run is not running, it is past its end or its lifetime cap, its token lineage was cut when a paused run was stopped (only a revive runs it again), its Kubernetes runner has it containment pending or holds it contained, or its strict outage allowance has run out. `503`, retryable (the proxy keeps asking about once a minute): the token is not the run's current one, no recorded outage covers the token's expiry yet (with `Retry-After`), or a read the recovery needs failed. A token that fails verification answers `401` with the internal lane's own reasons. |
 | `operation_already_sent` / `operation_key_reused` | `POST /internal/approvals` and `POST /internal/approvals/{id}/sent` (`approvals_mcp_call_send.go`), `409`: an MCP call the run proxy raised, or is about to send, carries an operation key already sent in its namespace less than 24 hours ago, on the database's clock. The namespace is the run owner's, within the run's correlation ID, else within the run. `operation_already_sent` is the same call, and the body's `approval_id`, `sent_at` and `answered` say under which approval it was sent, when, and whether its server's answer was recorded. `operation_key_reused` is another call, and the body names nothing of it. Nothing is raised or sent. From 24 hours after the send, neither door answers `409` for it: the key's next call needs approval again and is recorded as new. |
@@ -1608,7 +1651,7 @@ The rest reach the wire only through
 | `deciders_unreadable` | `POST /approvals/{id}/{approve,deny}` (503): the unit deciders, or the unit tree, could not be read, so the request is not decided now. The run's owner gets this; anyone else gets the usual `404`, and a security admin still decides, `once` at most. |
 | `support_disabled` | `POST /runs/{id}/support` and `.../accept` (409): support sessions are off on this deployment (`WARDYN_SUPPORT_SESSIONS`). |
 | `support_not_allowed` | `POST /runs/{id}/support` (403): the caller is not a super admin signed in as a person (a personal token without a CLI sign-in, the admin token, a portal and a security admin are not), or is the run's own owner. On `.../accept` and `.../decline` (403): the caller is the owner on a sign-in that may not answer, or an admin. `.../end` takes the owner (a personal token included), the open grant's helper and any admin, who ends it as `ended_by_security`; anyone else gets the foreign-run `404`. |
-| `support_run_ineligible` | `POST /runs/{id}/support` and `.../accept` (409): the run cannot take a helper: it is not running, it is lost, it has no personal owner, it belongs to a service identity, it is a background task, it is a sign-in or a workspace step, or the deployment is in local mode. |
+| `support_run_ineligible` | `POST /runs/{id}/support` and `.../accept` (409): the run cannot take a helper: it is not running, it is lost, it has no personal owner, it belongs to a service identity, it is a background task, it is a sign-in or a workspace step, it is a Windows VM run, or the deployment is in local mode. |
 | `support_grant_open` | `POST /runs/{id}/support` (409): the run already has a help request or session open. |
 | `support_grant_not_found` | `.../accept`, `.../decline` and `.../end` (404): no such open help request on the run, or it was already answered, ended or lapsed (an unanswered request lapses after 15 minutes). |
 | `support_request_invalid` | `POST /runs/{id}/support` and `.../accept` (400): `doors` is empty, repeats a door, names one of the six doors wrongly or (on accept) one the helper did not ask for; `reason` is empty or over 500 characters; or `minutes` is not 15, 30 or 60. `field` names the part. |
@@ -1732,6 +1775,25 @@ The portal person routes (`POST /people/{principal}/suspend`, `/reactivate`, `/p
 | `portal_person_param_invalid` | (400, 422): `issuer` or `person_id` is missing, or `purge_after_seconds` is out of range. |
 
 The lookups (`GET /people/portal-person`, `GET /people/{principal}/portals`) answer `principal`, `state` (`active`, `deactivated` or `purged`), `display_email`, `deactivated_at`, `purged_at` and `portals_used`, a list of `{delegate, name, run_in_under, revoked_at}` that keeps revoked portals; they never carry `purge_after`. Suspend, reactivate and purge answer `principal`, `state`, `deactivated_at`, `purge_after` and `purged_at`. `GET /admin/portal-lifecycle/status` answers `deactivated`, `pending`, `pending_suspensions` and `pending_purges`. A suspend with a positive `purge_after_seconds` is a super admin's; a security admin suspends without one. A purge refused because a reactivation committed first answers `person_not_suspended`. [The steps](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
+
+A Windows VM run (`machine_kind: "windows_vm"`, `windows_image`) and the licence routes (`/windows-licence-pools`, its `holders` and `seats`, `/windows-images` and `GET /me/windows-images`; [Windows VM sandboxes](operations/windows-vm-sandboxes.md)) answer with:
+
+| Reason | Meaning |
+|---|---|
+| `windows_vms_off` | (403): `features.windows_vm.enabled` is off. No Windows VM starts, and no pool, holder or image is added. |
+| `windows_image_required` | (400): a Windows VM run names no image in `windows_image`, or names a raw `image`. |
+| `windows_image_unregistered` | (422): no active registered Windows image has that name, or its pool was deleted. |
+| `windows_licence_not_holder` | (403): you hold no seat in the image's licence pool. An admin adds you. |
+| `windows_licence_in_use` | (409): your seat is held by another live run, which the message names. End that run first. |
+| `windows_licence_pool_full` | (409): every seat in the pool has a holder. |
+| `windows_licence_seat_live` | (409): a live run holds a seat through that holder, pool or image. The message names the run. |
+| `windows_vm_feature_refused` | (403; 409 at a live run's door): a Windows VM run is desktop-only. `field` names what it refused, `recording` among them. |
+| `windows_vm_runner_unsupported` | (422): no organization runner that offers Windows VMs can take the run. |
+| `windows_vm_fenced` | (409): the database refused a change to a Windows VM run. No route should reach it. |
+| `windows_licences_unavailable` | (501): this store keeps no Windows licence pools. |
+| `windows_licence_invalid` | (400): a malformed pool, holder or image body. |
+| `windows_licence_not_found` | (404): no active pool, holder or image has that id. |
+| `windows_licence_conflict` | (409): a name, ref or holder already taken, a stale `revision`, or fewer seats than holders. |
 
 ### The Walls view
 

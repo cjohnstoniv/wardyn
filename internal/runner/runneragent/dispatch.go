@@ -79,9 +79,18 @@ type Config struct {
 	// machine_kind macos_vm. Each kind has its own switch, so a runner that offers one starts none of
 	// the other.
 	MacOSVM bool
+	// WindowsVM is LinuxVM for Windows VM sandboxes (Caps.WindowsVM): false refuses a create_vm for
+	// machine_kind windows_vm, whatever the substrate would do with it.
+	WindowsVM bool
 	// WorkloadStatus patches the status of one WardynWorkload custom resource from the org's answer
 	// (a k8s runner that lists workload namespaces); nil refuses workload_status.
 	WorkloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+	// SpoolDrained reports whether a local ref's run has no spooled decision the org has not taken (move.go);
+	// nil answers an export SpoolDrained false.
+	SpoolDrained func(ctx context.Context, localRef string) (bool, error)
+	// MoveUnbound records the org's notice that a run was moved away from a local ref (move.go); nil refuses
+	// the notice.
+	MoveUnbound func(ctx context.Context, runID uuid.UUID, localRef string) error
 }
 
 // errUnobservable is Status's and AgentStatus's answer for a sandbox Covered says this runner cannot
@@ -172,6 +181,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.keptMachine(ctx, args)
 	case runnerwire.MethodSnapshotSandbox, runnerwire.MethodCommitSnapshot, runnerwire.MethodAbortSnapshot, runnerwire.MethodDeleteSnapshot, runnerwire.MethodListSnapshots:
 		return d.snapshot(ctx, method, args)
+	case runnerwire.MethodMoveExport, runnerwire.MethodMoveImport, runnerwire.MethodMoveUnbound:
+		return d.move(ctx, peer, id, method, args)
 	}
 	return d.refCall(ctx, method, args)
 }
@@ -280,6 +291,8 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		return nil, runnerwire.Refuse("this runner does not offer Linux VM sandboxes")
 	case kind.IsMacOSVM() && !d.cfg.MacOSVM:
 		return nil, runnerwire.Refuse("this runner does not offer macOS VM sandboxes")
+	case kind == types.MachineWindowsVM && !d.cfg.WindowsVM:
+		return nil, runnerwire.Refuse("this runner does not offer Windows VM sandboxes")
 	}
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err

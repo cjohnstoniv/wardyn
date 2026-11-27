@@ -168,7 +168,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 // Each frame is checked against the stream's reset with the link's writer held,
 // so after an abort no further frame goes out; n counts the frames that did.
 func (s *Stream) Write(b []byte) (int, error) {
-	if runnerToOrgOnly(s.kind) && s.p.cfg.Org { // the tee and a window flow runner to org only
+	if runnerToOrgOnly(s.kind) && s.p.cfg.Org { // the tee, a window and an export flow runner to org only
 		_ = s.Reset(ResetRefused)
 		return 0, io.ErrClosedPipe
 	}

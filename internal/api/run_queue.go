@@ -569,6 +569,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
 	stampImageAdmission(createData, q.f.admission)
 	s.stampRunContainers(ctx, createData, q.f.containers)
+	stampWindowsLicence(createData, q.f.windowsLaunch)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
