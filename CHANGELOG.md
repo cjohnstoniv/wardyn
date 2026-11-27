@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - An optional mutual TLS check on the proxy-to-control-plane hop (`WARDYN_INTERNAL_MTLS`, off by default; needs the SPIRE identity provider and the Kubernetes runner); the run token is still checked on every request (#4074).
 
+### Changed
+
+- A governance limit set after a session opened now closes an open UI-app socket, noVNC or sign-in display, or inbound app socket within about a minute, and ends a desktop sign-in as an expired one ends; an open SSH connection made with a registered key still runs until it ends (#3943).
+
 ## [0.11.0-rc.5] — 2026-11-27
 
 ### Added

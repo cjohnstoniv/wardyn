@@ -507,6 +507,7 @@ func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool
 	}
 	if de := s.uiInboundUnitDenial(ctx, sess, run); de != nil {
 		if de.status == http.StatusServiceUnavailable {
+			_ = s.uiDenyReassert(sess, de.reason, de.status, de.msg) // the run_unreadable row, as uiInboundUnitDenies writes it
 			return false, reasonRunUnreadable, nil
 		}
 		return false, "", func(ctx context.Context) { s.auditInboundUnitDenies(ctx, sess) }
@@ -660,14 +661,17 @@ func (s *Server) inboundCaller(ctx context.Context, run types.AgentRun, app type
 // the row names no method or path.
 func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	de := s.uiInboundUnitDenial(ctx, sess, run)
-	if de != nil && de.status == http.StatusForbidden {
+	switch {
+	case de != nil && de.status == http.StatusServiceUnavailable:
+		return s.uiDenyReassert(sess, de.reason, de.status, de.msg)
+	case de != nil && de.status == http.StatusForbidden:
 		s.auditInboundUnitDenies(context.WithoutCancel(ctx), sess)
 	}
 	return de
 }
 
 // uiInboundUnitDenial is uiInboundUnitDenies without the unit_denies row, for a stream that writes it after
-// its close (readmitInbound).
+// its close (readmitInbound). It writes no row: on a failed read its callers write the run_unreadable row.
 func (s *Server) uiInboundUnitDenial(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
@@ -680,7 +684,7 @@ func (s *Server) uiInboundUnitDenial(ctx context.Context, sess uiSession, run ty
 			return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceOverlayUnsatisfiable), msg: msg}
 		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
-		return s.uiDenyReassert(sess, reasonRunUnreadable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		return &uiDialError{status: http.StatusServiceUnavailable, reason: reasonRunUnreadable, msg: uiSessionUnverifiableMsg}
 	}
 	if p == nil || (!p.Limits.DenyUIApps && !p.Limits.DenyInteractive) {
 		return nil

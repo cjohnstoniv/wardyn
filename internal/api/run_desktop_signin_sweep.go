@@ -65,11 +65,32 @@ func (s *Server) sweepDesktopSignins(ctx context.Context) error {
 		if reason == "" && !now.Before(si.ExpiresAt) {
 			reason = signinEndExpired
 		}
+		if reason == "" {
+			reason = s.signinGovernanceEnd(ctx, run)
+		}
 		if reason != "" {
 			_ = s.finishDesktopSignin(ctx, run, si, reason, types.ActorSystem, "wardynd")
 		}
 	}
 	return errors.Join(owed...)
+}
+
+// signinGovernanceEnd is signinEndGovernance when the profile run was launched under now closes a desktop sign-in, as
+// its door would (interactiveDeniedBy, the harness sign-in run exempt), or when that profile is a composition nothing
+// satisfies; "" otherwise. A profile that cannot be read ends nothing this pass: the next pass asks again, and the
+// display's own limit watch closes an open display meanwhile.
+func (s *Server) signinGovernanceEnd(ctx context.Context, run types.AgentRun) string {
+	p, err := s.interactiveDeniedBy(ctx, run)
+	switch {
+	case err != nil && !unitReadFailed(err):
+		return signinEndGovernance
+	case err != nil:
+		slog.WarnContext(ctx, "wardynd: desktop sign-in sweep could not read the run's governance profile", "run_id", run.ID, "err", err)
+		return ""
+	case p != nil:
+		return signinEndGovernance
+	}
+	return ""
 }
 
 // inDesktopSignin reports whether the run has an open sign-in, reading the

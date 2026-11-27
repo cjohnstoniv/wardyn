@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -86,10 +87,11 @@ var errSigninNotStarted = errors.New("wardyn-signin did not start")
 
 // End reasons, in desktop_signins.end_reason and the desktop_signin.close row.
 const (
-	signinEndDone     = "done"
-	signinEndExpired  = "expired"
-	signinEndRunEnded = "run_ended"
-	signinEndFailed   = "failed"
+	signinEndDone       = "done"
+	signinEndExpired    = "expired"
+	signinEndRunEnded   = "run_ended"
+	signinEndFailed     = "failed"
+	signinEndGovernance = string(authz.ReasonGovernanceUnit) // the run's profile now denies interactive sessions (run_desktop_signin_sweep.go)
 )
 
 // signinContinueTries is how many sweep passes retry a sign-in whose agent is

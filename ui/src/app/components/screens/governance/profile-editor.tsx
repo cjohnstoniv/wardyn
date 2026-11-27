@@ -427,14 +427,14 @@ export function ProfileEditor({
         />
         <LimitRow
           label={GOV.LIMIT_INTERACTIVE_LABEL}
-          hint={`${GOV.LIMIT_INTERACTIVE_HINT} ${GOV.LIMIT_INTERACTIVE_INBOUND}`}
+          hint={`${GOV.LIMIT_INTERACTIVE_HINT} ${GOV.LIMIT_INTERACTIVE_INBOUND} ${GOV.LIMIT_INTERACTIVE_OPEN}`}
           checked={!!limits.deny_interactive}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_interactive: v }))}
         />
         <LimitRow
           label={LIMITS_CHIP.UI_APPS}
-          hint={GOV.LIMIT_UI_APPS_HINT}
+          hint={`${GOV.LIMIT_UI_APPS_HINT} ${GOV.LIMIT_UI_APPS_OPEN}`}
           checked={!!limits.deny_ui_apps}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_ui_apps: v }))}
@@ -713,12 +713,13 @@ function LimitRow({
   disabled: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const hintId = React.useId();
   return (
     <div className="mt-3 flex items-start gap-3 border-t border-border pt-3 first-of-type:border-t-0">
-      <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} className="mt-0.5" />
+      <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} className="mt-0.5" describedBy={hint ? hintId : undefined} />
       <div className="min-w-0">
         <p className="text-body font-medium text-foreground">{label}</p>
-        {hint && <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{hint}</p>}
+        {hint && <p id={hintId} className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{hint}</p>}
       </div>
     </div>
   );

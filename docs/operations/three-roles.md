@@ -251,11 +251,12 @@ Profiles narrow by omission: a profile that omits secret grants revokes them for
 - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
 - A super admin is exempt from both at every door, as at create, unless `WARDYN_GOVERN_ADMIN_RUNS` is on, when only an operator-owned run is; a security admin is bound.
 - A run's lifetime cap is a hard end: see [At the lifetime cap](run-lifetime.md#at-the-lifetime-cap).
-- A limit set later reaches new sessions and later requests on an open UI-app session, which get a `403`. It does not sever a socket already open: a terminal, an SSH session or an open UI-app socket runs until it ends.
-- A limit set during a desktop sign-in stops new entry. An open display stays until it ends, and the agent comes back at End or within 30 minutes.
-- `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
+- A limit set later reaches new sessions and later requests, which get a `403`. Within about a minute it also closes what is already open and its door would now refuse: an open UI-app socket under `deny_ui_apps`; a desktop, noVNC or sign-in display, an inbound app's socket and a terminal under `deny_interactive`.
+- An open SSH connection made with a registered key is not closed: it runs until it ends. A close writes the refusal row its door writes, rate-bound as the door's refusals are: `ui.authorize` `denied` with `data.reason` `governance_unit`, or `inbound.deny` `unit_denies` for an inbound app.
+- A limit set during a desktop sign-in closes its display and ends the sign-in at the next sweep: one `desktop_signin.close` row with `reason` `governance_unit`, and the agent comes back as it does after an expired sign-in.
+- `deny_ui_apps` does not refuse an SSH port forward to the app; `deny_interactive` refuses a new one.
 - `deny_background_desktop_watch` refuses watching a background macOS run's desktop, view only, under the profile as it stands now. `deny_ui_apps` and `deny_interactive` refuse it too.
-- No role is exempt from a watch, a super admin included, because its ticket is stamped as a member's. An open watch is re-checked every 30 seconds and ends within a minute of a change, unlike the open sockets above. The refusal at the door is `governance_unit` at `runs.desktop_watch`; the re-check that ends an open watch writes a `ui.authorize` row, `denied`, with `data.reason` `governance_unit`.
+- No role is exempt from a watch, a super admin included, because its ticket is stamped as a member's. An open watch is re-checked every 30 seconds and ends within a minute of a change, as the open sessions above do. The refusal at the door is `governance_unit` at `runs.desktop_watch`; the re-check that ends an open watch writes a `ui.authorize` row, `denied`, with `data.reason` `governance_unit`.
 
 ### The autonomy rubric
 
