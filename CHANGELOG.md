@@ -18,6 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A trust's audience must be the origin of `WARDYN_OIDC_REDIRECT_URL` or `WARDYN_RUNNER_ORG_URL`, with the base path when one is set; the UI-sandbox address is never one. A swapped token lasts 15 minutes by default, an hour at most, and never past the provider token's own expiry.
 - The identity's sponsor sees and removes its trusts, and a sponsor change or a retire removes them. A revoke of all the sponsor's sessions, or of everyone's, stops the sponsor's trusts until the sponsor confirms each one again.
 - Migration `0409_inbound_federation` creates `inbound_federation` (one row, off), `inbound_trusts` and `inbound_trust_tokens`.
+- Custom components can carry request rules (`request_rules`): rules on method and path that allow, hold for a person, or refuse what a run sends to the component's own hosts, on the run's own requests and on the MCP broker's. They only narrow what the run's policy allows. They are off until an admin turns on `features.component_request_rules.enabled` in site config. Once on, the organisation's component editor and a person's own component dialog both add, change and remove them; while off, each offers only to remove stored rules.
 
 ### Changed
 
@@ -28,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Inbound federation, which lets machines call sandbox ports with tokens from your own identity provider, is new and off. Nothing changes until an administrator turns it on, except that split-role installs must apply the new grants before upgrading.
 - Stop every wardynd older than this release first. An older server counts exchanged tokens against a service identity's cap, and leaves an identity's trusts in place when its sponsor changes or it is retired.
+- Request rules on custom components (`request_rules`) are new and off by default. Turn them on with `features.component_request_rules.enabled` in site config. While it is off, a component that carries rules is refused rather than attached without them. HTTPS to a host that carries rules goes through port 443 only. The Azure DevOps and GitHub request checks behave exactly as before. Before going back to an older version, remove request rules from your components: an older version ignores them and attaches the component without them.
 
 ## [0.11.0-rc.4] — 2026-11-26
 

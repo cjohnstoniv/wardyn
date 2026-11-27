@@ -9,9 +9,15 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { Component, MyComponents } from "../../../lib/types";
+import { REQUEST_RULES as R } from "../components/request-rules-field";
 import { setField } from "../../../../test/set-field";
 import { MyComponentsCard } from "./my-components-card";
 import { aheadByHours } from "../../../lib/test-clock";
+
+const rulesOn = vi.hoisted(() => ({ on: false }));
+vi.mock("../../wardyn/model-access-context", () => ({
+  useShellSetupStatus: () => ({ status: { features: rulesOn.on ? { scheduled_runs: false, component_request_rules: true } : undefined }, refresh: () => {} }),
+}));
 
 const row = (id: string, name: string, secrets = 0): Component => ({
   id,
@@ -35,6 +41,7 @@ const reply = (over: Partial<MyComponents> = {}): MyComponents => ({
 let mine: MyComponents;
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  rulesOn.on = false;
   mine = reply();
   fetchMock = vi.fn(async (_path: string, init?: RequestInit) => {
     const method = init?.method;
@@ -97,6 +104,41 @@ describe("MyComponentsCard", () => {
     await waitFor(() => expect(sent()).toContain(`PUT /api/v1/me/components/${A.id}`));
     const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
     expect(JSON.parse(String(put[1].body)).name).toBe("Acme v2");
+  });
+
+  it("while request rules are off, a saved component with rules opens with the remove-only row, and Remove then Save succeeds without them", async () => {
+    const rules = [{ host: "api.acme.test", methods: ["GET"], paths: ["/v1"], effect: "allow" as const }];
+    const withRules = { ...A, definition: { ...A.definition, request_rules: rules } };
+    mine = reply({ mine: [withRules, B] });
+    mount();
+    await openCard();
+    await user.click(screen.getByRole("button", { name: "Edit Acme" }));
+    await screen.findByLabelText(/^Name/);
+    expect(screen.getByText("1 rule")).toBeInTheDocument();
+    expect(screen.getByText(R.OFF_SENTENCE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: R.ADD })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: R.REMOVE_ALL }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent()).toContain(`PUT /api/v1/me/components/${A.id}`));
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
+    const body = JSON.parse(String(put[1].body));
+    expect(body.definition).not.toHaveProperty("request_rules");
+    expect(body.definition.hosts).toEqual(A.definition.hosts);
+  });
+
+  it("while request rules are on, the same dialog edits the rules and sends them with the save", async () => {
+    rulesOn.on = true;
+    const rules = [{ host: "api.acme.test", methods: ["GET"], paths: ["/v1"], effect: "allow" as const }];
+    mine = reply({ mine: [{ ...A, definition: { ...A.definition, request_rules: rules } }, B] });
+    mount();
+    await openCard();
+    await user.click(screen.getByRole("button", { name: "Edit Acme" }));
+    await screen.findByLabelText(/^Name/);
+    await user.click(within(within(screen.getByRole("group", { name: R.RULE(1) })).getByRole("group", { name: R.EFFECT_OF(1) })).getByRole("button", { name: R.DENY }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent()).toContain(`PUT /api/v1/me/components/${A.id}`));
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
+    expect(JSON.parse(String(put[1].body)).definition.request_rules).toEqual([{ ...rules[0], effect: "deny" }]);
   });
 
   it("closing the form reads the list again, so the next edit names the version now saved", async () => {

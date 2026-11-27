@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   blankSecret,
   blankSetting,
+  firstErrorField,
   hostError,
   placeServerError,
   refIndexForFact,
@@ -176,10 +177,27 @@ describe("placeServerError: a refusal lands on the field it names", () => {
     ["invalid component: definition.config[REGION]: value exceeds 4096 bytes", settingField(cfg, "value")],
     ["invalid component: definition.config: 40 keys exceeds the 32-key limit", "settings"],
     ["invalid component: definition.secrets: 9 entries exceeds the 8-secret limit", "secrets"],
+    ["invalid component: definition.request_rules[1].paths[0]: path \"/v1/../admin\" is not in normal form", "request_rules"],
+    ["invalid component: definition.request_rules: at most 64 rules, got 65", "request_rules"],
+    ["This component carries request rules, and request rules are off on this deployment. An admin turns them on with features.component_request_rules.enabled.", "request_rules"],
+    ["This component carries request rules, and whether request rules are on could not be read. Try again in a moment.", "request_rules"],
   ])("%s", (msg, field) => {
     const placed = placeServerError(msg, d);
     expect(Object.keys(placed)).toEqual([field]);
     expect(placed[field]).not.toMatch(/^invalid component: /);
+  });
+
+  it("places a rule's sentence without the path's lead-in, and the switch sentences as they came", () => {
+    expect(placeServerError('invalid component: definition.request_rules[0].paths[0]: "v1/x" must start with /', d)).toEqual({
+      request_rules: 'request_rules[0].paths[0]: "v1/x" must start with /',
+    });
+    const off = "This component carries request rules, and request rules are off on this deployment. An admin turns them on with features.component_request_rules.enabled.";
+    expect(placeServerError(off, d)).toEqual({ request_rules: off });
+  });
+
+  it("focuses the rules after the hosts and before the secrets", () => {
+    expect(firstErrorField({ request_rules: "x", secrets: "y", hosts: "z" }, d)).toBe("hosts");
+    expect(firstErrorField({ request_rules: "x", secrets: "y" }, d)).toBe("request_rules");
   });
 
   it("falls back to the form for a sentence that names no field", () => {

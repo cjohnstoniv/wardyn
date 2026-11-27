@@ -19,7 +19,7 @@
 
 import type { AutonomyLevel } from "../api/governance";
 import type { AgentFact, LocalDeliveryMode, RepoAccessFact, TokenScopeFact } from "./new-run-contract";
-import type { PushRulesSpec } from "./policy";
+import type { HostRule, PushRulesSpec } from "./policy";
 import type { SetupItem } from "./preflight";
 
 /** How one component secret reaches the run. */
@@ -61,6 +61,8 @@ export interface ComponentDefinition {
   mcp?: ComponentMCP;
   // The image a run must use to attach this component (#1972): with a tag or digest that image, without one any tag or digest of the repository.
   image?: string;
+  // Host rules on the component's own exact hosts; a run carries them as one host rule set of their own.
+  request_rules?: HostRule[];
 }
 
 /**

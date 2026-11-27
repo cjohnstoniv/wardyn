@@ -229,6 +229,10 @@ func (s *Server) handleSaveMyComponent(w http.ResponseWriter, r *http.Request) {
 		saveRefusal(w, reason, msg)
 		return
 	}
+	if reason, msg := s.componentRequestRulesRefusal(r.Context(), c.Definition, nil); reason != "" {
+		saveRefusal(w, reason, msg)
+		return
+	}
 	rows, err := cs.ListComponents(r.Context(), owner)
 	if err != nil {
 		writeServerError(w, r, "list components", err)
@@ -296,6 +300,10 @@ func (s *Server) handleUpdateMyComponent(w http.ResponseWriter, r *http.Request)
 	}
 	c := types.Component{ID: row.ID, Owner: owner, Name: req.Name, Definition: req.Definition}
 	if reason, msg := s.componentSaveRefusal(r.Context(), c); reason != "" {
+		saveRefusal(w, reason, msg)
+		return
+	}
+	if reason, msg := s.componentRequestRulesRefusal(r.Context(), c.Definition, &row.Definition); reason != "" {
 		saveRefusal(w, reason, msg)
 		return
 	}
@@ -447,6 +455,10 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusConflict, reasonComponentVersionConflict, componentStaleMsg)
 			return
 		}
+		if reason, msg := s.componentRequestRulesRefusal(r.Context(), c.Definition, &old.Definition); reason != "" {
+			saveRefusal(w, reason, msg)
+			return
+		}
 		// A row whose AWS sign-ins would point somewhere it no longer names, or
 		// whose Azure sign-ins were captured for subscriptions it no longer pins,
 		// takes them with it, before the write.
@@ -462,6 +474,10 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		// The row the editor opened is gone: its save must not create it again.
 		notFoundIf(w, err, "component", reasonComponentNotFound)
 	case errors.Is(err, store.ErrNotFound):
+		if reason, msg := s.componentRequestRulesRefusal(r.Context(), c.Definition, nil); reason != "" {
+			saveRefusal(w, reason, msg)
+			return
+		}
 		s.createOrgComponent(w, r, cs, c)
 	default:
 		writeServerError(w, r, "read component", err)
