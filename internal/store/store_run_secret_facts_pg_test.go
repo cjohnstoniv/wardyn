@@ -50,7 +50,7 @@ func TestPG_RunSecretFacts_Query(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO run_components (run_id, ordinal, self_defined, component_id, owner, name, version, definition)
-		VALUES ($1, 0, false, NULL, '', 'aws-cli', 1, '{}'),
+		VALUES ($1, 0, false, gen_random_uuid(), '', 'aws-cli', 1, '{}'),
 		       ($1, 1, true, NULL, 'alice', 'mine', 1, '{"secrets":[{"delivery":{"mode":"header"}},{"delivery":{"mode":"file"}}]}'),
 		       ($1, 2, true, NULL, NULL, NULL, NULL, NULL)`, run.ID); err != nil {
 		t.Fatal(err)

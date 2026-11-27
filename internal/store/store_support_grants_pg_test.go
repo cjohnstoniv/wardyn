@@ -523,6 +523,7 @@ func TestPG_SupportGrants(t *testing.T) {
 		t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DROP OWNED BY `+role+`; DROP ROLE IF EXISTS `+role) })
 		f.exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends TO ` + role)
 		f.exec(`GRANT SELECT ON run_harnesses TO ` + role)
+		f.exec(`GRANT SELECT, UPDATE ON run_containers TO ` + role) // the erasure blanks extra container commands after the grants
 		cfg := f.pool.Config()
 		cfg.ConnConfig.RuntimeParams["role"] = role
 		restricted, err := pgxpool.NewWithConfig(f.ctx, cfg)

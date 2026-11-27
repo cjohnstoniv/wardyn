@@ -362,7 +362,13 @@ func TestDeleteExpiredRunsBatchHasAStatementTimeoutPG(t *testing.T) {
 	endRun(t, pool, run.ID, types.RunCompleted, 40)
 	store.SetRunRetentionStatementTimeout(t, "300ms")
 
-	holder, err := pool.Begin(ctx)
+	// The lock is held on a pool of its own while this goroutine runs the batch on pool (WARDYN_TEST_POOL_GUARD).
+	side, err := pgxpool.NewWithConfig(ctx, pool.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer side.Close()
+	holder, err := side.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
