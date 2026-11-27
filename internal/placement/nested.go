@@ -62,6 +62,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[runner.ModelLimit]():          strings.Fields("Models BedrockRoutes"),
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored BoundRunner"),
 	reflect.TypeFor[runner.KeptMachineSpec]():     strings.Fields("ID Mode OwnerHash IdleDays Name"),
+	reflect.TypeFor[runner.SnapshotSource]():      strings.Fields("ID ImageID BaseStamp"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure ConfinementClass"),
 	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team RunnerID Namespace"),

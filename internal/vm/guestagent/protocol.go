@@ -78,6 +78,9 @@ type Init struct {
 	// it in the guest's System keychain, for TLS only, before Init answers (MacKeychain). The
 	// operator's CAs are not in it. A Linux guest ignores it.
 	RunCA string `json:"run_ca,omitempty"`
+	// Fork says a Linux guest's disk is another run's snapshot. Every Init first removes the files the last
+	// Init on the disk wrote, by the record it kept; a fork's Init is refused when that record is missing.
+	Fork bool `json:"fork,omitempty"`
 }
 
 // initPrint is Init without its String method, so printing it does not recurse.

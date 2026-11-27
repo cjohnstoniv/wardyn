@@ -45,6 +45,7 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 		slog.WarnContext(ctx, "Linux VM sandboxes are off on this runner", "reason", err.Error())
 		return nil
 	}
+	go sub.SweepSnapshotTargets(context.WithoutCancel(ctx)) // no snapshot copy outlives the runner process that cut it
 	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", c.MachineType, "cpu_model", c.CPUModel, "qemu", c.QEMUVersion, "folder_shares", c.Virtiofs)
 	return vmCaps(c)
 }

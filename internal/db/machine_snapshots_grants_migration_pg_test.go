@@ -18,7 +18,7 @@ const machineSnapshotsMigration = "0416"
 // among the roles holding DELETE once the table has any grant, get nothing. The three tables granted fewer than
 // all four verbs first lose whatever a role held on them, as default privileges hand every new table out, so a
 // re-run over ALL granted on them ends with exactly the same verbs. Each verb is checked on each table, held and
-// not held.
+// not held, and PUBLIC holds none of them.
 func TestMigration0416_GrantsTheAppRole(t *testing.T) {
 	pool, schema := partialSchemaPool(t, machineSnapshotsMigration)
 	app, _ := auditRole(t, pgPool(t), "wardyn_pg_app")
@@ -29,6 +29,12 @@ func TestMigration0416_GrantsTheAppRole(t *testing.T) {
 	}
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE, DELETE ON run_attach_leases TO `+app)
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE, TRUNCATE, REFERENCES, TRIGGER ON run_attach_leases TO `+other)
+	verbs := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"}
+	if pgScalar[int](t, pool, `SELECT current_setting('server_version_num')::int`) >= 170000 {
+		// PostgreSQL 17 added MAINTAIN, so "every verb but DELETE" holds it too, and each table is checked for it.
+		pgExec(t, pool, `GRANT MAINTAIN ON run_attach_leases TO `+other)
+		verbs = append(verbs, "MAINTAIN")
+	}
 	pgExec(t, pool, `ALTER TABLE run_attach_leases OWNER TO `+owner)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `ALTER TABLE run_attach_leases OWNER TO CURRENT_USER`) })
 	if !pgScalar[bool](t, pool, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
@@ -44,7 +50,6 @@ func TestMigration0416_GrantsTheAppRole(t *testing.T) {
 		"run_fork_sources":          {"SELECT", "INSERT"},
 		"run_dispatch_secret_facts": {"SELECT", "INSERT", "UPDATE"},
 	}
-	verbs := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"}
 	check := func(when string) {
 		t.Helper()
 		for table, want := range granted {
@@ -52,7 +57,7 @@ func TestMigration0416_GrantsTheAppRole(t *testing.T) {
 				if got := pgScalar[bool](t, pool, `SELECT has_table_privilege($1, $2, $3)`, app, table, verb); got != slices.Contains(want, verb) {
 					t.Errorf("%s: app role %s on %s = %v, want %v", when, verb, table, got, slices.Contains(want, verb))
 				}
-				for name, role := range map[string]string{"a role holding every verb on run_attach_leases but DELETE": other, "the owner of run_attach_leases": owner} {
+				for name, role := range map[string]string{"a role holding every verb on run_attach_leases but DELETE": other, "the owner of run_attach_leases": owner, "PUBLIC": "public"} {
 					if pgScalar[bool](t, pool, `SELECT has_table_privilege($1, $2, $3)`, role, table, verb) {
 						t.Errorf("%s: %s holds %s on %s", when, name, verb, table)
 					}
@@ -66,11 +71,12 @@ func TestMigration0416_GrantsTheAppRole(t *testing.T) {
 	// a narrowed table must not have.
 	for table, want := range granted {
 		if len(want) < 4 {
-			pgExec(t, pool, fmt.Sprintf(`GRANT ALL ON %s TO %s, %s`, table, app, other))
+			pgExec(t, pool, fmt.Sprintf(`GRANT ALL ON %s TO %s, %s, PUBLIC`, table, app, other))
 		}
 	}
-	if !pgScalar[bool](t, pool, `SELECT has_table_privilege($1, 'run_fork_sources', 'DELETE')`, app) {
-		t.Fatal("the app role does not hold DELETE on run_fork_sources after GRANT ALL, so the re-run proves nothing")
+	if !pgScalar[bool](t, pool, `SELECT has_table_privilege($1, 'run_fork_sources', 'DELETE')`, app) ||
+		!pgScalar[bool](t, pool, `SELECT has_table_privilege('public', 'run_fork_sources', 'DELETE')`) {
+		t.Fatal("the app role or PUBLIC does not hold DELETE on run_fork_sources after GRANT ALL, so the re-run proves nothing")
 	}
 	pgExec(t, pool, readMigration(t, machineSnapshotsMigration+"_machine_snapshots.sql"))
 	check("after a re-run over ALL granted")

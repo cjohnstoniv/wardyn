@@ -140,6 +140,8 @@ type SandboxSpec struct {
 	// KeptMachine, when set, makes a macos_vm run the session of one person's kept machine: a new one
 	// to keep, or an existing one to resume or reset. Only a macOS VM on the person's own Mac reads it.
 	KeptMachine *KeptMachineSpec `json:"kept_machine,omitempty"`
+	// Snapshot, when set, makes a linux_vm run a fork: its disk is a new overlay on that snapshot's layer.
+	Snapshot *SnapshotSource `json:"snapshot,omitempty"`
 	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
 	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
 	ImageArches []string `json:"image_arches,omitempty"`
