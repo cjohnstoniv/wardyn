@@ -36,6 +36,8 @@ const (
 	// for an organization component's secret: policy validation refuses that mark.
 	runPolicyShared = "This run used an organization component's shared secret. This is a record of the run, not a policy to reuse: Wardyn refuses a policy that sets shared. Select the component again on the new run."
 	runPolicyHeader = "Changed when the run started"
+	// runPolicyAsValueHeader heads the secrets that went in as their value although a placeholder switch was on (#3741).
+	runPolicyAsValueHeader = "Went in as their value (no placeholder):"
 
 	// The host marks (#2956). The console's SUMMARY in policy-tab-copy.ts holds the same strings.
 	runPolicyInspected          = "Inspected"
@@ -136,6 +138,20 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 		lines = append(lines, runPolicyHeader)
 		for _, ch := range v.Changes {
 			lines = append(lines, runPolicyChangeLabel(ch, person)+": "+strings.Join(runPolicyEntries(ch), ", "))
+		}
+	}
+	if len(v.SecretsAsValue) > 0 {
+		lines = append(lines, runPolicyAsValueHeader)
+		for _, e := range v.SecretsAsValue {
+			name := e.SecretName
+			if name == "" {
+				name = "(name hidden)"
+			}
+			to := ""
+			if e.Delivery == "runner_resident" {
+				to = ", to the runner"
+			}
+			lines = append(lines, "  "+e.Kind+" "+name+" for "+e.Host+to+": "+e.Reason)
 		}
 	}
 	lines = append(lines, runPolicyHostLines(v)...)

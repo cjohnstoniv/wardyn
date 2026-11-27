@@ -276,6 +276,8 @@ declare -A ALLOWLIST=(
   ["test/conformance/macvm/kept_test.go"]=1
   ["pkg/client/governance_review_test.go"]=10 # passthrough only: approval, impact and live-run times decoded as given, never compared to the clock
   ["cmd/wardyn/governance_review_test.go"]=10 # passthrough only: proposal, expiry and approval times decoded and printed as given, never compared to the clock
+  ["internal/api/run_clone_status_test.go"]=1 # the fixture's injected clock: the server reads it through cfg.Now, never the wall clock
+  ["internal/api/run_policy_as_value_test.go"]=1 # passthrough only: the epoch audit row times are offset from, shown as given
 )
 
 fail=0

@@ -190,6 +190,8 @@ if v.State == client.RunPolicyViewRecorded {
 | `provenance` | per top-level `spec` key, the layer that set it (`client.PolicyProvenance`, [denials.md](operations/denials.md)) |
 | `host_marks` | `inspected` the allowed entries whose every destination Wardyn opens, `partial` (absent when empty) each entry it opens only some destinations of (a wildcard, or a host with no port opened on one port) with those destinations (an empty list: some of it is opened, which is not known; a run recorded before `partial` existed has it worked out from `terminated`), and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those opened on a port no entry names (all, under allow-all), from the run's proxy config (`client.RunPolicyHostMarks`); other allowed hosts are tunnels. Absent for a run recorded before marks or restarted |
 | `wall_preset` | the run's wall preset (`id`, `name`, `scope`, `group_id`, `version`) and what it `narrowed`, `removed` and `added`; only `scope` for a personal preset read by anyone but its owner |
+| `secrets_as_value` | each host-scoped `env_secret` or `file_secret` that went into the sandbox, or to the runner, as its value although a placeholder switch was on: `kind`, `host`, `secret_name` (dropped below the security admin tier), `cause` (a stable token, absent on a row from before causes), `reason`, `delivery` (`runner_resident` for a value the runner got). Absent when none did. An entry stays for the run's life: a restart places nothing, so the fix is a new run |
+| `secrets_as_value_truncated` | set when more than 50 matched; the list holds the first 50 |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
 
@@ -307,6 +309,14 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   independent output remains.
 
 From a shell, `wardyn run output <run-id>` prints the same bytes (below).
+
+## Reading a run's repository clones
+
+`GET /api/v1/runs/{id}/clones` answers what the run's launcher said about each repository it was asked to clone: `{"run_id", "state", "repos"}`. It is the sandbox's own report, a hint and never a verdict, and the same `404` as `GET /runs/{id}` answers anyone who may not read the run.
+
+- `state` is `reported`, `not_reported`, `pending` or `none`. `pending` is a run still to be heard from. `none` is a run that never reached the clone step: one from before this release, one with no repositories, one that never got a sandbox, and one whose image wrote no report. Draw `none` as nothing.
+- `not_reported` is a run whose launcher started its clones and sent no outcome for a repository. Wardyn got none, so the repository may or may not have been cloned.
+- Each entry in `repos` has `repo` (the repository as the run asked for it), `dest` (its folder), `outcome` (`ok`, `present`, `skipped`, `failed` or `not_reported`) and, for a skipped or failed clone, `cause` (`not_a_checkout`, `cannot_create`, `clone_failed` or `ref_failed`).
 
 ## Running a command in a run
 

@@ -16,6 +16,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Sandbox browser lockdown (#2970): with `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run gets a Chromium
   policy the agent cannot change, allowing only the extensions you list. `wardyn-signin browser` refuses debugging and
   extension flags, and `wardyn-signin cdp --agent --session` drives a page without a debugging port.
+- The run's policy view, its Policy tab and `wardyn run policy` show each host-scoped secret that went in as its value, and why (#3741).
+- The run page shows a repository clone that was skipped or failed; images from this release report it (#3159).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_clone_status` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run's
+  repository clone outcome is not recorded.
 
 ### Changed
 

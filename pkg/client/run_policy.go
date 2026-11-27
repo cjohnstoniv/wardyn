@@ -55,6 +55,23 @@ type RunPolicyView struct {
 	// PushesUnstoppable is set when the install's git token broker is off and the run's capability list leaves out
 	// code_write: a git token in the sandbox can still push.
 	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
+	// SecretsAsValue is each host-scoped secret that went into the sandbox, or to the runner, as its value although a
+	// placeholder switch was on, and why. Absent when none did.
+	SecretsAsValue []RunPolicySecretAsValue `json:"secrets_as_value,omitempty"`
+	// SecretsAsValueTruncated is set when more than 50 secrets went in as their value; the list holds the first 50.
+	SecretsAsValueTruncated bool `json:"secrets_as_value_truncated,omitempty"`
+}
+
+// RunPolicySecretAsValue is one secret that went in as its value. SecretName is dropped below the security admin
+// tier; Cause is a stable token (value_multiline, host_not_allowlisted, host_taken, grant_unrecorded, rule_invalid),
+// absent on a row written before causes; Reason is the sentence; Delivery is runner_resident for a value the runner got.
+type RunPolicySecretAsValue struct {
+	Kind       string `json:"kind"`
+	SecretName string `json:"secret_name,omitempty"`
+	Host       string `json:"host"`
+	Cause      string `json:"cause,omitempty"`
+	Reason     string `json:"reason"`
+	Delivery   string `json:"delivery,omitempty"`
 }
 
 // RunPolicyWallPreset is a run's wall preset in its policy view: Narrowed names

@@ -48,25 +48,43 @@ func headerCredential(value []byte) []byte {
 	return value
 }
 
+// The five reasons a host-scoped secret goes in as its value: a stable cause for readers (the run's policy view,
+// the CLI, the console) and the sentence the audit row has always carried.
+const (
+	placeholderCauseMultiline   = "value_multiline"
+	placeholderCauseNotAllowed  = "host_not_allowlisted"
+	placeholderCauseHostTaken   = "host_taken"
+	placeholderCauseUnrecorded  = "grant_unrecorded"
+	placeholderCauseRuleInvalid = "rule_invalid"
+)
+
+var placeholderCauseSentence = map[string]string{
+	placeholderCauseMultiline:   "the value spans more than one line, so it cannot ride a request header",
+	placeholderCauseNotAllowed:  "the host is not an exact entry of the run's allowlist",
+	placeholderCauseHostTaken:   "the host already carries another credential",
+	placeholderCauseUnrecorded:  "its injection grant could not be recorded",
+	placeholderCauseRuleInvalid: "its injection rule did not decode",
+}
+
 // authorSecretPlaceholder keeps a delivered env or file secret's value out of
 // the sandbox: it authors an injection grant for the scope's host whose rule
 // fills a placeholder with the value, and returns that placeholder, the grant
 // and the host to intercept. An empty placeholder means the value goes in as
-// before, and why says why. Narrowest: the host must already be an exact
+// before, and cause says why: a placeholderCause* token, "" on success. Narrowest: the host must already be an exact
 // allowlist entry with no other credential, and the value one line. resident
 // is a runner_resident grant's fill (placeResidentEnvSecrets): its grant is
 // recorded via_org and marked shared, so the organisation's egress reads the
 // operator's row, the one readResidentValue read, and the runner gets the
 // placeholder and a via_org route only.
 func (s *Server) authorSecretPlaceholder(ctx context.Context, run types.AgentRun, g types.GrantSpec, host, secretName, value string,
-	allowed func(string) bool, taken []runner.InjectionGrant, resident bool) (ph string, inj runner.InjectionGrant, mitm, why string) {
+	allowed func(string) bool, taken []runner.InjectionGrant, resident bool) (ph string, inj runner.InjectionGrant, mitm, cause string) {
 	switch {
 	case strings.ContainsAny(string(headerCredential([]byte(value))), "\r\n"):
-		return "", inj, "", "the value spans more than one line, so it cannot ride a request header"
+		return "", inj, "", placeholderCauseMultiline
 	case !allowed(host):
-		return "", inj, "", "the host is not an exact entry of the run's allowlist"
+		return "", inj, "", placeholderCauseNotAllowed
 	case slices.ContainsFunc(taken, func(in runner.InjectionGrant) bool { return hostEqual(in.Rule.Host, host) }):
-		return "", inj, "", "the host already carries another credential"
+		return "", inj, "", placeholderCauseHostTaken
 	}
 	grantID := uuid.New()
 	ph = secretPlaceholderPrefix + grantID.String()
@@ -87,11 +105,11 @@ func (s *Server) authorSecretPlaceholder(ctx context.Context, run types.AgentRun
 		_, err = s.createDispatchGrant(ctx, run, grant, !g.OwnerOnly)
 	}
 	if err != nil {
-		return "", inj, "", "its injection grant could not be recorded"
+		return "", inj, "", placeholderCauseUnrecorded
 	}
 	rule, err := injectionRuleFromScope(scope)
 	if err != nil {
-		return "", inj, "", "its injection rule did not decode"
+		return "", inj, "", placeholderCauseRuleInvalid
 	}
 	return ph, runner.InjectionGrant{GrantID: grantID, Rule: rule}, net.JoinHostPort(host, "443"), ""
 }
@@ -99,14 +117,14 @@ func (s *Server) authorSecretPlaceholder(ctx context.Context, run types.AgentRun
 // recordPlaceholder writes run.secret_placeholder.resolve for one grant with a
 // host; a runner_resident grant's row says delivery via_org, or, when the
 // value is held, runner_resident and the runner that gets it as before.
-func (s *Server) recordPlaceholder(ctx context.Context, run types.AgentRun, kind types.GrantKind, secretName, host, why string, resident bool) {
+func (s *Server) recordPlaceholder(ctx context.Context, run types.AgentRun, kind types.GrantKind, secretName, host, cause string, resident bool) {
 	data := map[string]any{"kind": kind, "secret_name": secretName, "host": host}
 	if resident {
 		data["delivery"] = types.GrantDeliveryViaOrg
 	}
 	outcome := "success"
-	if why != "" {
-		outcome, data["reason"] = "failure", why
+	if cause != "" {
+		outcome, data["cause"], data["reason"] = "failure", cause, placeholderCauseSentence[cause]
 		if resident {
 			data["delivery"], data["runner_id"] = types.GrantDeliveryResident, run.RunnerID
 		}
@@ -142,13 +160,13 @@ func (s *Server) placeEnvSecrets(ctx context.Context, run types.AgentRun, policy
 		if _, resident := residentGrantRow(rows, g); herr != nil || host == "" || resident || !slices.Contains(keys, name) {
 			continue
 		}
-		ph, inj, h, why := s.authorSecretPlaceholder(ctx, run, g, host, secretName, sandboxEnv[name], allowed, *injections, false)
+		ph, inj, h, cause := s.authorSecretPlaceholder(ctx, run, g, host, secretName, sandboxEnv[name], allowed, *injections, false)
 		if ph != "" {
 			sandboxEnv[name] = ph
 			*injections = append(*injections, inj)
 			mitm = append(mitm, h)
 		}
-		s.recordPlaceholder(ctx, run, g.Kind, secretName, host, why, false)
+		s.recordPlaceholder(ctx, run, g.Kind, secretName, host, cause, false)
 	}
 	return mitm
 }
@@ -165,13 +183,13 @@ func (s *Server) placeFileSecrets(ctx context.Context, run types.AgentRun, by []
 		if _, resident := residentGrantRow(rows, g); err != nil || herr != nil || host == "" || resident {
 			continue
 		}
-		ph, inj, h, why := s.authorSecretPlaceholder(ctx, run, g, host, secretName, string(files[i].Content), allowed, spec.ProxyConfig.Injection, false)
+		ph, inj, h, cause := s.authorSecretPlaceholder(ctx, run, g, host, secretName, string(files[i].Content), allowed, spec.ProxyConfig.Injection, false)
 		if ph != "" {
 			files[i].Content = []byte(ph)
 			spec.ProxyConfig.Injection = append(spec.ProxyConfig.Injection, inj)
 			spec.ProxyConfig.MITMHosts = append(spec.ProxyConfig.MITMHosts, h)
 		}
-		s.recordPlaceholder(ctx, run, g.Kind, secretName, host, why, false)
+		s.recordPlaceholder(ctx, run, g.Kind, secretName, host, cause, false)
 	}
 }
 
@@ -244,8 +262,8 @@ func (s *Server) fillResident(ctx context.Context, run types.AgentRun, v residen
 	if err != nil || host == "" {
 		return "", runner.InjectionGrant{}
 	}
-	ph, inj, _, why := s.authorSecretPlaceholder(ctx, run, v.grant.Spec, host, secretName, string(v.value), allowed, taken, true)
-	s.recordPlaceholder(ctx, run, v.grant.Spec.Kind, secretName, host, why, true)
+	ph, inj, _, cause := s.authorSecretPlaceholder(ctx, run, v.grant.Spec, host, secretName, string(v.value), allowed, taken, true)
+	s.recordPlaceholder(ctx, run, v.grant.Spec.Kind, secretName, host, cause, true)
 	if ph != "" {
 		clear(v.value)
 	}

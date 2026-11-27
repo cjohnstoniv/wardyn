@@ -103,6 +103,9 @@ func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner
 			"the run's agent could not be started, so the run is stopped and lost until revived", err)
 	}
 	data["agent_started"] = true
+	// The agent started again, so its launcher clones again (#3159): forget the first start's outcome, and the sweep
+	// reads this start's.
+	s.clearRunCloneStatus(ctx, run.ID)
 	if c, ok := s.cfg.Store.(store.RunAgentStartOwed); ok && !owedAt.IsZero() {
 		// The agent runs, so the clear takes a bound of its own and one retry: the claim's bound may have run out.
 		cctx, cancelClear := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)

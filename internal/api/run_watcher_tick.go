@@ -100,6 +100,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// A service's health, read from the state file its supervisor keeps. The read is
 	// never presence, so it does not hold a run past an idle wall.
 	pass("service health sweep", s.sweepServiceHealth(ctx))
+	// Each repository clone's outcome, read once from the file the launcher writes (#3159). A hint, never presence.
+	pass("clone status sweep", s.sweepCloneStatus(ctx))
 	// A sign-in whose run ended, whose window passed, or whose end failed.
 	pass("desktop sign-in sweep", s.sweepDesktopSignins(ctx))
 	// A VM's pause whose run ended with the agent still paused writes its row here.
