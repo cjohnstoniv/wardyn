@@ -3379,7 +3379,7 @@ jobs:
       # a chore/forward-port-* branch, and a train/* head that carries 0.10.x patch lines in
       # as tag merges (a first-parent merge whose second parent is a v0.10.* tag), each of
       # which is checked on its own with BASE = its first parent and HEAD = the merge. This is
-      # W6 check (1) only: the arrival rule, the version tests, the file-state check and the
+      # Check (1) only: the arrival rule, the version tests, the file-state check and the
       # destination/BASE/HEAD-bound .arrive rows are owed with forward-port.sh (L0-C), before
       # release/0.11 exists. The train route reads <version>.allow from the tag merge and
       # requires it to be unchanged at the PR head, so the exception a merge used is visible

@@ -195,6 +195,12 @@ policy.llm_inspection.require_inspectable_llm
 policy.llm_inspection.scan_attachments
 policy.llm_inspection.workspace_secret_names
 policy.llm_inspection.workspace_secret_values
+policy.local_folders
+policy.local_folders.deny
+policy.local_folders.deny_pull
+policy.local_folders.deny_remote
+policy.local_folders.max_pull_mib
+policy.local_folders.max_push_mib
 policy.max_holds
 policy.min_confinement_class
 policy.outage

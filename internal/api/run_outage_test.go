@@ -45,6 +45,18 @@ func TestSidecarPolicyDropsOutage(t *testing.T) {
 	}
 }
 
+// TestSidecarPolicyDropsLocalFolders: the proxy reads no local folder walls, so its config leaves the key off
+// for a proxy that predates it, without editing the run's own policy.
+func TestSidecarPolicyDropsLocalFolders(t *testing.T) {
+	in := types.RunPolicySpec{LocalFolders: &types.LocalFolderRules{DenyPull: true}}
+	if got := sidecarPolicy(in, dispatchParams{}); got.LocalFolders != nil {
+		t.Fatalf("sidecarPolicy kept local_folders %+v", got.LocalFolders)
+	}
+	if in.LocalFolders == nil {
+		t.Fatal("sidecarPolicy cleared the caller's local_folders")
+	}
+}
+
 func TestValidatePolicySpec_OutageBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
