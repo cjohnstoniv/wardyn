@@ -1528,8 +1528,10 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@#     and readOnlyRootFilesystem; an all-on override would weaken that assertion.
 	@#   secretFiles                   — exercised by its own render (#596 block above);
 	@#     in all-on it would turn the env-mode DSN/age-key assertions into _FILE ones.
+	@#   spire                         — exercised by scripts/test-helm-spire.sh, which renders all-on with it on
+	@#     and asserts its refusals; on in all-on, every render would need a SPIRE server address.
 	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
-		case " nameOverride fullnameOverride replicas ha readinessProbe basePath service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
+		case " nameOverride fullnameOverride replicas ha readinessProbe basePath service podSecurityContext containerSecurityContext secretFiles spire " in *" $$k "*) continue ;; esac; \
 		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
 	done; \
 	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }

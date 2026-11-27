@@ -118,7 +118,9 @@ server="$(helm template w deploy/helm/wardyn -n wardyn \
   --set auth.adminToken.secretRef.name=a --set secrets.ageKeyFromSecret=true --set serviceAccount.automount=true \
   --set k8s.enabled=true --set k8s.runsNamespace=wardyn-runs --set k8s.proxyImage=p:1 --set k8s.readNodes=true)"
 server_role="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-wardyn-k8s-runner") | .rules | del(.[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io"))')"
-server_svc_rules="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-wardyn-k8s-runner") | [.rules[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io")] | length')"
+# Counted on the one Role's rules: yq's [...] collect yields [] for every other document of the render, one 0 line each.
+server_rules="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-wardyn-k8s-runner") | .rules')"
+server_svc_rules="$(yq -o=json -I=0 '[.[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io")] | length' <<<"$server_rules")"
 server_cluster="$(docs "$server" 'select(.kind == "ClusterRole") | .rules')"
 runs_role="$(docs "$out" 'select(.kind == "Role" and .metadata.name == "r-wardyn-runnerd-runs") | .rules')"
 cluster="$(docs "$out" 'select(.kind == "ClusterRole") | .rules')"

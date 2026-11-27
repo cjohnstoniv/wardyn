@@ -80,7 +80,8 @@ k8srole='select(.kind == "Role" and (.metadata.name | test("k8s-runner$")))'
 [[ "$(y -o=json -I=0 "$k8srole | .rules[] | select(.apiGroups[0] == \"discovery.k8s.io\")" "$TMP/key-absent.out")" == '{"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["create","get","update","deletecollection"]}' ]] \
   || die "k8s on: the runner Role has no, or a wider, endpointslices rule"
 # Every rule that names any of these resources or groups, in any position or with a wildcard: exactly the two above.
-[[ "$(y "$k8srole | [.rules[] | select((.resources | any_c(. == \"services\" or . == \"endpointslices\" or . == \"endpoints\" or . == \"*\")) or (.apiGroups | any_c(. == \"discovery.k8s.io\" or . == \"*\")))] | length" "$TMP/key-absent.out" | grep -vx 0 || true)" == 2 ]] \
+# yq's == takes "*" as a glob that equals every string, so the wildcard is matched by test("^[*]$").
+[[ "$(y "$k8srole | [.rules[] | select((.resources | any_c(. == \"services\" or . == \"endpointslices\" or . == \"endpoints\" or test(\"^[*]$\"))) or (.apiGroups | any_c(. == \"discovery.k8s.io\" or test(\"^[*]$\"))))] | length" "$TMP/key-absent.out" | grep -vx 0 || true)" == 2 ]] \
   || die "k8s on: a rule other than those two names services, endpointslices, endpoints, discovery.k8s.io or a wildcard"
 ok "k8s on: the per-run Service rules, exactly"
 
@@ -135,7 +136,8 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.ke
 cmp -s "$TMP/on.out" "$TMP/keep-false.out" || die "keep.enabled=false renders differently from keep absent"
 cmp -s "$TMP/on.out" "$TMP/keep-null.out" || die "an explicit keep null renders differently from keep absent"
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=true >"$TMP/keep.out"
-svcrules="$role | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")]"
+# map, not [...]: yq's collect yields [] for every document the select drops, and keep renders more documents.
+svcrules="$role | .rules | map(select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\"))"
 [[ "$(y -o=json -I=0 "$svcrules" "$TMP/keep.out")" == "$(y -o=json -I=0 "$svcrules" "$TMP/key-absent.out")" ]] \
   || die "keep: the per-run Service rules differ from the k8s-on render's"
 [[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP") | .value' "$TMP/keep.out")" == "true" ]] \

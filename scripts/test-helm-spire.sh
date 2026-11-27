@@ -106,7 +106,8 @@ ok "helm lint with spire on"
 # ---- refusals
 refused "on without k8s.enabled" "spire.enabled needs k8s.enabled=true" "${BASAL[@]}" "${ON[@]}"
 refused "proxy account equal to wardynd's" "spire.proxyServiceAccount equals wardynd's ServiceAccount" -f "$ALLON" "${ON[@]}" --set spire.proxyServiceAccount=wardyn-byo
-refused "wardynd on default" "needs wardynd on its own ServiceAccount" -f "$ALLON" "${ON[@]}" --set serviceAccount.name=
+# Named default outright: an empty name is refused earlier, by the k8s runner's own ServiceAccount refusal in rbac.yaml.
+refused "wardynd on default" "needs wardynd on its own ServiceAccount" -f "$ALLON" "${ON[@]}" --set serviceAccount.name=default
 refused "proxy account default" "spire.proxyServiceAccount must name a dedicated account" -f "$ALLON" "${ON[@]}" --set spire.proxyServiceAccount=default
 refused "proxy account empty" "spire.proxyServiceAccount must name a dedicated account" -f "$ALLON" "${ON[@]}" --set spire.proxyServiceAccount=
 refused "no server address" "spire.server.address is required" -f "$ALLON" "${ON[@]}" --set spire.server.address=
