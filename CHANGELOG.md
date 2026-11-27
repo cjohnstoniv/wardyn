@@ -17,6 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A run on the server's own Kubernetes cluster that loses its control plane for longer than its allowance, on a namespace whose network policy check passed, is kept with its network stopped, and its owner can revive it. Deleting such a run's proxy pod by hand no longer removes its agent (#4085).
 - A governance limit set after a session opened now closes an open UI-app socket, noVNC or sign-in display, or inbound app socket within about a minute, and ends a desktop sign-in as an expired one ends; an open SSH connection made with a registered key still runs until it ends (#3943).
 
 ### Before you upgrade

@@ -233,14 +233,21 @@ Each edit past the body check writes one `run.egress.edit` row. Proxied connecti
 - A rename carries no security or incident-response warrant the way `GET /runs/{id}`'s inspect-or-stop bypass or the lease PATCH's owner-or-SUPER bypass do.
 - The console's New Run screen prefills the title from the task's own first line (up to 80 characters, cut at a word boundary) and leaves it editable; the server itself never required one.
 
-## Kubernetes cannot keep, revive, restart or pause a run
+## Kubernetes keep, revive, restart and pause
 
-The Kubernetes substrate doesn't implement the optional runner capabilities the Docker driver does. An agent pod pins its proxy pod's IP, so there's no "same address, new container" to replace, and a stopped pod is gone, not kept.
+The Kubernetes substrate doesn't implement most of the optional runner capabilities the Docker driver does. A stopped pod is gone, not kept, and a running Kubernetes run cannot be revived or restarted with current limits.
 
-The agent-sandbox backend with keep turned on is the exception for some runs ([Keep and revive](kubernetes-agent-sandbox.md#keep-and-revive)). An interactive `claude-code` or `codex-cli` run with its work folder on a kept drive is kept when its time runs out, and can be revived and restarted. No Kubernetes run is paused.
+A run on the server's own cluster that is lost in an outage, and that its kind would keep on Docker, is the exception:
+
+- It keeps its agent pod with its proxy stopped and no network. Its owner can revive it, which starts a new proxy behind the same Service, and restart with current limits works for it.
+- It is kept only on a namespace whose NetworkPolicy check is proven. On any other namespace, and for a run started before 0.11.0-rc.4, it is torn down as before.
+- Once a run is kept this way, its agent no longer goes with its proxy pod. Deleting that run's proxy pod by hand, before or after a revive, leaves the agent running with no network until the run ends.
+- A headless run kept this way counts in the `held` field of `run.lapse_sweep.hold`, as a kept Docker run does.
+
+The agent-sandbox backend with keep turned on is the exception for some runs ([Keep and revive](kubernetes-agent-sandbox.md#keep-and-revive)). An interactive `claude-code` or `codex-cli` run with its work folder on a kept drive is kept when its time runs out, and can be revived and restarted. No Kubernetes run is paused by Wardyn, though in an outage its proxy pauses the run's network at its allowance, as on Docker ([outage terms](../POLICIES.md#outage--outagecontrols)).
 
 - A Kubernetes run's end and limits still fire on schedule.
-- After a long control-plane outage a server Kubernetes run is still ended.
+- After a long control-plane outage a server Kubernetes run is ended unless it is kept as above.
 - The exception is a registered Kubernetes runner. There a run lost to an outage is kept with its agent running and no network, and cannot be revived.
 - Until the run's end, its owner, and nobody else, can open it to copy work out: the terminal, SSH and the Files panel's download, each where the run's policy allows it.
 - Nothing can be uploaded through the Files panel. The command route (`POST /runs/{id}/exec`), UI apps, a support session and a delegated or issuer portal attach stay closed.
@@ -256,7 +263,7 @@ The agent-sandbox backend with keep turned on is the exception for some runs ([K
 | Wardyn could not read the run's state | `409` `attach_run_kept`: "Wardyn could not check whether this run's agent is still running, so it cannot be opened to copy work out. Try again." |
 
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
-- Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
+- Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. That Secret lives as long as the run. A revive of a kept run puts its new proxy's config, built from the stored row, in a Secret of its own.
 - The row is still written for a k8s run (and deleted with it). A live egress edit reads it and stores its denies there.
 
 See [Kubernetes: known gaps](kubernetes-known-gaps.md) for the revive and restart refusals and the limits of a live egress edit.

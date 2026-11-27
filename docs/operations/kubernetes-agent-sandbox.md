@@ -170,7 +170,7 @@
 | Its time runs out | If its agent is `claude-code` or `codex-cli`, Wardyn stops the proxy, then deletes the agent pod. The controller makes it again behind the gate, with no node and no compute. The work folder and the run's Secret stay. A run of any other agent ends as with keep off, and its `run.ended` audit row says why. |
 | Extend, then revive | A new proxy pod with a fresh run token and the current limits, then the same check before start on the held pod, then the gate comes off. The task is not run again. |
 | Restart with current limits, on a live run that can be kept | A new proxy pod. The agent keeps running and reaches it at the same address. |
-| Any other run | Built as with keep off. Its end stops it, and revive answers 409 `revive_unsupported`. |
+| Any other run | Built as with keep off. Its end stops it, and revive answers 409 `revive_unsupported`. A run lost in an outage is kept and can be revived, as with keep off: [Kubernetes keep](run-lifetime.md#kubernetes-keep-revive-restart-and-pause). |
 
 - Lost at keep: running programs, memory, open connections and the agent's conversation, which lives in the home folder. The work folder stays.
 - After a revive the conversation does not continue. Start the agent again from the terminal.
@@ -210,7 +210,7 @@
 | Template fields outside the list | Refused before the `Sandbox` is created. See [A platform template](#a-platform-template). |
 | Pause in place | Never offered. Wardyn never suspends a Sandbox. With keep on, a run is kept at its end and revived instead: [Keep and revive](#keep-and-revive). |
 | `linux_vm` | Refused as before. |
-| Revive, restart with current limits | With keep on, for a run that can be kept: [Keep and revive](#keep-and-revive). Otherwise 409 `revive_unsupported`, as on the plain path. |
+| Revive, restart with current limits | With keep on, for a run that can be kept: [Keep and revive](#keep-and-revive). A run lost in an outage and kept: [Kubernetes keep](run-lifetime.md#kubernetes-keep-revive-restart-and-pause). Otherwise 409 `revive_unsupported`, as on the plain path. |
 | Controller versions other than v1.0.9 | Unsupported. |
 
 - Other limits of the Kubernetes substrate are in [Kubernetes: known gaps](kubernetes-known-gaps.md).
