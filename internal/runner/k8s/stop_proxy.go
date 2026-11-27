@@ -65,7 +65,8 @@ func runnerGrace(g *int64) *int64 {
 // proxy is persisted and runnerd's finalizer removed, or a validated lapse proves its egress
 // stopped. Without evidence the agent pod is deleted too; the answer is then a typed
 // ContainmentPendingError (agent_only, or pending_delete once both delete bounds passed) or a plain
-// error, and the manager retries each tick. Server mode is unchanged: ErrEndUnsupported.
+// error, and the manager retries each tick. Server mode is unchanged: ErrEndUnsupported. A lost server run's
+// proxy is stopped by StopLostProxyAt instead.
 func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 	if !d.runnerMode() {
 		return runner.ErrEndUnsupported

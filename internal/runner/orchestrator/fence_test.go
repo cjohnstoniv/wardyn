@@ -125,3 +125,53 @@ func TestOrchestrator_StartFencedForwards(t *testing.T) {
 		t.Errorf("StartFenced on a substrate without it = %v; want runner.ErrEndUnsupported", err)
 	}
 }
+
+// lostStopper is a fencing substrate that also keeps a lost run's agent, and records the generation it is sent.
+type lostStopper struct {
+	*fencingSubstrate
+	lost []int
+}
+
+func (l *lostStopper) StopLostProxyAt(_ context.Context, _ string, gen int) error {
+	l.lost = append(l.lost, gen)
+	return nil
+}
+
+// A lost-run stop reaches a substrate that keeps a lost run's agent with its generation. Any other substrate is sent
+// what the lost-run path sent before: StopProxy for no generation, StopProxyAt otherwise.
+func TestOrchestratorStopLostProxyAt_FallsBack(t *testing.T) {
+	ctx := context.Background()
+	const ref = "wardyn-agent-x"
+	sub := func() *fakeSubstrate {
+		return &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}
+	}
+
+	lp := &lostStopper{fencingSubstrate: &fencingSubstrate{revivingSubstrate: &revivingSubstrate{fakeSubstrate: sub()}}}
+	for _, gen := range []int{0, 6} {
+		if err := New(lp).StopLostProxyAt(ctx, ref, gen); err != nil {
+			t.Fatalf("StopLostProxyAt(%d) = %v", gen, err)
+		}
+	}
+	if len(lp.lost) != 2 || lp.lost[0] != 0 || lp.lost[1] != 6 || len(lp.gens) != 0 {
+		t.Errorf("lost stops = %v, StopProxyAt gens = %v; want [0 6] and none", lp.lost, lp.gens)
+	}
+
+	at := &fencingSubstrate{revivingSubstrate: &revivingSubstrate{fakeSubstrate: sub()}}
+	if err := New(at).StopLostProxyAt(ctx, ref, 7); err != nil || len(at.gens) != 1 || at.gens[0] != 7 {
+		t.Errorf("StopLostProxyAt(7) on a substrate with generations = %v, gens %v; want its StopProxyAt(7)", err, at.gens)
+	}
+
+	plain := &plainVerbs{fakeSubstrate: sub()}
+	po := New(plain)
+	if err := po.StopLostProxyAt(ctx, ref, 0); err != nil || plain.calls["stop_proxy"] != 1 {
+		t.Errorf("StopLostProxyAt(0) on a plain substrate = %v, calls %v; want its StopProxy", err, plain.calls)
+	}
+	if err := po.StopLostProxyAt(ctx, ref, 3); err != nil || plain.calls["stop_proxy"] != 2 {
+		t.Errorf("StopLostProxyAt(3) on a plain substrate = %v, calls %v; want its StopProxy", err, plain.calls)
+	}
+
+	none := sub()
+	if err := New(none).StopLostProxyAt(ctx, ref, 0); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("StopLostProxyAt on a substrate that cannot stop a proxy = %v; want runner.ErrEndUnsupported", err)
+	}
+}

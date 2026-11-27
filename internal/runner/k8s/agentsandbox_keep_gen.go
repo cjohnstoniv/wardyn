@@ -32,6 +32,7 @@ const labelProxyGeneration = "wardyn.proxy.generation"
 var (
 	_ runner.ProxyGenerationStopper = (*keepDriver)(nil)
 	_ runner.ProxyReviverAt         = (*keepDriver)(nil)
+	_ runner.LostProxyStopper       = (*keepDriver)(nil)
 )
 
 // proxyNotNewer reads the run's proxy pod for a call that acts for policy generation gen and answers it, nil when there is
@@ -146,12 +147,20 @@ func (d *Driver) deleteUnmountedCfgSecret(ctx context.Context, ns, name string) 
 // A failed delete is logged, not returned: a second try would not find pod to name it. A replace that fails before its
 // new pod is made deletes the Secret it wrote (deleteUnmountedCfgSecret); one that delete missed carries the run's
 // label, and the run's teardown deletes it.
-func (d *Driver) removeProxyPod(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod) error {
+//
+// orphanAgent deletes pod with a 1 s grace and orphan propagation, as the runner-mode stop does: the garbage collector
+// then removes pod from the owners of the run's agent instead of deleting the agent. Only StopLostProxyAt passes true.
+func (d *Driver) removeProxyPod(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod, orphanAgent bool) error {
 	if pod == nil {
 		return nil
 	}
 	uid := pod.UID
-	err := d.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})
+	opts := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}
+	if orphanAgent {
+		one, orphan := int64(1), metav1.DeletePropagationOrphan
+		opts.GracePeriodSeconds, opts.PropagationPolicy = &one, &orphan
+	}
+	err := d.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, opts)
 	if err != nil && !isNotFound(err) && !apierrors.IsConflict(err) { // a conflict: that pod is already gone
 		return fmt.Errorf("delete: %w", err)
 	}
@@ -205,7 +214,7 @@ func (d *Driver) createReplacementPod(ctx context.Context, ns string, runID uuid
 	if err != nil {
 		return err
 	}
-	if err := d.removeProxyPod(ctx, ns, runID, taken); err != nil {
+	if err := d.removeProxyPod(ctx, ns, runID, taken, false); err != nil {
 		return err
 	}
 	_, err = d.createPod(ctx, runID, componentProxy, pod)

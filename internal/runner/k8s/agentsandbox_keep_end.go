@@ -161,7 +161,7 @@ func (k *keepDriver) EndSandboxAt(ctx context.Context, ref string, gen int) erro
 // mounted (removeProxyPod). For gen > 0 the run's proxy pod is then read again: removing pod can wait, and a newer revive
 // may have started its proxy in the meantime, so the end stops there with runner.ErrProxyGenerationNewer.
 func (d *Driver) stopKeptProxy(ctx context.Context, ns string, runID uuid.UUID, pod *corev1.Pod, gen int) error {
-	if err := d.removeProxyPod(ctx, ns, runID, pod); err != nil {
+	if err := d.removeProxyPod(ctx, ns, runID, pod, false); err != nil {
 		return fmt.Errorf("k8s: keep: remove the proxy pod: %w", err)
 	}
 	if gen > 0 {

@@ -14,6 +14,7 @@ var (
 	_ runner.FencedStarter          = (*Orchestrator)(nil)
 	_ runner.ProxyGenerationStopper = (*Orchestrator)(nil)
 	_ runner.ProxyReviverAt         = (*Orchestrator)(nil)
+	_ runner.LostProxyStopper       = (*Orchestrator)(nil)
 )
 
 // FenceProxy forwards a contained run's fence to ref's substrate (runner.ProxyFencer). A substrate that
@@ -55,6 +56,22 @@ func (o *Orchestrator) StopProxyAt(ctx context.Context, ref string, gen int) err
 		return at.StopProxyAt(ctx, ref, gen)
 	}
 	return o.StopProxy(ctx, ref)
+}
+
+// StopLostProxyAt forwards a lost run's proxy stop to ref's substrate (runner.LostProxyStopper). A substrate
+// without it is sent StopProxy for gen <= 0 and StopProxyAt otherwise, as the lost-run path sent before.
+func (o *Orchestrator) StopLostProxyAt(ctx context.Context, ref string, gen int) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if lp, ok := s.(runner.LostProxyStopper); ok {
+		return lp.StopLostProxyAt(ctx, ref, gen)
+	}
+	if gen <= 0 {
+		return o.StopProxy(ctx, ref)
+	}
+	return o.StopProxyAt(ctx, ref, gen)
 }
 
 // EndSandboxAt is StopProxyAt's twin for the lease end: the plain EndSandbox on a substrate without generations.

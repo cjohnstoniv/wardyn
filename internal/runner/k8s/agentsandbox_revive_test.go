@@ -42,10 +42,10 @@ func TestKeepDriverIsTheProxyReviver(t *testing.T) {
 	var _ runner.ProxyReviverHashed = (*keepDriver)(nil)
 	off, _ := newTestDriver(t, Config{})
 	if _, ok := any(off).(runner.ProxyReviver); ok {
-		t.Error("a plain *Driver is a runner.ProxyReviver; only the keep-on substrate may be")
+		t.Error("a plain *Driver is a runner.ProxyReviver; only the substrate served may be")
 	}
-	if _, ok := served(off).(*Driver); !ok {
-		t.Errorf("served with keep off = %T, want *Driver", served(off))
+	if _, ok := served(off).(*serverDriver); !ok {
+		t.Errorf("served with keep off = %T, want *serverDriver", served(off))
 	}
 	on, _, _ := newSandboxRig(t, Config{AgentSandboxKeep: true}, controllerMaking(t, nil))
 	if _, ok := served(on).(*keepDriver); !ok {
