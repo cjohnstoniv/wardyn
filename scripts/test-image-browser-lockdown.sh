@@ -70,7 +70,7 @@ session_ok() {
 port_opens() {
 	local c=$1
 	docker exec -d -u 1000:1000 "$c" chromium --headless=new --no-sandbox --user-data-dir=/tmp/p5 --remote-debugging-port=9222
-	for _ in $(seq 25); do listeners "$c" | grep -qx 9222 && return 0; sleep 0.2; done
+	for _ in $(seq 25); do grep -qx 9222 <<<"$(listeners "$c")" && return 0; sleep 0.2; done
 	return 1
 }
 write_ext() {
@@ -206,10 +206,10 @@ s.bind(("127.0.0.1", 39999))
 s.listen()
 time.sleep(5)'
 seen=""
-for _ in $(seq 25); do listeners "$ON" | grep -qx 39999 && seen=1 && break; sleep 0.2; done
+for _ in $(seq 25); do grep -qx 39999 <<<"$(listeners "$ON")" && seen=1 && break; sleep 0.2; done
 [ -n "$seen" ] || fail "I-3 control: listeners did not see the agent's port 39999, so I-3 proves nothing"
-for _ in $(seq 50); do listeners "$ON" | grep -qx 39999 || break; sleep 0.2; done
-listeners "$ON" | grep -qx 39999 && fail "I-3 control: port 39999 is still listening"
+for _ in $(seq 50); do grep -qx 39999 <<<"$(listeners "$ON")" || break; sleep 0.2; done
+grep -qx 39999 <<<"$(listeners "$ON")" && fail "I-3 control: port 39999 is still listening"
 before=$(listeners "$ON")
 start_browser "$ON" wardyn-signin browser --headless || fail "I-3 wardyn-signin browser did not answer under the policy"
 [ "$(listeners "$ON")" = "$before" ] || fail "I-3 wardyn-signin browser opened a listener"
@@ -217,7 +217,7 @@ agent "$ON" wardyn-signin browser --remote-debugging-port=9222 >/dev/null 2>&1 &
 stop_browsers "$ON"
 start_browser "$ON" env CHROMIUM_FLAGS=--remote-debugging-port=9222 CHROME_FLAGS=--remote-debugging-port=9223 wardyn-signin browser --headless ||
 	fail "I-3 wardyn-signin browser did not answer with CHROMIUM_FLAGS set"
-listeners "$ON" | grep -qxE '9222|9223' && fail "I-3 CHROMIUM_FLAGS or CHROME_FLAGS opened a port"
+grep -qxE '9222|9223' <<<"$(listeners "$ON")" && fail "I-3 CHROMIUM_FLAGS or CHROME_FLAGS opened a port"
 pass "I-3 wardyn-signin browser opens no port, by argument or by environment"
 
 # I-3b and I-3bc. A page session through the broker.
