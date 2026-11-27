@@ -30,7 +30,8 @@ func ValidateMachineKindDenials(ds []MachineKindDenial) error {
 			return fmt.Errorf("machine_kind_denials[%d]: trust_class %q is not %q, %q or %q", i, d.Trust,
 				RunnerTrustPersonal, RunnerTrustManagedDevice, RunnerTrustOrgCluster)
 		}
-		if d.MachineKind == "" || d.MachineKind.Validate() != nil {
+		// A denial names one of the three documented kinds; windows_vm is not one of them.
+		if k := d.MachineKind; k != MachineContainer && k != MachineLinuxVM && k != MachineMacOSVM {
 			return fmt.Errorf("machine_kind_denials[%d]: machine_kind %q is not %q, %q or %q", i, d.MachineKind,
 				MachineContainer, MachineLinuxVM, MachineMacOSVM)
 		}

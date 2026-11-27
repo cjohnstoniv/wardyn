@@ -289,6 +289,10 @@ func TestKill_DeliveredByCallThenPendingSettlesOnce(t *testing.T) {
 	if err := m.AfterRefCall(ctx, runnerwire.MethodKill, ref, "", uuid.Nil); err != nil {
 		t.Fatalf("the kill call's settlement: %v", err)
 	}
+	// The dispatcher releases the call's mutation once it returns, as the wire path does.
+	if err := m.MutationFinished(ctx, runnerwire.MethodKill, ref, uuid.Nil, uuid.Nil, nil); err != nil {
+		t.Fatalf("the kill call's completion: %v", err)
+	}
 	a := pendingContainment(m, id, types.RunnerActionKill)
 	first, err := m.apply(ctx, a)
 	if err != nil || first.Outcome != types.RunnerActionSuccess {
