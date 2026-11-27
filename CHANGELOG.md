@@ -45,7 +45,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0417_run_containers` grants `SELECT, INSERT, UPDATE, DELETE` on
   `run_containers` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
   role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no run
@@ -73,7 +73,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `run_previews` to every role
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0413_run_previews` grants `SELECT, INSERT, UPDATE, DELETE` on `run_previews` to every role
   that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
@@ -136,7 +136,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - There is no rolling upgrade across this release: stop every older replica before the first new one starts. An older replica that keeps running writes format 2 rows too, because the database makes the hash, but its verify sweep and checkpoint signer recompute every row with the old formula and report a chain break at the first format 2 row.
 - Upgrade the organisation before its devices.
 - An older `wardyn audit verify` reports every new row as altered and exits 1, because it ignores the row's format and salt: update the CLI before you verify a new export.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_fork_sources`,
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0416_machine_snapshots` grants `SELECT, INSERT` on `run_fork_sources`,
   `SELECT, INSERT, DELETE` on `machine_snapshot_holds`, `SELECT, INSERT, UPDATE` on `run_dispatch_secret_facts`, and
   `SELECT, INSERT, UPDATE, DELETE` on `machine_snapshots`, to every role that was granted `DELETE` on `run_attach_leases`,
   other than that table's owner. If the app role is not one of those roles or a member of one, grant it the same on each

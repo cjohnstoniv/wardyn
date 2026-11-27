@@ -130,6 +130,13 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/runs_lifecycle.go", "Server.finalizeRunTailOrdered", "finalizeRunEffects"}:                        {1, "unguarded: K16"},
 }
 
+// releaseHeldSeed's stop of a held run whose task could not be released, in dispatchRun once the readback
+// confirmed: it adds no guard of its own, so it carries its wrapper's, read from stopSandboxOrAudit's row.
+func init() {
+	wrapper := destructiveCallCensus[destructiveSite{"internal/api/runs_lifecycle.go", "Server.stopSandboxOrAudit", "StopSandbox"}]
+	destructiveCallCensus[destructiveSite{"internal/api/run_held_seed.go", "Server.releaseHeldSeed", "stopSandboxOrAudit"}] = destructiveRow{1, wrapper.guard}
+}
+
 // destructiveCallSites counts each function's destructive references in files, keyed by their path.
 func destructiveCallSites(files map[string]*ast.File) map[destructiveSite]int {
 	out := map[destructiveSite]int{}
