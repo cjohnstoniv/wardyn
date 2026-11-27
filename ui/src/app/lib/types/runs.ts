@@ -542,17 +542,14 @@ export interface RunSync {
   deny?: string[];
 }
 
-// GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
-// endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
-// the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
-// row itself carries only policy_id, and an inline/default policy has no id to
-// fetch, so the console reads this off the run payload rather than GET
-// /policies/{id}. Absent (never present as []) when the run has no declared
-// apps or the lookup failed server-side — both render the lane's "no apps"
-// state. Split off AgentRun rather than left optional-on-everything: every
-// LIST consumer (GET /runs, the board/table) is typed for a field it never
-// receives, and a card built from list data must not silently type-check as
-// having answered "no apps declared" for one it was never asked about.
+// GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that endpoint sends (handleGetRun's anonymous
+// wrapper struct, runs_policy.go) — the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run row
+// itself carries only policy_id, and an inline/default policy has no id to fetch, so the console reads this off the
+// run payload rather than GET /policies/{id}. Absent (never present as []) when the run has no declared apps or the
+// lookup failed server-side — both render the lane's "no apps" state. Split off AgentRun rather than left
+// optional-on-everything: every LIST consumer (GET /runs, the board/table) is typed for a field it never receives,
+// and a card built from list data must not silently type-check as having answered "no apps declared" for one it was
+// never asked about.
 //
 // user_type_name is the display name of AgentRun.user_type, resolved by the
 // same handler (runUserTypeName) because GET /user-types is securityOps and a
@@ -877,15 +874,12 @@ export function runHeadline(run: Pick<AgentRun, "title" | "task">): string {
   return (run.title ?? "").trim() || run.task || "—";
 }
 
-// Whether an `always` egress-approval decision has somewhere on THIS run to
-// persist to — the ONE place that answers it, mirroring the server's own
-// rule-5 tie-break (internal/api/approvals.go): workspace_ids first, falling
-// back to workspace_id. NEITHER field is sufficient alone: an ordinary user
-// run has workspace_ids but no workspace_id, while a record/verify step run
-// is the reverse (its workspace_ids is always empty — see workspace_id's
-// doc). Reading workspace_ids alone — as run-detail.tsx once did — shows
-// Always disabled on a record/verify run with the false reason "this run
-// isn't attached to one", when the server would accept it.
+// Whether an `always` egress-approval decision has somewhere on THIS run to persist to — the ONE place that answers
+// it, mirroring the server's own rule-5 tie-break (internal/api/approvals.go): workspace_ids first, falling back to
+// workspace_id. NEITHER field is sufficient alone: an ordinary user run has workspace_ids but no workspace_id, while
+// a record/verify step run is the reverse (its workspace_ids is always empty — see workspace_id's doc). Reading
+// workspace_ids alone — as run-detail.tsx once did — shows Always disabled on a record/verify run with the false
+// reason "this run isn't attached to one", when the server would accept it.
 export function runHasWorkspace(run: Pick<AgentRun, "workspace_ids" | "workspace_id">): boolean {
   return (run.workspace_ids?.length ?? 0) > 0 || !!run.workspace_id;
 }

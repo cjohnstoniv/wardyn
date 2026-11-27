@@ -132,7 +132,7 @@ func testExtraContainerReachesOnlyTheProxy(t *testing.T, r runner.Runner, agentI
 	agentPod := agentPods.Items[0].Name
 
 	var logs string
-	got := map[string]string{}
+	var got map[string]string
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		b, _ := cs.CoreV1().Pods(ns).GetLogs(agentPod, &corev1.PodLogOptions{Container: "probe"}).DoRaw(ctx)

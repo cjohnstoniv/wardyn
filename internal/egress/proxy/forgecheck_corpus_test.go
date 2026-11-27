@@ -742,9 +742,7 @@ func TestForgeCheckCorpus(t *testing.T) {
 			t.Fatalf("samples classify away from their declared capability: %v", g.driftedIDs)
 		}
 		rec := forgeRecording{Base: forgeRecordBase, Rows: len(g.rows)}
-		for _, r := range g.rows {
-			rec.Records = append(rec.Records, r)
-		}
+		rec.Records = append(rec.Records, g.rows...)
 		b, err := marshalForgeRecording(rec)
 		if err != nil {
 			t.Fatal(err)

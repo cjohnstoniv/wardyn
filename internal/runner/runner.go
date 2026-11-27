@@ -388,14 +388,11 @@ type ExecSpec struct {
 	AgentDir string `json:",omitempty"`
 }
 
-// ExecSession is a live, bidirectional stream into ONE exec started by
-// Runner.ExecStream. A PLAIN STRUCT of streams/closures, deliberately NEVER
-// an interface: a fake can construct a partial ExecSession by filling in
-// fields directly. Resize, Wait, and Close take NO context: an implementation
-// binds them to whatever context it created the exec with.
-// Wait may still return the exec's own exit after that context ended, when the
-// exec had already exited; a caller that must tell a cut from an exit checks
-// its own context, not Wait's error.
+// ExecSession is a live, bidirectional stream into ONE exec started by Runner.ExecStream. A PLAIN STRUCT of
+// streams/closures, deliberately NEVER an interface: a fake can construct a partial ExecSession by filling in fields
+// directly. Resize, Wait, and Close take NO context: an implementation binds them to whatever context it created the
+// exec with. Wait may still return the exec's own exit after that context ended, when the exec had already exited; a
+// caller that must tell a cut from an exit checks its own context, not Wait's error.
 type ExecSession struct {
 	// Stdin writes to the exec's stdin. Close HALF-closes the write side only
 	// — implementations MUST NOT tear down Stdout/Stderr when Stdin.Close is
@@ -894,11 +891,9 @@ func Untouched(err error) error { return untouched{err} }
 // run that mounts it, so no automatic reclaim path may exist. On Kubernetes
 // the chart's Role gains `delete` only under `drives.reclaim.enabled`.
 type DriveReclaimer interface {
-	// ReclaimDrive destroys the storage object mount names, bounded by ctx.
-	// MUST refuse rather than destroy when the object is not this drive's
-	// (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse),
-	// and MUST answer DriveReclaimAlreadyAbsent, not an error, when nothing
-	// answers to the name.
+	// ReclaimDrive destroys the storage object mount names, bounded by ctx. MUST refuse rather than destroy when the
+	// object is not this drive's (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse), and MUST
+	// answer DriveReclaimAlreadyAbsent, not an error, when nothing answers to the name.
 	ReclaimDrive(ctx context.Context, mount types.DriveMount) (DriveReclaimOutcome, error)
 }
 

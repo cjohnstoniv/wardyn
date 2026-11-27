@@ -94,7 +94,7 @@
 
 | Cause | What happens |
 | --- | --- |
-| A runner other than `k8s` | wardynd exits: "The spire identity provider needs the k8s runner in this release." |
+| A runner other than `k8s` | wardynd exits: "the spire identity provider needs the k8s runner in this release" |
 | A missing variable, or the selector rules above | wardynd exits, naming the variable or selector. |
 | No control-plane X.509-SVID, no JWT bundle, or no entry list within 10 s | wardynd exits with "did not answer within 10s" and the socket or server address. |
 | The admin entry's shape, or `WARDYN_POD_SERVICE_ACCOUNT` empty, `default` or the proxy account | wardynd exits. |

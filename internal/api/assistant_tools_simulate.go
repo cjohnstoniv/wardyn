@@ -141,7 +141,7 @@ func assistantSimulateOf(res replayResult) assistantSimulateResult {
 		if len(out.Hosts) == assistantHistoryHosts {
 			break
 		}
-		out.Hosts = append(out.Hosts, assistantSimulateHost{Host: h.Host, Runs: h.Runs, Today: h.Today, Under: h.Under, RunsChanged: h.RunsChanged})
+		out.Hosts = append(out.Hosts, assistantSimulateHost(h))
 	}
 	return out
 }

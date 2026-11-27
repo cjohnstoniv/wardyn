@@ -45,12 +45,10 @@ type placementCaps struct {
 	impl any
 }
 
-// placementCapabilities answers what the placement a run gets can enforce. The
-// remote placement is the deployment's executor, which already leaves runner
-// substrates out of its answer; a local one is the claimed runner's last `caps`
-// event, so an offline runner, or one that never reported, is a runner_offline
-// refusal and never a guessed answer. The error is a *placement.Refusal for a
-// placement that cannot answer, anything else for a failed read.
+// placementCapabilities answers what the placement a run gets can enforce. The remote placement is the deployment's
+// executor, which already leaves runner substrates out of its answer; a local one is the claimed runner's last `caps`
+// event, so an offline runner, or one that never reported, is a runner_offline refusal and never a guessed answer.
+// The error is a *placement.Refusal for a placement that cannot answer, anything else for a failed read.
 func (s *Server) placementCapabilities(ctx context.Context, p types.Placement, runnerID uuid.UUID) (placementCaps, error) {
 	if p == types.PlacementLocal {
 		return s.localRunnerCapabilities(ctx, runnerID)

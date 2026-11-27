@@ -1020,7 +1020,7 @@ boot_seed_wait_for_release() {
     [[ -f "$HOME/.wardyn/seed-release" ]] && return 0
     printf '%s\n' "$BOOT_SEED_HELD" >&2
     local idle_pid="${WARDYN_IDLE_PID:-1}"
-    while [[ ! -f "$HOME/.wardyn/seed-release" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 1; done
+    while [[ ! -f "$HOME/.wardyn/seed-release" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done
     [[ -f "$HOME/.wardyn/seed-release" ]] && return 0
     printf '%s\n' "$BOOT_SEED_HOLD_GONE" >&2
     exec bash

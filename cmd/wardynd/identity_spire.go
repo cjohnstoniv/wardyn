@@ -20,7 +20,7 @@ import (
 // bearer token under the embedded provider.
 func refuseSpireOffKubernetes(runnerSel string) error {
 	if runnerSel != "k8s" {
-		return errors.New("The spire identity provider needs the k8s runner in this release.")
+		return errors.New("the spire identity provider needs the k8s runner in this release")
 	}
 	return nil
 }

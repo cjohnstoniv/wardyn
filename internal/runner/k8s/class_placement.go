@@ -126,7 +126,7 @@ func (d *Driver) checkClassPlacement(ctx context.Context) (map[types.Confinement
 		}
 		if len(rc.Scheduling.NodeSelector) == 0 {
 			return nil, nil, fmt.Errorf("%w: RuntimeClass %q (%s) tolerates a taint but has no scheduling.nodeSelector, so %s pods could be scheduled on any node, not only on the pool. "+
-				"Add scheduling.nodeSelector naming the pool's nodes. If the class is meant for every node, remove the tolerations, or set a selector every node carries, such as kubernetes.io/os: linux.",
+				"Add scheduling.nodeSelector naming the pool's nodes. If the class is meant for every node, remove the tolerations, or set a selector every node carries, such as kubernetes.io/os: linux",
 				errClassPlacement, name, c, c)
 		}
 		for _, k := range slices.Sorted(maps.Keys(rc.Scheduling.NodeSelector)) {
@@ -143,7 +143,7 @@ func (d *Driver) checkClassPlacement(ctx context.Context) (map[types.Confinement
 		for _, tol := range rc.Scheduling.Tolerations {
 			if i := slices.IndexFunc(d.placement.Tolerations, func(t corev1.Toleration) bool { return tolerationsOverlap(t, tol) }); i >= 0 {
 				return nil, nil, fmt.Errorf("%w: k8s.sandbox.tolerations has a toleration (key %q) that also tolerates a taint RuntimeClass %q (%s) tolerates, so the proxy, the canary and runs of other classes could land on that class's nodes. "+
-					"Remove it from k8s.sandbox.tolerations, or narrow its key, value or effect: the RuntimeClass adds its own toleration to %s pods.",
+					"Remove it from k8s.sandbox.tolerations, or narrow its key, value or effect: the RuntimeClass adds its own toleration to %s pods",
 					errClassPlacement, d.placement.Tolerations[i].Key, name, c, c)
 			}
 		}
