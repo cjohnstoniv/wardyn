@@ -181,3 +181,7 @@ fbfc044a5bd06512fff0ffba8c4317d44a254285:ui/src/app/components/screens/approvals
 # test's canned JSON (made-up token values for a stubbed endpoint). Test fixtures, never credentials.
 02e832f6c07809c9d1089001031f3cbff27a2af3:internal/auth/oidc/portal_fetch_test.go:generic-api-key:341
 da41fe4070c69541c0210cae1145a0c869448586:internal/api/provider_service_grant_review_test.go:generic-api-key:513
+
+# Synthetic key in the run move scan-hit test: the move must refuse a work folder
+# whose file the secret scan flags, so the fixture holds a key-shaped string. Not a real key.
+1590369db52e1f4abcdefecb88072f9e553a4e0d:internal/api/run_move_exec_test.go:generic-api-key:130

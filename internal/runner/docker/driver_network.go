@@ -38,6 +38,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.MachineKind.IsMacOSVM() {
 		return d.createMacVM(ctx, spec)
 	}
+	if spec.MachineKind == types.MachineWindowsVM {
+		return d.createWinVM(ctx, spec)
+	}
 	if spec.MachineKind.Normalize() != "" {
 		return d.createVM(ctx, spec)
 	}

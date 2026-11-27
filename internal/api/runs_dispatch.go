@@ -400,13 +400,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image, p.SigninImageUngranted)
 	p.Image = image
 
-	extras, xerr := s.dispatchContainers(ctx, run.ID)
-	if xerr != nil {
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's extra containers could not be read")
-		return
-	}
-	// The run's outage terms (#4082), fixed and recorded now (run_outage.go).
-	outage, ok := s.recordOutageTerms(ctx, run, siteCfg, siteCfgErr, policy)
+	extras, outage, ok := s.dispatchExtrasAndOutage(ctx, run, siteCfg, siteCfgErr, policy)
 	if !ok {
 		return
 	}
@@ -926,4 +920,17 @@ func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.Agen
 		return execution, sb, start, false
 	}
 	return execution, sb, start, true
+}
+
+// dispatchExtrasAndOutage reads the run's extra containers, then fixes and records its outage terms (#4082,
+// run_outage.go). false when either fails; the run is then already failed.
+func (s *Server) dispatchExtrasAndOutage(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
+	policy types.RunPolicySpec) ([]runner.ExtraContainer, types.OutageTerms, bool) {
+	extras, err := s.dispatchContainers(ctx, run.ID)
+	if err != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's extra containers could not be read")
+		return nil, types.OutageTerms{}, false
+	}
+	outage, ok := s.recordOutageTerms(ctx, run, siteCfg, siteCfgErr, policy)
+	return extras, outage, ok
 }

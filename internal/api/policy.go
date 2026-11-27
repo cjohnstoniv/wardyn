@@ -136,6 +136,21 @@ func validatePolicySpecLenient(spec types.RunPolicySpec) error {
 	return validatePolicySpecMode(spec, false, true)
 }
 
+// validateDomainEntries refuses the first allowed or denied domain entry the proxy's matcher cannot match.
+func validateDomainEntries(spec types.RunPolicySpec) error {
+	for i, d := range spec.AllowedDomains {
+		if err := proxy.ValidDomainEntry(d); err != nil {
+			return fmt.Errorf("allowed_domains[%d]: %w", i, err)
+		}
+	}
+	for i, d := range spec.DeniedDomains {
+		if err := proxy.ValidDomainEntry(d); err != nil {
+			return fmt.Errorf("denied_domains[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
 func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool) error {
 	if spec.MinConfinementClass == "" {
 		return fmt.Errorf("min_confinement_class is required")
@@ -178,15 +193,8 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	// protection but allows/denies nothing — reject it at every ingest point
 	// (stored policy write, inline run policy, WARDYN_DEFAULT_POLICY file,
 	// composer/profile clamp) rather than ship a policy that lies.
-	for i, d := range spec.AllowedDomains {
-		if err := proxy.ValidDomainEntry(d); err != nil {
-			return fmt.Errorf("allowed_domains[%d]: %w", i, err)
-		}
-	}
-	for i, d := range spec.DeniedDomains {
-		if err := proxy.ValidDomainEntry(d); err != nil {
-			return fmt.Errorf("denied_domains[%d]: %w", i, err)
-		}
+	if err := validateDomainEntries(spec); err != nil {
+		return err
 	}
 	if err := types.ValidateHostRuleSets(spec.HostRules); err != nil {
 		return err

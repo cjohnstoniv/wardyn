@@ -284,9 +284,6 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 //
 //nolint:funlen // One linear assembly sequence whose rollback must stay in one scope, as CreateSandbox's.
 func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	if spec.MachineKind == types.MachineWindowsVM {
-		return d.createWinVM(ctx, spec)
-	}
 	if err := d.refuseVMSpec(spec); err != nil {
 		return runner.Sandbox{}, err
 	}
