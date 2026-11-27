@@ -36,7 +36,7 @@ const testLapseTTL = time.Hour
 func TestSelfLapse_ClosedBeforeFirstRenew(t *testing.T) {
 	clock := &fakeBoot{}
 	p, _ := newTestProxy(t, types.RunPolicySpec{AllowAllEgress: true}, "", nil, nil)
-	p.lapse = newLapseGate(clock, testLapseTTL)
+	p.lapse = newLapseGate(clock, testLapseTTL, gateOpts{})
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://example.com/"))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -112,7 +112,7 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 	}
 
 	clock := &fakeBoot{}
-	s, bound, _ := serve(newLapseGate(clock, testLapseTTL), "127.0.0.1:0")
+	s, bound, _ := serve(newLapseGate(clock, testLapseTTL, gateOpts{}), "127.0.0.1:0")
 	p := s.proxy
 	if listening(bound, 300*time.Millisecond) != "" || landed.Load() != 0 {
 		t.Fatalf("closed proxy accepted a connection (%d forwarded); a probe would read it Ready before it serves", landed.Load())
@@ -139,7 +139,7 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	s, bound, served := serve(newLapseGate(clock, testLapseTTL), held.Addr().String())
+	s, bound, served := serve(newLapseGate(clock, testLapseTTL, gateOpts{}), held.Addr().String())
 	s.proxy.lapse.lapse(LapseRenewRefused)
 	if listening(bound, 300*time.Millisecond) != "" {
 		t.Fatal("a proxy lapsed before its first renew listened")
@@ -166,7 +166,7 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 // reaches its open gate still ends it, as net/http runs only the hooks registered before Shutdown.
 func TestSelfLapse_ShutdownBeforeListenAndServeReturns(t *testing.T) {
 	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", nil, nil)
-	p.lapse = newLapseGate(&fakeBoot{}, testLapseTTL)
+	p.lapse = newLapseGate(&fakeBoot{}, testLapseTTL, gateOpts{})
 	s := &Server{proxy: p, http: &http.Server{Addr: "127.0.0.1:0", Handler: p}}
 	s.watchShutdown()
 	if err := s.http.Shutdown(context.Background()); err != nil {
@@ -189,7 +189,7 @@ func TestSelfLapse_ShutdownBeforeListenAndServeReturns(t *testing.T) {
 // the boot clock past it lapses at once, with no wall time passing.
 func TestSelfLapse_DeadlineOnBootClockAcrossSuspend(t *testing.T) {
 	clock := &fakeBoot{}
-	g := newLapseGate(clock, testLapseTTL)
+	g := newLapseGate(clock, testLapseTTL, gateOpts{})
 	sent := 5 * time.Minute
 	clock.set(sent + 30*time.Second) // the response lands later than the send
 	if !g.renewed(sent, func() {}) {
@@ -216,7 +216,7 @@ func TestSelfLapse_DeadlineOnBootClockAcrossSuspend(t *testing.T) {
 // TestSelfLapse_WatchdogLapsesIdleProxy: no traffic still lapses within a tick.
 func TestSelfLapse_WatchdogLapsesIdleProxy(t *testing.T) {
 	clock := &fakeBoot{}
-	g := newLapseGate(clock, testLapseTTL)
+	g := newLapseGate(clock, testLapseTTL, gateOpts{})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go g.watch(ctx, time.Millisecond)
@@ -232,7 +232,7 @@ func TestSelfLapse_WatchdogLapsesIdleProxy(t *testing.T) {
 // result is applied after the deadline is dropped, and nothing reopens.
 func TestSelfLapse_ExpiryRacingRenewResultIsDropped(t *testing.T) {
 	clock := &fakeBoot{}
-	g := newLapseGate(clock, testLapseTTL)
+	g := newLapseGate(clock, testLapseTTL, gateOpts{})
 	g.renewed(0, func() {})
 	sent := testLapseTTL - time.Second // sent before the deadline...
 	clock.set(testLapseTTL)            // ...answered at it
@@ -252,7 +252,7 @@ func TestSelfLapse_ExpiryRacingRenewResultIsDropped(t *testing.T) {
 func TestSelfLapse_RenewTimelines(t *testing.T) {
 	m := time.Minute
 	clock := &fakeBoot{}
-	g := newLapseGate(clock, testLapseTTL)
+	g := newLapseGate(clock, testLapseTTL, gateOpts{})
 	g.renewed(0, func() {})
 	clock.set(60 * m)
 	if g.serving() {
@@ -264,7 +264,7 @@ func TestSelfLapse_RenewTimelines(t *testing.T) {
 	}
 
 	clock = &fakeBoot{}
-	g = newLapseGate(clock, testLapseTTL)
+	g = newLapseGate(clock, testLapseTTL, gateOpts{})
 	g.renewed(0, func() {})
 	clock.set(56 * m)
 	if !g.renewed(56*m, func() {}) {
@@ -276,7 +276,7 @@ func TestSelfLapse_RenewTimelines(t *testing.T) {
 	}
 
 	clock = &fakeBoot{}
-	g = newLapseGate(clock, testLapseTTL)
+	g = newLapseGate(clock, testLapseTTL, gateOpts{})
 	l := 3 * m
 	g.renewed(l, func() {})
 	clock.set(l + 55*m) // crash at L+9, back at L+55
@@ -302,7 +302,7 @@ func TestSelfLapse_PermanentRefusalLapsesAtOnce(t *testing.T) {
 		http.Error(w, "run terminal", http.StatusForbidden)
 	}))
 	defer srv.Close()
-	g := newLapseGate(&fakeBoot{}, testLapseTTL)
+	g := newLapseGate(&fakeBoot{}, testLapseTTL, gateOpts{})
 	done := make(chan struct{})
 	go func() {
 		runSelfLapseRenewer(t.Context(), newTokenSource("seed"), srv.URL, srv.Client(), g, lapseTestTuning())
@@ -332,7 +332,7 @@ func TestSelfLapse_FailuresRetryUntilDeadlineNeverGiveUp(t *testing.T) {
 	}))
 	defer srv.Close()
 	clock := &fakeBoot{}
-	g := newLapseGate(clock, testLapseTTL)
+	g := newLapseGate(clock, testLapseTTL, gateOpts{})
 	ts := newTokenSource("seed")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -353,7 +353,7 @@ func (farClock) Now() time.Duration { return math.MaxInt64 }
 // TestSelfLapse_FarFutureClockSaturates (L1): an unreadable clock's far-future
 // answer saturates the deadline instead of wrapping, and lapses at once.
 func TestSelfLapse_FarFutureClockSaturates(t *testing.T) {
-	g := newLapseGate(farClock{}, selfLapseTTL)
+	g := newLapseGate(farClock{}, selfLapseTTL, gateOpts{})
 	if g.deadline != math.MaxInt64 {
 		t.Fatalf("deadline %d, want saturated", int64(g.deadline))
 	}
@@ -398,7 +398,7 @@ func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
 	t.Run("unreachable", func(t *testing.T) {
 		hostPort := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 		clock := &fakeBoot{}
-		g := newLapseGate(clock, testLapseTTL)
+		g := newLapseGate(clock, testLapseTTL, gateOpts{})
 		run(t, "http://user:hunter2@"+hostPort+"/?sig="+tok, http.DefaultClient, g)
 		if lapsed(g, 200*time.Millisecond) {
 			t.Fatal("lapsed before its first renew's bound")
@@ -429,7 +429,7 @@ func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
 		}))
 		defer srv.Close()
 		clock := &fakeBoot{}
-		g := newLapseGate(clock, testLapseTTL)
+		g := newLapseGate(clock, testLapseTTL, gateOpts{})
 		run(t, srv.URL, srv.Client(), g)
 		clock.set(firstRenewWithin)
 		if !lapsed(g, 5*time.Second) {
@@ -448,7 +448,7 @@ func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
 		}))
 		defer srv.Close()
 		clock := &fakeBoot{}
-		g := newLapseGate(clock, testLapseTTL)
+		g := newLapseGate(clock, testLapseTTL, gateOpts{})
 		g.renewed(0, func() {})
 		clock.set(firstRenewWithin)
 		run(t, srv.URL, srv.Client(), g)
@@ -462,7 +462,7 @@ func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
 			http.Error(w, "run terminal", http.StatusForbidden)
 		}))
 		defer srv.Close()
-		g := newLapseGate(&fakeBoot{}, testLapseTTL)
+		g := newLapseGate(&fakeBoot{}, testLapseTTL, gateOpts{})
 		run(t, srv.URL, srv.Client(), g)
 		if !lapsed(g, 5*time.Second) || g.reason != LapseRenewRefused {
 			t.Fatalf("reason %q", g.reason)

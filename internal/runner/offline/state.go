@@ -74,6 +74,9 @@ type localRun struct {
 	// release is retried at runner start and on every reconnect. The release still refuses
 	// unsettled output.
 	OutputPending bool `json:"output_pending,omitempty"`
+	// LocalContain is a local operator's latch (wardyn-runnerd contain, contain.go): the proxy is stopped, every lease
+	// is dropped and recover_containment is refused. Only the run's retirement clears it.
+	LocalContain *runnerwire.LocalContain `json:"local_contain,omitempty"`
 }
 
 // restartReadyGrace is the least time a restart's provisional deadline leaves a run whose LapseBy passed

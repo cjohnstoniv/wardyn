@@ -5965,6 +5965,19 @@ What the switch needs, and refuses to render or boot without:
       and app role install grants the app role `SELECT, INSERT, DELETE` on
       `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
       `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
+  - **the GitHub installation token hand-back** — `run_github_token_seals` holds each
+    `github_token` a run minted, sealed under the run's masking-manifest owner's `cred` key
+    (AAD: the run id, the jti and the key version), so a worker on any replica can hand it
+    back to GitHub after the run's revoke.
+    - A run with no masking manifest keeps no copy.
+    - The sealed copy is emptied when its hand-back ends (handed back, expired or
+      abandoned); a token no revoke asked for keeps its copy until its row goes.
+    - A row goes within one worker pass once it is 5 minutes past the token's expiry, or
+      at the person's erasure; the manifest fence stops a write after an erasure.
+    - A split migrator and app role install grants the app role
+      `SELECT, INSERT, UPDATE, DELETE` on `run_github_token_seals`; without it a GitHub
+      token mint fails for a run with a masking manifest, and a revoke shows as
+      `broker_error` on `run.revoke`.
 - **A desktop Close is shared through the database** (`ui_desktop_closed`): every replica refuses the closed cookie,
   and a stream open on another replica ends within 15 s.
   - While the database is unreachable, open desktops end and new opens are refused until it is back.

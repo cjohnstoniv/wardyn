@@ -8,7 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
-	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +30,7 @@ type lapseState uint8
 const (
 	lapseClosed lapseState = iota // from start until the first successful renew
 	lapseOpen
+	lapsePaused // past the allowance on a pausable gate: refuses, closes tunnels, reopens on a renew or recovery
 	lapseLapsed // terminal
 )
 
@@ -39,29 +40,58 @@ const (
 	LapseRenewRefused = "renew_refused"
 )
 
-// lapseGate is a k8s runner proxy's terminal self-lapse (D6, §6.2): closed
-// until the first successful renew, open until the last successful renew's
-// SEND time plus RunTokenTTL, then lapsed for good. The renew result and the
-// lapse take the same lock, so a result arriving after the lapse is dropped.
-// A nil gate (Docker, server) always serves.
+// lapseGate is every proxy's egress gate (#4082): open until the
+// last successful renew's SEND time plus the run's outage allowance (span).
+// A gate that starts closed (a k8s runner's proxy, a replacement) serves
+// nothing until its first renew. Past the deadline a pausable gate pauses: it
+// refuses with a retryable answer, closes its tunnels and reopens on the next
+// renew or recovery, until its hardEnd; any other gate lapses for good. The
+// renew result and the lapse take the same lock, so a result arriving after
+// the lapse is dropped. A nil gate (no control plane, the via_org engine)
+// always serves.
 type lapseGate struct {
-	mu       sync.Mutex
-	clock    bootClock
-	ttl      time.Duration
-	state    lapseState
-	start    time.Duration
-	deadline time.Duration
-	reason   string
-	cause    string        // the last renew error, redacted (renewCause)
-	open     chan struct{} // closes on the first successful renew
-	done     chan struct{}
-	onLapse  func(reason string)
+	mu          sync.Mutex
+	clock       bootClock
+	span        time.Duration
+	state       lapseState
+	start       time.Duration
+	deadline    time.Duration
+	hardEnd     time.Duration // the last good renew's send time + RunTokenTTL + 24 h + 5 min: a pause lapses here
+	pausable    bool          // pause at the deadline instead of lapsing
+	exitOnLapse bool          // the process ends when the gate lapses after serving (a k8s runner's proxy)
+	reason      string
+	cause       string        // the last renew error, redacted (renewCause)
+	open        chan struct{} // closes on the first successful renew
+	pause       chan struct{} // closes when the gate pauses; a reopen replaces it
+	done        chan struct{}
+	exit        chan struct{} // closes on a lapse when exitOnLapse holds, or on a lapse while still closed
+	tunnels     map[net.Conn]struct{}
+	onLapse     func(reason string)
+	onPause     func() // called under the gate's lock; it must not call the gate
 }
 
-func newLapseGate(clock bootClock, ttl time.Duration) *lapseGate {
-	// Closed from start: until a renew succeeds the bound is process start + TTL.
+// gateOpts are a gate's case (server.go): pausable unless the run's terms are strict, exitOnLapse only on a k8s
+// runner, and startOpen for a proxy that serves from its start.
+type gateOpts struct {
+	pausable, exitOnLapse, startOpen bool
+}
+
+// recoverHardEnd is how long after a renew's send time a paused gate may still be reopened: the token's lifetime, the
+// 24 h within which a lapsed token may be recovered, and the stamp margin.
+const recoverHardEnd = identity.RunTokenTTL + 24*time.Hour + 5*time.Minute
+
+func newLapseGate(clock bootClock, span time.Duration, opts gateOpts) *lapseGate {
+	// Closed from start (unless startOpen): until a renew succeeds the bound is process start + span.
 	now := clock.Now()
-	return &lapseGate{clock: clock, ttl: ttl, start: now, deadline: addSat(now, ttl), open: make(chan struct{}), done: make(chan struct{})}
+	g := &lapseGate{clock: clock, span: span, start: now, deadline: addSat(now, span), hardEnd: addSat(now, recoverHardEnd),
+		pausable: opts.pausable, exitOnLapse: opts.exitOnLapse,
+		open: make(chan struct{}), pause: make(chan struct{}), done: make(chan struct{}), exit: make(chan struct{}),
+		tunnels: map[net.Conn]struct{}{}}
+	if opts.startOpen {
+		g.state = lapseOpen
+		close(g.open)
+	}
+	return g
 }
 
 // addSat adds without wrapping: a far-future clock reading (the fail-closed
@@ -94,13 +124,30 @@ func (g *lapseGate) check() {
 }
 
 func (g *lapseGate) expireLocked() {
-	if g.state != lapseLapsed && g.clock.Now() >= g.deadline {
+	now := g.clock.Now()
+	switch {
+	case g.state == lapseOpen && now >= g.deadline && g.pausable:
+		g.state = lapsePaused
+		close(g.pause)
+		for c := range g.tunnels {
+			_ = c.Close()
+		}
+		if g.onPause != nil {
+			g.onPause()
+		}
+		if now >= g.hardEnd {
+			g.lapseLocked(LapseDeadline)
+		}
+	case (g.state == lapseOpen || g.state == lapseClosed) && now >= g.deadline:
+		g.lapseLocked(LapseDeadline)
+	case g.state == lapsePaused && now >= g.hardEnd:
 		g.lapseLocked(LapseDeadline)
 	}
 }
 
-// renewed applies a successful renew sent at sent. It returns false, applying
-// nothing, when the gate has lapsed or the deadline passed before the result.
+// renewed applies a successful renew or recovery sent at sent: a closed or
+// paused gate opens until sent + span. It returns false, applying nothing,
+// when the gate has lapsed or a non-pausable deadline passed before the result.
 func (g *lapseGate) renewed(sent time.Duration, apply func()) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -109,14 +156,72 @@ func (g *lapseGate) renewed(sent time.Duration, apply func()) bool {
 		return false
 	}
 	apply()
-	if g.state == lapseClosed {
+	switch g.state {
+	case lapseClosed:
 		close(g.open)
+	case lapsePaused:
+		g.pause = make(chan struct{})
 	}
-	g.state, g.deadline = lapseOpen, addSat(sent, g.ttl)
+	g.state, g.deadline, g.hardEnd = lapseOpen, addSat(sent, g.span), addSat(sent, recoverHardEnd)
 	return true
 }
 
+// paused reports a gate that has paused at its allowance; false for nil.
+func (g *lapseGate) paused() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.expireLocked()
+	return g.state == lapsePaused
+}
+
+// pauseState reads, under one lock, whether g has paused and the channel that closes when an open pausable g pauses.
+// A renew loop takes both before a try: a paused g asks the recover door now, and an open one's pause ends that try's
+// wait, with no deadline crossing between the two reads to miss. pause is nil, never closing, for a nil gate or one
+// that is not open and pausable.
+func (g *lapseGate) pauseState() (paused bool, pause <-chan struct{}) {
+	if g == nil {
+		return false, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.expireLocked()
+	switch {
+	case g.state == lapsePaused:
+		return true, nil
+	case g.state == lapseOpen && g.pausable:
+		return false, g.pause
+	}
+	return false, nil
+}
+
+// track registers a hijacked tunnel's client conn, so a pause closes it; the returned func forgets it. A gate that
+// is not open closes it at once. A nil gate tracks nothing.
+func (g *lapseGate) track(c net.Conn) func() {
+	if g == nil {
+		return func() {}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.expireLocked()
+	if g.state != lapseOpen {
+		_ = c.Close()
+		return func() {}
+	}
+	g.tunnels[c] = struct{}{}
+	return func() {
+		g.mu.Lock()
+		delete(g.tunnels, c)
+		g.mu.Unlock()
+	}
+}
+
 func (g *lapseGate) lapse(reason string) {
+	if g == nil {
+		return
+	}
 	g.mu.Lock()
 	g.lapseLocked(reason)
 	g.mu.Unlock()
@@ -148,8 +253,15 @@ func (g *lapseGate) lapseLocked(reason string) {
 	if g.state == lapseLapsed {
 		return
 	}
+	wasClosed := g.state == lapseClosed
 	g.state, g.reason = lapseLapsed, reason
+	for c := range g.tunnels {
+		_ = c.Close()
+	}
 	close(g.done)
+	if g.exitOnLapse || wasClosed {
+		close(g.exit)
+	}
 	if g.onLapse != nil {
 		go g.onLapse(reason)
 	}
@@ -161,6 +273,15 @@ func (g *lapseGate) Done() <-chan struct{} {
 		return nil
 	}
 	return g.done
+}
+
+// exited closes when the process must end: on a lapse of a k8s runner's gate, or a lapse before the first renew;
+// nil for a gate-less proxy (never fires).
+func (g *lapseGate) exited() <-chan struct{} {
+	if g == nil {
+		return nil
+	}
+	return g.exit
 }
 
 // watch lapses the gate within a tick of the deadline even with no traffic.
@@ -183,6 +304,19 @@ func refuseClosed(w http.ResponseWriter) {
 	http.Error(w, "wardyn: this run's egress is closed", http.StatusServiceUnavailable)
 }
 
+// pausedBody is a paused gate's refusal.
+const pausedBody = "wardyn: this run's network is paused until Wardyn can check the run again"
+
+// refuse answers a request the gate does not serve: a paused gate with a retryable 503, any other with refuseClosed.
+func (g *lapseGate) refuse(w http.ResponseWriter) {
+	if g.paused() {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, pausedBody, http.StatusServiceUnavailable)
+		return
+	}
+	refuseClosed(w)
+}
+
 // lapseRenewTuning is the self-lapse renew cadence (N1): every 10 min ±1 min
 // after a success, every 30 s ±5 s after a failure, until the deadline. Nothing
 // gives up before it, except a proxy not yet renewed by firstRenewWithin; a
@@ -190,6 +324,7 @@ func refuseClosed(w http.ResponseWriter) {
 type lapseRenewTuning struct {
 	success, successJitter time.Duration
 	failure, failureJitter time.Duration
+	recover, recoverJitter time.Duration // recover mode's cadence (recover.go)
 	watchEvery             time.Duration
 	jitter                 func(d time.Duration) time.Duration
 }
@@ -198,23 +333,38 @@ func defaultLapseRenewTuning() lapseRenewTuning {
 	return lapseRenewTuning{
 		success: 10 * time.Minute, successJitter: time.Minute,
 		failure: 30 * time.Second, failureJitter: 5 * time.Second,
+		recover: recoverEvery, recoverJitter: recoverJitter,
 		watchEvery: time.Second,
-		jitter: func(d time.Duration) time.Duration {
-			if d <= 0 {
-				return 0
-			}
-			return time.Duration(rand.Int64N(int64(2*d+1))) - d
-		},
+		jitter:     uniformJitter,
 	}
 }
 
 // runSelfLapseRenewer renews until the gate lapses: each success moves the
-// deadline to its send time + RunTokenTTL, under the gate's lock.
+// deadline to its send time + the gate's span, under the gate's lock. Once the
+// held token's known expiry has passed, or the gate has paused, it asks the
+// recover door instead at the recover cadence (#4082): a recovery reopens the
+// gate, a 409 sends it back to one renew, and a 403 or 501 lapses the gate.
 func runSelfLapseRenewer(ctx context.Context, ts *tokenSource, base string, client *http.Client, g *lapseGate, tune lapseRenewTuning) {
+	var heldExp time.Time // the held token's expiry; unknown for the startup token
+	renewNext := false    // a 409 from the recover door: the token is live, so renew it
+	recovering := false
 	for {
 		sent := g.clock.Now()
+		recover := !renewNext && (g.paused() || !heldExp.IsZero() && time.Now().After(heldExp))
+		renewNext = false
+		if recover && !recovering {
+			slog.WarnContext(ctx, "wardyn-proxy: the held run token can no longer renew, asking to recover it")
+		}
+		recovering = recover
 		rctx, cancel := context.WithTimeout(ctx, renewTimeout)
-		tok, _, err := renewToken(rctx, base, ts.Get(), client)
+		var tok string
+		var exp time.Time
+		var err error
+		if recover {
+			tok, exp, err = recoverToken(rctx, base, ts.Get(), client)
+		} else {
+			tok, exp, err = renewToken(rctx, base, ts.Get(), client)
+		}
 		cancel()
 		next := tune.failure + tune.jitter(tune.failureJitter)
 		var se *renewStatusError
@@ -223,7 +373,24 @@ func runSelfLapseRenewer(ctx context.Context, ts *tokenSource, base string, clie
 			if !g.renewed(sent, func() { ts.Set(tok) }) {
 				return
 			}
+			if recover {
+				slog.InfoContext(ctx, "wardyn-proxy: run token recovered after the control plane came back")
+				recovering = false
+			}
+			heldExp = exp
 			next = tune.success + tune.jitter(tune.successJitter)
+		case recover && isRecoverStatus(err, http.StatusConflict):
+			renewNext = true
+		case recover && recoverFinal(err):
+			slog.ErrorContext(ctx, "wardyn-proxy: run token recovery refused for good, lapsing", slog.Any("err", err))
+			g.mu.Lock()
+			g.cause = renewCause(err, ts.Get())
+			g.lapseLocked(LapseRenewRefused)
+			g.mu.Unlock()
+			return
+		case recover:
+			next = tune.recover + tune.jitter(tune.recoverJitter)
+			g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
 		case errors.As(err, &se) && se.permanent():
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew refused permanently, lapsing", slog.Int("status", se.Status))
 			g.mu.Lock()

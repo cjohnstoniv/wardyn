@@ -52,3 +52,51 @@ func TestClockBoundsForgedFutureLeaseAndRefusesMissingTime(t *testing.T) {
 		t.Fatal("zero renewal accepted")
 	}
 }
+
+// TestAllowanceRemaining: the allowance runs from the renewal stamp on the monotonic clock, never exceeds its span
+// however far ahead the stamp is, and is the token's own leg when given the token's span.
+func TestAllowanceRemaining(t *testing.T) {
+	server := time.Now().UTC()
+	elapsed := time.Duration(0)
+	c := NewClock(func(time.Time) time.Duration { return elapsed })
+	const span = 20 * time.Hour
+	if _, err := c.AllowanceRemaining(server, span); err == nil {
+		t.Fatal("allowance computed before HELLO")
+	}
+	if err := c.Hello(runnerwire.Hello{ServerTime: server}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AllowanceRemaining(time.Time{}, span); err == nil {
+		t.Fatal("zero renewal accepted")
+	}
+	if got, err := c.AllowanceRemaining(server, span); err != nil || got != span {
+		t.Fatalf("fresh stamp: remaining=%v err=%v, want %v", got, err, span)
+	}
+	elapsed = 3 * time.Hour
+	if got, err := c.AllowanceRemaining(server, span); err != nil || got != span-elapsed {
+		t.Fatalf("after 3h: remaining=%v err=%v, want %v", got, err, span-elapsed)
+	}
+	// A stamp an hour old has used an hour of the span; one far in the future cannot grant more than the span.
+	if got, err := c.AllowanceRemaining(server.Add(-time.Hour), span); err != nil || got != span-time.Hour-elapsed {
+		t.Fatalf("old stamp: remaining=%v err=%v, want %v", got, err, span-time.Hour-elapsed)
+	}
+	if got, err := c.AllowanceRemaining(server.Add(365*24*time.Hour), span); err != nil || got != span {
+		t.Fatalf("forged future stamp: remaining=%v err=%v, want the span %v", got, err, span)
+	}
+	elapsed = span
+	if got, err := c.AllowanceRemaining(server, span); err != nil || got != 0 {
+		t.Fatalf("spent: remaining=%v err=%v, want 0", got, err)
+	}
+	elapsed = span + time.Minute
+	if got, err := c.AllowanceRemaining(server, span); err != nil || got > 0 {
+		t.Fatalf("past the span: remaining=%v err=%v, want none left", got, err)
+	}
+	elapsed = 10 * time.Minute
+	want, err := c.TokenRemaining(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.AllowanceRemaining(server, identity.RunTokenLapseAfter); err != nil || got != want {
+		t.Fatalf("token span: remaining=%v err=%v, want TokenRemaining's %v", got, err, want)
+	}
+}

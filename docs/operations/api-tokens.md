@@ -395,7 +395,7 @@ A service identity is automation that runs under its own name. It is not a perso
   - It is a bearer. Wardyn does not bind it to a workload or a network.
 - **Every request is re-checked** against the live identity and its sponsor.
   - A missing, suspended or retired identity, a token older than the current sponsor, or a sponsor who is deactivated, purged or fully revoked after the token was minted is refused with the one `401` of an unknown token.
-  - A sponsor does not need a live session: signing out leaves the service's tokens working. A deactivated sponsor ends the identity.
+  - A sponsor does not need a live session. A session-only sign-out (`sessions_only`) leaves the service's tokens, namespace bindings and queued and workload launches working; a full revoke or a deactivation stops them all.
   - The `auth.fail` row says why: `service_identity_inactive` or `service_sponsor_inactive`.
   - A sponsor disabled only at the identity provider is not seen. Without SCIM or a session revoke the service's tokens work until they expire. Without SCIM its live runs continue.
 

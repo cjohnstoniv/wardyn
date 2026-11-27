@@ -70,6 +70,10 @@ type OutageTerms struct {
 	AllowanceSec  int64
 	Strict        bool
 	EndUnattended bool
+	// ProxyPauses is whether the run's active proxy pauses at its allowance and asks to recover, as its own loaded
+	// report said and this server can recover it. It is written per proxy start, not at dispatch, and is not a term:
+	// IsDefault ignores it.
+	ProxyPauses bool
 }
 
 // DefaultOutageTerms are the terms of a run with no site or policy say, and of a run dispatched before terms were kept.
@@ -77,8 +81,11 @@ func DefaultOutageTerms() OutageTerms {
 	return OutageTerms{AllowanceSec: OutageAllowanceDefaultMinutes * 60}
 }
 
-// IsDefault reports whether t are the default terms.
-func (t OutageTerms) IsDefault() bool { return t == DefaultOutageTerms() }
+// IsDefault reports whether t are the default terms. ProxyPauses is not compared.
+func (t OutageTerms) IsDefault() bool {
+	d := DefaultOutageTerms()
+	return t.AllowanceSec == d.AllowanceSec && t.Strict == d.Strict && t.EndUnattended == d.EndUnattended
+}
 
 // EffectiveOutageTerms are a run's terms from the site's allowance (0 for the default) and its resolved policy's say:
 // the policy can only shorten the site's allowance.

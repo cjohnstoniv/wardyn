@@ -294,6 +294,16 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 - A run's token counts come from the same answers. Compare one call with the gateway's own figure by its call id.
 - An MCP server has a call id. It also gets an identity token when it is an organisation's remote server with `mcp.gateway_audience`, and no token otherwise.
 
+## Why the identity token is per run, not per call
+
+- The gateway identity token names the run and the provider and is reused for up to 10 minutes. The call id travels
+  beside it as `X-Wardyn-Call-Id`, made fresh for every attempt.
+- Minting a token per call, or signing the call id into it, would add a signature to every model call. A gateway
+  that runs `jwtAuth` in `strict` mode already trusts only lines whose token checked. A call id a sandbox forged
+  cannot hide a call: it only fails to match the run's audit row.
+- A gateway that must authorise each call by a signed id would need a new token format, minted per call on that
+  route.
+
 ## Who inspects
 
 With content inspection on (`llm_inspection` in the run's policy), Wardyn checks each prompt before it leaves. A gateway that checks prompts too runs the same checks twice. A provider with run identity on can leave them to its gateway: `gateway_identity.inspection: gateway`, the console's "Let this gateway check prompts".

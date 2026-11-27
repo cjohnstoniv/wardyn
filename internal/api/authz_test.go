@@ -1161,6 +1161,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/proxy/loaded":                   {class: classInternal},
 	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
 	"POST /api/v1/internal/token/renew":                    {class: classInternal},
+	"POST /api/v1/internal/token/recover":                  {class: classInternal},
 	"PUT /api/v1/internal/recordings/{runID}":              {class: classInternal},
 	"PUT /api/v1/internal/recordings/{runID}/parts/{part}": {class: classInternal},
 	"PUT /api/v1/internal/scan-results/{runID}":            {class: classInternal},

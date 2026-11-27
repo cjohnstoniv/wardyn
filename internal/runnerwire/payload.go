@@ -657,6 +657,9 @@ type Lease struct {
 	// older runner reads as today's deadline.
 	OutageAllowanceS int64 `json:"outage_allowance_s,omitempty"`
 	OutageStrict     bool  `json:"outage_strict,omitempty"`
+	// ProxyPauses is whether the run's proxy pauses at its allowance and recovers by itself (#4082), so the runner
+	// keeps it past today's deadline; false for an older proxy or server, which keep today's deadline.
+	ProxyPauses bool `json:"proxy_pauses,omitempty"`
 }
 
 // PendingAction is one entry of the PENDING payload, oldest first.
@@ -717,6 +720,17 @@ type RunState struct {
 	// finish (runner.TeardownUnconfirmedError): open while it holds the run, with ClearedAt once that kill
 	// or end finished. A runner that predates it sends none; an organisation that predates it ignores it.
 	TeardownHold *TeardownHold `json:"teardown_hold,omitempty"`
+	// LocalContain is set once a local operator contained the run on its runner host (wardyn-runnerd contain).
+	// Runner-asserted; an older organisation ignores it.
+	LocalContain *LocalContain `json:"local_contain,omitempty"`
+}
+
+// LocalContain is a local operator's containment of a run on its runner host: when it was asked for (the host's UTC
+// clock), whether for the run alone ("run") or every run on the runner ("all"), and the operator's uid.
+type LocalContain struct {
+	At    time.Time `json:"at"`
+	Scope string    `json:"scope"`
+	UID   int       `json:"uid"`
 }
 
 // TeardownHold is RunState's teardown-hold report: the kill or end the runner holds the run for, and

@@ -48,8 +48,8 @@ func (s PG) SetRunOutageTerms(ctx context.Context, id uuid.UUID, t types.OutageT
 
 func (s PG) RunOutageTerms(ctx context.Context, id uuid.UUID) (types.OutageTerms, error) {
 	t := types.DefaultOutageTerms()
-	err := s.Pool.QueryRow(ctx, `SELECT allowance_s, strict, end_unattended FROM run_outage_terms WHERE run_id = $1`, id).
-		Scan(&t.AllowanceSec, &t.Strict, &t.EndUnattended)
+	err := s.Pool.QueryRow(ctx, `SELECT allowance_s, strict, end_unattended, proxy_pauses FROM run_outage_terms WHERE run_id = $1`, id).
+		Scan(&t.AllowanceSec, &t.Strict, &t.EndUnattended, &t.ProxyPauses)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.DefaultOutageTerms(), nil
 	}

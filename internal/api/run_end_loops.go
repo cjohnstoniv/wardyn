@@ -10,10 +10,11 @@ import (
 )
 
 // startRunEndLoops starts the loops that own a run after its end: the containment loop, the revoke
-// queue and the tail owner. Each runs on every replica on its own ticker and stops with the watcher ctx.
+// queue, the GitHub token hand-back and the tail owner. Each runs on every replica on its own ticker and stops with the watcher ctx.
 func (s *Server) startRunEndLoops() {
 	s.startContainLoop()
 	s.startRevokeQueue()
+	s.startGitHubTokenRevokes()
 	s.startTailOwner()
 }
 

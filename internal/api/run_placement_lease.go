@@ -199,6 +199,7 @@ func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, genera
 	if !terms.IsDefault() {
 		l.OutageAllowanceS, l.OutageStrict = terms.AllowanceSec, terms.Strict
 	}
+	l.ProxyPauses = terms.ProxyPauses // sent for default terms too: a pausing proxy recovers under them
 	payload, err := runnerwire.Marshal(l)
 	if err != nil {
 		return err

@@ -71,7 +71,23 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 			if err != nil {
 				return // no mark and no teardown: the next sweep reads the clock again
 			}
+			// Its outage terms first (#4082): end it, hold it for its proxy to recover, or take the action below.
+			recovery := s.outageRecoveryFor(ctx, run, v, run.RunnerID == nil && run.Placement != types.PlacementLocal)
+			switch recovery {
+			case outageRecoveryEndStrict:
+				// The reason names no outage: a spent strict allowance ends the run whether or not one was recorded.
+				s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "the run's strict outage terms end it: its network was not confirmed within its allowance")
+				return
+			case outageRecoveryEndUnattended:
+				s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "control-plane outage: this policy ends unattended runs after an outage")
+				return
+			case outageRecoveryHold:
+				return // no mark, no stop and no row: the next pass decides again
+			}
 			o, serr := s.loseRunAs(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at, 0, v)
+			if recovery == outageRecoveryEndStrictOnRunner && o == loseApplied && !errors.Is(serr, runner.ErrEndUnsupported) {
+				s.endStrictRunnerRun(ctx, run)
+			}
 			if o != loseNotKeepable {
 				// held counts runs kept with the cut confirmed: not a server Kubernetes run (it is ended), nor one
 				// whose cut failed (it stays kept, unresolved, for the lease sweep to retry).

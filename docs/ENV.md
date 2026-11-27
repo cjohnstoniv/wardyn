@@ -120,6 +120,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_MIGRATE_TIMEOUT` | duration | `5m` | how long `db.Migrate` may run before boot fails closed — separate from the fixed 30s connect budget, so a slow migration (e.g. an index build on a large table) doesn't crash-loop the upgrade (flag `-migrate-timeout`) |
 | `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` | bool | `false` | **break-glass**: boot even though `schema_migrations` records a migration this wardynd does not ship (flag `-allow-unknown-migrations`). Normally boot is **refused**; every boot that carries it WARNs. [Details](#wardyn_allow_unknown_migrations) |
 | `WARDYN_IDENTITY` | string | `embedded` | identity provider seam (flag `-identity`) |
+| `WARDYN_IDENTITY_NARROWING` | enum | `audit` | narrowing by the identities behind a request, `audit` or `enforce`: a unit or group decider's own `egress_host` grant when approving an egress host, and restrictions on every user type a person's sign-in matches. [Details](#wardyn_identity_narrowing) |
 | `WARDYN_TRUST_DOMAIN` | string | `wardyn.local` | SPIFFE trust domain (flag `-trust-domain`) |
 | `WARDYN_SPIRE_AGENT_SOCKET` | string | (unset) | experimental, `WARDYN_IDENTITY=spire` only: wardynd's SPIRE Workload API address, e.g. `unix:///spiffe-workload-api/spire-agent.sock`. Required under spire. [SPIRE identity](operations/spire.md) |
 | `WARDYN_SPIRE_SERVER_ADDRESS` | `host:port` | (unset) | spire only: the SPIRE server, reached over mTLS as `spiffe://<trust domain>/spire/server`. Required under spire. |
@@ -1791,6 +1792,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The console lists the held changes on the Governance screen's Changes tab.
 - A value that is not a bool exits 2 at boot in every mode.
 - See [`docs/OPERATIONS.md`](OPERATIONS.md).
+
+### `WARDYN_IDENTITY_NARROWING`
+
+- Two narrowings ([deciders](operations/deciders.md#who), [keeping the strictest floor](operations/governance-writes.md); `identityNarrowingEnforced`, [`internal/api/identity_narrowing.go`](../internal/api/identity_narrowing.go)), read per request.
+- `audit` (the default): nothing is refused or narrowed. An approve the check would refuse writes `approval.authority.alert`, and a restriction it would add writes `governance.restriction.alert`, at most once a day per person and set of restrictions.
+- `enforce`: a person a unit's deciders rule names as `unit_admins` or `group:<name>` needs the `egress_host` grant on the host to approve an `egress_domain` hold, as the run's owner does. Restrictions on every user type a person's sign-in matches apply. Other approval kinds are unchanged.
+- Without single sign-on there is no sign-in to derive user types from, and the restriction half changes nothing.
+- Env-only on purpose: an administrator it binds cannot switch it off from the console. Any value other than `audit` or `enforce` exits 2 at boot.
 
 ### `WARDYN_GOVERNANCE_CHANGE_TTL`
 

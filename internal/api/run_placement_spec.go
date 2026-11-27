@@ -45,6 +45,11 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	p.MachineKindDenials = machineKindDenialsOf(sc)       // a new run is judged against them; a revive keeps its runner
 	corpus := inspectionCorpusOf(spec.ProxyConfig.Policy) // before the laptop copy drops it
 	adoGate := spec.ProxyConfig.ADOGrant                  // before a via_org laptop copy drops it
+	// A denial keyed to a site holds at the site the run was placed at.
+	if err := s.denialSiteOf(ctx, sc, run, &p); err != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")
+		return false
+	}
 	ref, err := s.dispatchTrustRefusal(ctx, run, p)
 	if err != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")

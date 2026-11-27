@@ -125,7 +125,10 @@ func scanProxyStart(row pgx.Row, extra ...any) (ProxyStart, error) {
 
 // BeginProxyStart — see RunProxyStarts.
 func (s PG) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string, inPlace bool) (ProxyStart, error) {
+	// Every new start begins as "does not pause" (run_outage_terms.proxy_pauses), until its own loaded report says
+	// otherwise.
 	p, err := scanProxyStart(s.Pool.QueryRow(ctx, `
+		WITH cleared AS (UPDATE run_outage_terms SET proxy_pauses = false WHERE run_id = $1)
 		INSERT INTO run_proxy_starts (run_id, generation, jti, mode, in_place, started_at, state)
 		VALUES ($1, $2, $3, $4, $5, now(), 'pending')
 		ON CONFLICT (run_id, generation) DO UPDATE SET jti = EXCLUDED.jti, mode = EXCLUDED.mode, in_place = EXCLUDED.in_place,

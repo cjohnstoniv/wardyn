@@ -98,6 +98,10 @@ func (s *Server) handlePutRunnerSettings(w http.ResponseWriter, r *http.Request)
 			writeErrorReason(w, http.StatusBadRequest, reasonMachineKindDenialsInvalid, "Machine-kind denials: "+err.Error())
 			return
 		}
+		if msg, err := s.machineKindDenialSiteRefusal(r.Context(), *req.MachineKindDenials); err != nil || msg != "" {
+			writeMachineKindDenialSiteRefusal(w, r, msg, err)
+			return
+		}
 	}
 	if req.Enabled != nil && *req.Enabled {
 		if msg := s.runnersEnableRefusal(); msg != "" {

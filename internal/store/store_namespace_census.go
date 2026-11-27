@@ -87,6 +87,7 @@ var namespaceCensusColumns = []censusColumn{
 	{"run_attach_leases", "principal", false, ""},
 	{"run_components", "owner", false, ""},
 	{"run_create_keys", "principal", false, ""},
+	{"run_github_token_seals", "owner", false, ""},
 	{"run_history_tombstones", "created_by", false, ""},
 	{"run_launch_intents", "created_by", false, ""},
 	{"run_mask_manifest", "owner", false, ""},

@@ -89,6 +89,10 @@ type Client struct {
 	// authOKs counts the sessions of this process the organisation has accepted (AUTH_OK); prior is that count
 	// before the current one.
 	authOKs, prior int
+	// freshPending is RequireFresh's request that the next session be fresh; live is the peer of the session up, for
+	// RequireFresh, which runs on another goroutine than the loop that owns peer, session and ready.
+	freshPending atomic.Bool
+	live         atomic.Pointer[Peer]
 }
 
 // A resumed session that ends within resumeQuickDeath of READY with an EVENT unacknowledged, resumeQuickDeaths times
@@ -217,6 +221,9 @@ func (c *Client) Run(ctx context.Context) error {
 		if errors.Is(err, ErrGoaway) || errors.Is(err, ErrResumeGap) {
 			c.session, c.ready = "", false
 		}
+		if c.freshPending.Swap(false) {
+			c.session, c.ready = "", false
+		}
 		if c.dropLivelockedResume() {
 			slog.WarnContext(ctx, "runner stops resuming its session and starts a fresh one: it ended within seconds of READY "+
 				"with an event unacknowledged, repeatedly, so the organisation refuses that event. Kinds the runner regenerates "+
@@ -311,7 +318,7 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 func (c *Client) resume(ctx context.Context) (PeerConfig, *Resume) {
-	if !c.ready || c.peer == nil || time.Since(c.ended) > ResumeWindow {
+	if !c.ready || c.peer == nil || c.freshPending.Load() || time.Since(c.ended) > ResumeWindow {
 		return PeerConfig{}, nil
 	}
 	cfg, err := c.peer.ResumeConfig(ctx)
@@ -341,6 +348,16 @@ func (c *Client) dropLivelockedResume() bool {
 	return true
 }
 
+// RequireFresh ends the session that is up, if any, and makes the next one fresh, so its STATE page, which precedes
+// READY and every LEASE, carries what changed: a local containment. It never touches the loop's own fields and may be
+// called from any goroutine.
+func (c *Client) RequireFresh() {
+	c.freshPending.Store(true)
+	if p := c.live.Load(); p != nil {
+		p.Close()
+	}
+}
+
 // replayHeadIsEvent reports whether the oldest frame b still holds, unacknowledged, is an EVENT.
 func replayHeadIsEvent(b *ReplayBuffer) bool {
 	b.mu.Lock()
@@ -360,7 +377,9 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	peer = NewPeer(conn, cfg)
 	peer.prior = c.prior
 	c.peer = peer
+	c.live.Store(peer)
 	defer func() {
+		c.live.Store(nil)
 		c.setLink(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
@@ -370,6 +389,11 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		}
 		c.cfg.Hooks.Offline(ctx)
 	}()
+	if ok.Resumed && c.freshPending.Load() {
+		// RequireFresh landed after the resume was decided and before this peer was live: end it unstarted, so the
+		// loop forgets the session and the next connect is fresh.
+		return nil
+	}
 	if ok.Resumed {
 		c.link.setPhase(phaseBeforeReady)
 		if err := c.cfg.Hooks.BeforeReady(ctx, peer, true); err != nil {

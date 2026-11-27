@@ -36,10 +36,15 @@ func main() {
 }
 
 // exitCode treats the cancellation a SIGTERM or interrupt causes as a clean stop,
-// so an orchestrator does not read a deliberate shutdown as a crash.
+// so an orchestrator does not read a deliberate shutdown as a crash. contain's
+// own codes (containExit) are passed through; any other error is 1.
 func exitCode(ctx context.Context, err error) int {
 	if err == nil || (errors.Is(err, context.Canceled) && ctx.Err() != nil) {
 		return 0
+	}
+	var ce containExit
+	if errors.As(err, &ce) {
+		return ce.code
 	}
 	return 1
 }
@@ -48,14 +53,14 @@ func rootCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "wardyn-runnerd", Short: "Run a registered Wardyn runner", Version: version.String(), SilenceUsage: true, SilenceErrors: true,
 		// Every command that talks to Docker follows the engine the docker CLI would use (resolveDockerHost);
 		// the Docker SDK reads DOCKER_HOST alone.
-		// serve decides its engine itself, after it has read its settings.
+		// serve decides its engine itself, after it has read its settings; contain needs no engine.
 		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
-			if c.Name() == "serve" {
+			if c.Name() == "serve" || c.Name() == "contain" {
 				return nil
 			}
 			return followDockerContext()
 		}}
-	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newDoctorCommand(), newServeCommand(productionRunnerHooks), newMacOSVMCommand(), newDriveCommand())
+	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newDoctorCommand(), newServeCommand(productionRunnerHooks), newMacOSVMCommand(), newDriveCommand(), newContainCommand())
 	return cmd
 }
 

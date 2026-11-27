@@ -232,6 +232,10 @@ func ValidateEnvToggles() {
 		fmt.Fprintln(flag.CommandLine.Output(), err)
 		os.Exit(2)
 	}
+	if err := validateIdentityNarrowingSwitch(); err != nil {
+		fmt.Fprintln(flag.CommandLine.Output(), err)
+		os.Exit(2)
+	}
 	warnRemovedMCPLocalServers()
 }
 

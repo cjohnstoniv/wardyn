@@ -181,7 +181,7 @@ func TestLocalP3ProfileLimitLiftsOnlyItsOwnRefusal(t *testing.T) {
 		{"org component never needs the limit", false, org, placement.ReasonPlacementUnavailable},
 	} {
 		ceiling := governanceCeiling{Limits: types.GovernanceLimits{LocalSelfDefinedComponents: tc.allowed}}
-		_, ref := f.srv.localPlacementRefusal(r, req, false, nil, nil, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, req, false, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil, composer.Baseline{})
 		if ref == nil || ref.body.Reason != string(tc.reason) {
 			t.Fatalf("%s: %+v", tc.name, ref)
 		}
@@ -208,12 +208,12 @@ func TestLocalPlacement_OrgDriveRefusedOnSelfHosted(t *testing.T) {
 		{types.DriveBackendHostPath, placement.ReasonPlacementLocalPath},
 	} {
 		drive := []types.DriveMount{{Backend: tc.backend, ObjectName: "wardyn-drive-team-home"}}
-		_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, drive, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, drive, nil, composer.Baseline{})
 		if ref == nil || ref.body.Reason != string(tc.reason) {
 			t.Errorf("%s drive on a self-hosted run = %+v, want %s", tc.backend, ref, tc.reason)
 		}
 	}
-	if _, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil {
+	if _, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil {
 		t.Errorf("the same pooled run without a drive = %+v, want it admitted", ref)
 	}
 }
@@ -230,14 +230,14 @@ func TestLocalPlacement_MCPSharedCredentialRefused(t *testing.T) {
 		scope, _ := json.Marshal(map[string]any{"host": "MCP.example", "secret_name": secret, "shared": shared})
 		return types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope, OwnerOnly: !shared}}}
 	}
-	_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, grant("operator-only-secret", true), governanceCeiling{}, comps, nil, nil, composer.Baseline{})
+	_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, grant("operator-only-secret", true), governanceCeiling{}, comps, nil, nil, composer.Baseline{})
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != localMCPSharedCredentialMsg {
 		t.Fatalf("org-held MCP credential on a local run = %+v, want %s naming the MCP server", ref, placement.ReasonPlacementCredential)
 	}
-	if _, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, grant("person-secret", false), governanceCeiling{}, comps, nil, nil, composer.Baseline{}); ref != nil {
+	if _, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, grant("person-secret", false), governanceCeiling{}, comps, nil, nil, composer.Baseline{}); ref != nil {
 		t.Errorf("own MCP credential on a local run = %+v, want it admitted", ref)
 	}
-	if _, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, grant("operator-only-secret", true), governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil && ref.body.Error == localMCPSharedCredentialMsg {
+	if _, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, grant("operator-only-secret", true), governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil && ref.body.Error == localMCPSharedCredentialMsg {
 		t.Error("a shared header credential that is not an MCP server's was refused as one")
 	}
 }
@@ -268,7 +268,7 @@ func TestLocalPlacement_GatewayKeyLaneRefused(t *testing.T) {
 		}
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 		req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
-		_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 		switch {
 		case tc.refused && (ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(ref.body.Error, "ProxyConfig.LLMUpstreams: ")):
 			t.Errorf("%s: refusal %+v, want placement_credential on ProxyConfig.LLMUpstreams", tc.name, ref)
@@ -303,7 +303,7 @@ func TestLocalPlacement_LaptopLocalModel(t *testing.T) {
 		f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
 		req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
-		j, ref := f.srv.localPlacementRefusal(r, req, true, nil, tc.owners, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		j, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, tc.owners, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 		switch {
 		case tc.admit && (ref != nil || !j.personOwned):
 			t.Errorf("%s: refusal %+v, person-owned %v: want it admitted at a person's own runner only", tc.name, ref, j.personOwned)
@@ -342,7 +342,7 @@ func TestLocalPlacement_SecondHarnessGatewayRefused(t *testing.T) {
 		}}
 		projectRunMode(&req)
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
-		_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 		switch {
 		case tc.refused && (ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(ref.body.Error, "ProxyConfig.LLMUpstreams: ")):
 			t.Errorf("%s: refusal %+v, want placement_credential on ProxyConfig.LLMUpstreams", tc.name, ref)
@@ -379,7 +379,7 @@ func TestLocalPlacement_MCPOrgServerInSandboxRefused(t *testing.T) {
 	self := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{SelfDefined: true, Owner: "sub-owner", Name: "Files", Definition: def}}}}
 	allowSelf := governanceCeiling{Limits: types.GovernanceLimits{LocalSelfDefinedComponents: true}}
 	judge := func(req createRunRequest, ceiling governanceCeiling, comps runComponents) *runRefusal {
-		_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, ceiling, comps, nil, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.ResolvedRunnerPool{}, nil, nil, types.RunPolicySpec{}, ceiling, comps, nil, nil, composer.Baseline{})
 		return ref
 	}
 
