@@ -78,7 +78,8 @@
       "config",
       "cli",
       "mcp",
-      "image"
+      "image",
+      "request_rules"
     ],
     "ComponentDelivery": [
       "mode",

@@ -61,6 +61,7 @@ import { ComponentsSettingsCard } from "./components-settings-card";
 import { MacOSVMSettingsCard } from "./macos-vm-settings-card";
 import { RunnersSettingsCard } from "./runners-settings-card";
 import { DesktopWatermarkCard } from "./desktop-watermark-card";
+import { PreviewURLsCard } from "./preview-urls-card";
 import { RoleRefusal } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -480,6 +481,8 @@ export function AdminSettingsScreen() {
             <RunnersSettingsCard />
             {/* Whether every desktop view must show the viewer's name and the run id; reads its own site-config snapshot. */}
             <DesktopWatermarkCard />
+            {/* Whether a run's ports may have preview URLs, and the widest one may be; reads its own site-config snapshot. */}
+            <PreviewURLsCard />
           </SettingsGroup>
           <SettingsGroup title={SETTINGS_GROUPS.PEOPLE}>
             {/* notify-e4 (packet M6 S3): read-only channel health for the approval notifications

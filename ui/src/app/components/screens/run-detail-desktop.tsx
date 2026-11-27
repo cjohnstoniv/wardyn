@@ -35,6 +35,7 @@ import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { ClosedDoorsLine, ClosedLane } from "./run-detail/helper-closed-lane";
 import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
 import { MacWindowButton, macWindowHasButton, MacWindowRefusal } from "./run-detail/mac-window-section";
+import { LocalWindowSection } from "./run-detail/local-window-section";
 import { DESKTOP_APP, enterUIApp, openEnterTab } from "./run-detail-ssh";
 
 // Exported for the tests: standalone-testable without mounting the whole screen's fetch graph.
@@ -103,7 +104,9 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   // A background run on any other VM has no desktop door at all (the existing refusal sentence).
   const noDoor = background && !mac;
   const macOff = !!macOS?.disk;
-  const viewOnly = (macOS?.desktop === "observe" && running) || watchable;
+  // A window open on the person's own computer (local_window, a Linux VM run) makes this desktop only watch, as the Mac's does.
+  const localOpen = running && run.local_window?.open === true;
+  const viewOnly = (macOS?.desktop === "observe" && running) || watchable || localOpen;
   const desktopOn = !!uiSandbox?.enabled && !macOff;
   const uiApps = run.ui_apps ?? [];
   // The Open desktop button, its recording line and its new-tab note: a helper needs the desktop door for them.
@@ -147,7 +150,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const bgMac = background && mac && running;
   const noWatchChip = bgMac && (!watch || watch.state === "control" || watch.state === "not_run_owner");
   const chip =
-    windowState === "window_open" ? (
+    windowState === "window_open" || localOpen ? (
       <Chip tone="info">{MAC_WINDOW.openChip}</Chip>
     ) : (!healthAnswered && !macOff) || noDoor || noWatchChip || !desktopDoor ? null : desktopOn && (viewOnly || bgMac) ? (
       <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
@@ -198,7 +201,8 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.backgroundWatchExposure}</p>
           </>
         )}
-        {!background && viewOnly && (
+        {/* A local window's own lines are its section's; the Mac's lines name the Mac. */}
+        {!background && viewOnly && !localOpen && (
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{windowWay ? MAC_WINDOW.watchLine : DESKTOP.observeOnlyMacOS}</p>
         )}
         {/* A window refusal sits under the line above: the browser can still watch, and this says why no window opens. */}
@@ -214,6 +218,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
           </>
         )}
         {canOpen && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>}
+        {running && !asHelper && <LocalWindowSection run={run} />}
         {filesLane && filesDoor && <DesktopFilesPanel runId={run.id} vm />}
         {filesLane && !filesDoor && <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />}
         {desktopOn && !background && !asHelper && <DesktopSignInsNote s={signIns} keptOn={run.machine && !run.machine.deleted && run.machine.keep_at_end ? run.machine.runner_name || KEEP_LIST.THIS_MAC : undefined} />}

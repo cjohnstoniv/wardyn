@@ -1309,7 +1309,7 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // row for claude-code. The attended macOS window's site switch is on, so the
 // owner of a run reaches POST /runs/{id}/desktop/window's handler; the switch
 // is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer. Preview URLs are on, up to org, so
-// the owner of a run reaches the preview routes' own rows (authzMatrixFeatureHooks makes the key available).
+// the owner of a run reaches the preview routes' own rows (the key is available in this release).
 func authzMatrixSiteConfig() types.SiteConfig {
 	on := true
 	return types.SiteConfig{
@@ -1334,10 +1334,7 @@ func authzMatrixFeatureHooks(t *testing.T) {
 	for k, h := range siteFeatureHooks {
 		hooks[k] = h
 	}
-	for _, k := range []siteFeatureKey{
-		featurePreviewURLs,
-		featureLocalWindow,
-	} {
+	for _, k := range []siteFeatureKey{} {
 		h := hooks[k]
 		h.available = func() bool { return true }
 		hooks[k] = h

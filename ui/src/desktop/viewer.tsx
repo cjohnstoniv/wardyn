@@ -220,7 +220,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       {viewOnly && (
         <p className="border-b border-border px-4 py-2 text-xs">
           <span className="font-medium">{boot.view_only ? DESKTOP.viewOnlyTitle : DESKTOP.phoneTitle}</span>{" "}
-          <span className="text-muted-foreground">{boot.background ? DESKTOP.backgroundWatchBody : boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
+          <span className="text-muted-foreground">{boot.background ? DESKTOP.backgroundWatchBody : boot.view_only ? (boot.machine_kind === "linux_vm" ? DESKTOP.viewOnlyBodyWindow : DESKTOP.viewOnlyBody) : DESKTOP.phoneBody}</span>
         </p>
       )}
       {!viewOnly && phase === "connected" && (
@@ -247,7 +247,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
             }}
             {...input}
           />
-          {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} onTryAgain={tryAgain} />}
+          {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} linuxVM={boot.machine_kind === "linux_vm"} said={said} onTryAgain={tryAgain} />}
         </main>
         {showMark && phase === "connected" && <DesktopWatermark className="absolute inset-0" who={mark.who} run={mark.run} />}
       </div>
@@ -255,12 +255,12 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
   );
 }
 
-function Notice({ phase, macOS, said, onTryAgain }: { phase: Exclude<Phase, "connected">; macOS: boolean; said: string | null; onTryAgain: () => void }) {
+function Notice({ phase, macOS, linuxVM, said, onTryAgain }: { phase: Exclude<Phase, "connected">; macOS: boolean; linuxVM: boolean; said: string | null; onTryAgain: () => void }) {
   const [title, body] =
     phase === "starting" ? [macOS ? DESKTOP.startingMacOS : DESKTOP.starting, DESKTOP.startingBody]
     : phase === "failed" ? [DESKTOP.failedTitle, DESKTOP.failedBody]
     : phase === "reconnecting" ? [DESKTOP.reconnecting, DESKTOP.reconnectingBody]
-    : phase === "window_open" ? [DESKTOP.windowOpenTitle, DESKTOP.windowOpenBody]
+    : phase === "window_open" ? [linuxVM ? DESKTOP.windowOpenTitleLinuxVM : DESKTOP.windowOpenTitle, DESKTOP.windowOpenBody]
     : phase === "expired" ? [DESKTOP.sessionEnded, DESKTOP.sessionEndedBody]
     : phase === "run_ended" ? [DESKTOP.runEnded, undefined]
     : phase === "watch_ended" ? [DESKTOP.sessionEnded, DESKTOP.watchEndedBody]

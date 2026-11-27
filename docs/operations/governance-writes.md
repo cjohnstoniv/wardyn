@@ -174,6 +174,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | Role mapping upsert, delete | always | **super admin only** |
 | Key-domain assignment set, delete | always | security admin or super admin |
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
+| Inbound federation turned on (`PUT /inbound-federation`), and a trust's create (`POST /inbound-trusts`); turning it off and a trust delete are never held, and turning it off cancels a pending turn-on | always | security admin or super admin, signed in |
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
 | The recording level (`PUT /governance/recording`) | always | security admin or super admin |

@@ -220,6 +220,10 @@ type Caps struct {
 	// its runs namespaces (0.11 on, its operator's drives.enabled). Absent (an older runner, or drives off), the org
 	// sends it no such drive.
 	Drives bool `json:"drives,omitempty"`
+	// Snapshots says the runner snapshots and forks its Linux VM sandboxes (the snapshot calls, and a
+	// create_vm whose spec names a snapshot). An older runner never sends it, and the org sends such a
+	// runner neither: it would drop the spec's snapshot and boot a plain VM.
+	Snapshots bool `json:"snapshots,omitempty"`
 }
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.

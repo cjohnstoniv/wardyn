@@ -165,6 +165,9 @@ func parityCases() map[string]parityCase {
 				f.st.siteConfig.Components = &types.ComponentSettings{AutonomyCap: types.AutonomyL0}
 				return componentBody(own)
 			}},
+		// The site config does not turn the switch on, so it reads off.
+		"component_request_rules_off":   {status: 422, reason: "component_request_rules_off", setup: parityBody(rulesComponent(rulesHost))},
+		"component_request_rules_limit": {status: 422, reason: "component_request_rules_limit", setup: rulesLimitSetup},
 	}
 	// A2: a person may not name an address in any spelling.
 	for _, literal := range []string{"10.0.0.1", "[fd00::1]:443", "::ffff:10.0.0.1", "0x7f000001", "10.0.0.1."} {

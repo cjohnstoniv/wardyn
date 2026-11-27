@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -41,14 +42,26 @@ func (f previewFixture) run() types.AgentRun {
 	return persistRun(f.t, f.ctx, f.pool, r)
 }
 
+// upsert is UpsertRunPreview as r's creator. It checks the replaced row it answers: the port's unrevoked row before
+// the write, now revoked, when the write stored a new row, and nil when it extended one or the port had none.
 func (f previewFixture) upsert(r types.AgentRun, port int, vis types.PreviewVisibility, ttl time.Duration, hash []byte) (types.RunPreview, bool) {
 	f.t.Helper()
-	p, created, err := f.pg.UpsertRunPreview(f.ctx, r.ID, port, vis, ttl, r.CreatedBy, hash)
+	var before uuid.UUID
+	if err := f.pool.QueryRow(f.ctx, `SELECT id FROM run_previews WHERE run_id = $1 AND port = $2 AND revoked_at IS NULL`, r.ID, port).Scan(&before); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		f.t.Fatalf("read the port's row before the upsert: %v", err)
+	}
+	p, created, replaced, err := f.pg.UpsertRunPreview(f.ctx, r.ID, port, vis, ttl, r.CreatedBy, hash)
 	if err != nil {
 		f.t.Fatalf("UpsertRunPreview(%d, %s): %v", port, vis, err)
 	}
 	if p.RunID != r.ID || p.Port != port || p.Visibility != vis || p.CreatedBy != r.CreatedBy || p.RevokedAt != nil {
 		f.t.Fatalf("UpsertRunPreview(%d, %s) = %+v", port, vis, p)
+	}
+	switch want := created && before != uuid.Nil; {
+	case want && (replaced == nil || replaced.ID != before || replaced.RevokedAt == nil || replaced.ID == p.ID):
+		f.t.Fatalf("UpsertRunPreview(%d, %s) replaced %+v, want row %s revoked", port, vis, replaced, before)
+	case !want && replaced != nil:
+		f.t.Fatalf("UpsertRunPreview(%d, %s) replaced %+v, want none (created %v, the port's row %s)", port, vis, replaced, created, before)
 	}
 	return p, created
 }
@@ -145,7 +158,7 @@ func TestStoreRunPreviewsOneLivePerPort(t *testing.T) {
 	if code, c := previewPGCode(err); code != "23505" || c != "run_previews_one_live" {
 		t.Fatalf("a second live row on the port: %v, want the run_previews_one_live violation", err)
 	}
-	if _, _, err := f.pg.UpsertRunPreview(f.ctx, r.ID, 80, types.PreviewPrivate, time.Hour, r.CreatedBy, nil); err == nil {
+	if _, _, _, err := f.pg.UpsertRunPreview(f.ctx, r.ID, 80, types.PreviewPrivate, time.Hour, r.CreatedBy, nil); err == nil {
 		t.Fatal("a preview of port 80 was stored")
 	}
 
@@ -222,15 +235,15 @@ func TestStoreRunPreviewsLinkUnique(t *testing.T) {
 		t.Fatalf("the hash a same-visibility upsert passed was stored: %v", err)
 	}
 
-	_, _, err := f.pg.UpsertRunPreview(f.ctx, r2.ID, 8080, types.PreviewPublic, time.Hour, r2.CreatedBy, previewLinkHash("one"))
+	_, _, _, err := f.pg.UpsertRunPreview(f.ctx, r2.ID, 8080, types.PreviewPublic, time.Hour, r2.CreatedBy, previewLinkHash("one"))
 	if code, c := previewPGCode(err); code != "23505" || c != "run_previews_link" {
 		t.Fatalf("a second row with a stored link hash: %v, want the run_previews_link violation", err)
 	}
-	_, _, err = f.pg.UpsertRunPreview(f.ctx, r2.ID, 8081, types.PreviewPublic, time.Hour, r2.CreatedBy, nil)
+	_, _, _, err = f.pg.UpsertRunPreview(f.ctx, r2.ID, 8081, types.PreviewPublic, time.Hour, r2.CreatedBy, nil)
 	if code, _ := previewPGCode(err); code != "23514" {
 		t.Fatalf("a public row with no link hash: %v, want a check violation", err)
 	}
-	_, _, err = f.pg.UpsertRunPreview(f.ctx, r2.ID, 8081, types.PreviewOrg, time.Hour, r2.CreatedBy, previewLinkHash("org"))
+	_, _, _, err = f.pg.UpsertRunPreview(f.ctx, r2.ID, 8081, types.PreviewOrg, time.Hour, r2.CreatedBy, previewLinkHash("org"))
 	if code, _ := previewPGCode(err); code != "23514" {
 		t.Fatalf("an org row with a link hash: %v, want a check violation", err)
 	}
@@ -249,7 +262,7 @@ func TestStoreRunPreviewsLinkUnique(t *testing.T) {
 	if got, err := f.pg.RunPreviewByLink(f.ctx, previewLinkHash("three")); err != nil || got.ID != pub2.ID {
 		t.Fatalf("the new link = %+v (%v), want row %s", got, err, pub2.ID)
 	}
-	_, _, err = f.pg.UpsertRunPreview(f.ctx, r2.ID, 8080, types.PreviewPublic, time.Hour, r2.CreatedBy, previewLinkHash("one"))
+	_, _, _, err = f.pg.UpsertRunPreview(f.ctx, r2.ID, 8080, types.PreviewPublic, time.Hour, r2.CreatedBy, previewLinkHash("one"))
 	if code, c := previewPGCode(err); code != "23505" || c != "run_previews_link" {
 		t.Fatalf("a revoked row's link hash stored again: %v, want the run_previews_link violation", err)
 	}
@@ -267,6 +280,36 @@ func TestStoreRunPreviewsLinkUnique(t *testing.T) {
 	}
 	if _, err := f.pg.RunPreviewByLink(f.ctx, nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("an empty link hash: %v, want ErrNotFound", err)
+	}
+}
+
+// TestStoreRunPreviewsRevokeByID: a revoke by id revokes that row alone, an expired one included, and a row
+// already revoked, by a later write on its port among others, is ErrNotFound with the port's newer row untouched.
+func TestStoreRunPreviewsRevokeByID(t *testing.T) {
+	f := newPreviewFixture(t)
+	r := f.run()
+	first, _ := f.upsert(r, 8080, types.PreviewOrg, time.Hour, nil)
+	second, _ := f.upsert(r, 8080, types.PreviewPrivate, time.Hour, nil)
+	if _, err := f.pg.RevokeRunPreviewByID(f.ctx, first.ID, "revoker"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoke the replaced row by id: %v, want ErrNotFound", err)
+	}
+	if got, err := f.pg.LiveRunPreview(f.ctx, r.ID, 8080); err != nil || got.ID != second.ID {
+		t.Fatalf("the port's row after a revoke of the replaced one = %+v (%v), want row %s live", got, err, second.ID)
+	}
+	gone, err := f.pg.RevokeRunPreviewByID(f.ctx, second.ID, "revoker")
+	if err != nil || gone.ID != second.ID || gone.RevokedAt == nil {
+		t.Fatalf("RevokeRunPreviewByID = %+v (%v), want row %s revoked", gone, err, second.ID)
+	}
+	if revoked, by := f.revokedBy(second.ID); !revoked || by != "revoker" {
+		t.Fatalf("revoked row: revoked %v by %q", revoked, by)
+	}
+	expired, _ := f.upsert(r, 8081, types.PreviewPrivate, time.Hour, nil)
+	f.expire(expired.ID)
+	if gone, err := f.pg.RevokeRunPreviewByID(f.ctx, expired.ID, "revoker"); err != nil || gone.ID != expired.ID {
+		t.Fatalf("revoke an expired row by id = %+v (%v), want row %s revoked", gone, err, expired.ID)
+	}
+	if _, err := f.pg.RevokeRunPreviewByID(f.ctx, uuid.New(), "revoker"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoke a row that does not exist: %v, want ErrNotFound", err)
 	}
 }
 
@@ -351,7 +394,7 @@ func TestPG_StoreRunPreviews_FirstRowClashRetried(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		p, created, err := f.pg.UpsertRunPreview(f.ctx, r.ID, 8080, types.PreviewPrivate, 2*time.Hour, r.CreatedBy, nil)
+		p, created, _, err := f.pg.UpsertRunPreview(f.ctx, r.ID, 8080, types.PreviewPrivate, 2*time.Hour, r.CreatedBy, nil)
 		done <- result{p, created, err}
 	}()
 	// The upsert's insert waits on the uncommitted row's index entry. Commit only once it waits, so its first try is

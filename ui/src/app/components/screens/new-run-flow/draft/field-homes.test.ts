@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { KEPT_MACHINE_REASON } from "../../../../lib/kept-machine-refusals";
 import { SCHEDULE_REASONS } from "../../../../lib/schedule-refusals";
 import { describe, expect, it } from "vitest";
@@ -11,7 +13,7 @@ import { RUN_MODE_REASON } from "../../../../lib/run-mode-refusals";
 import { RUNNER_POOL_REASONS } from "../../../../lib/runner-pool-refusals";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS } from "../../../../lib/template-fields";
 import { TEMPLATE_REASON } from "../../../../lib/template-refusals";
-import { FIELD_HOME, FIELD_HOME_OVERRIDES, HOME_OF_REASON, homeOfPath, homeOfReason, homeOfRefusal, REVIEW_GROUP_OF_FIELD } from "./field-homes";
+import { COMPONENT_REQUEST_RULES_REASONS, FIELD_HOME, FIELD_HOME_OVERRIDES, HOME_OF_REASON, homeOfPath, homeOfReason, homeOfRefusal, REVIEW_GROUP_OF_FIELD } from "./field-homes";
 import { docOnlyRows } from "../review/review-model";
 
 const REGISTRY = [
@@ -80,7 +82,7 @@ describe("field homes (U7)", () => {
   it("give every reason the console names a step, and send an unknown one to Review", () => {
     const known = [
       ...Object.values(KEPT_MACHINE_REASON), ...Object.values(NEW_RUN_REASON), ...IMAGE_ADMISSION_REASONS, ...PLACEMENT_REASONS, ...Object.values(RUN_MODE_REASON),
-      ...RUNNER_POOL_REASONS, ...SCHEDULE_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS, ...COMPONENT_GATE_REASONS,
+      ...RUNNER_POOL_REASONS, ...SCHEDULE_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS, ...COMPONENT_GATE_REASONS, ...COMPONENT_REQUEST_RULES_REASONS,
     ];
     expect(sortedKeys(HOME_OF_REASON)).toEqual([...new Set(known)].sort());
     expect(homeOfReason("runner_pool_stale")).toBe("run");
@@ -91,6 +93,17 @@ describe("field homes (U7)", () => {
     expect(homeOfReason("something_new")).toBe("review");
     // A refusal of the run's kept machine is fixed on the Run step, where the machine is chosen.
     for (const reason of Object.values(KEPT_MACHINE_REASON)) expect(homeOfReason(reason), reason).toBe("run");
+  });
+
+  it("homes both request-rule refusals on Tools, and they are the Go constants", () => {
+    const go = readFileSync(join(__dirname, "../../../../../../../internal/api/reasons_component_request_rules.go"), "utf8");
+    const goReasons = [...go.matchAll(/=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(goReasons).toHaveLength(2);
+    expect(new Set(COMPONENT_REQUEST_RULES_REASONS)).toEqual(new Set(goReasons));
+    for (const reason of goReasons) {
+      expect(homeOfReason(reason), reason).toBe("tools");
+      expect(homeOfRefusal(reason), reason).toBe("tools");
+    }
   });
 
   it("homes every image signature refusal with the image, as the digest rule is", () => {

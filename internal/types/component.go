@@ -94,6 +94,9 @@ type ComponentDefinition struct {
 	// asks for any tag or digest of its repository; "" asks for none. It only
 	// refuses a run: it never changes the run's image.
 	Image string `json:"image,omitempty"`
+	// RequestRules are host rules on the component's own exact hosts. A run that attaches the component
+	// carries them as one host rule set of their own, beside its policy's sets (validateRequestRules).
+	RequestRules []HostRule `json:"request_rules,omitempty"`
 }
 
 // ComponentSecret is one secret a component carries.
@@ -259,6 +262,9 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 		return err
 	}
 	if err := d.validateImage(); err != nil {
+		return err
+	}
+	if err := validateRequestRules(d); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {

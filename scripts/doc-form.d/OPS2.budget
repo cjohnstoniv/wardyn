@@ -103,5 +103,5 @@ docs/operations/hybrid-laptops.md=7930 share=35 # 7930 measured at the rc.5 trai
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
 # docs/operations/hybrid-laptops.md 5299 adds 45 over 5254, measured (0.10 HYB-F): wardyn folder bring-back and the kill line, less the stale "not yet" item.
 # docs/operations/hybrid-laptops.md 5338 adds 39 over 5299, measured (0.10 HYB-F): what a failed agent stop discards, and a runner on another release.
-docs/operations/ingress-rate-limits.md=554 share=17 # moved from hybrid-laptops.md, with a short lead and one H2 added
+docs/operations/ingress-rate-limits.md=563 share=17 # 563 measured (+0 over 563: inbound federation, measured on the merged tree); earlier: 563 measured (+9 over 554: inbound federation); earlier: moved from hybrid-laptops.md, with a short lead and one H2 added
 docs/operations/cli-component-sign-in.md=226 share=24 # moved from integrations.md, with a short lead and one H2 added

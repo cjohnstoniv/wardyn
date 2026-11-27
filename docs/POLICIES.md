@@ -1137,6 +1137,24 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - A variable or config key may not be `WARDYN_*`, a name that decides how programs start or reach the network (`PATH`, `HTTPS_PROXY`, …), or start with `LD_`, `GIT_CONFIG_` or `CLAUDE_CODE_` ([`internal/types/component.go#reservedComponentEnvNames`](../internal/types/component.go)).
 - Wardyn does not revoke a delivered secret. Rotate it at its issuer after a suspected leak.
 
+**Request rules.** A definition may carry `request_rules`: rules for what a run may send to the component's own hosts, in the [`host_rules`](#host_rules--hostruleset) grammar.
+
+```json
+{ "hosts": ["api.example.com"], "request_rules": [
+  {"host": "api.example.com", "methods": ["GET"], "paths": ["/v1"], "effect": "allow"},
+  {"host": "api.example.com", "methods": ["POST"], "paths": ["/v1/charges"], "effect": "hold"}
+] }
+```
+
+- They are off until an admin turns on `features.component_request_rules.enabled` ([custom-components.md](operations/custom-components.md)).
+- At most 64 rules. Each rule's `host` is one of the component's `hosts` named exactly, bare or as `:443`. A host named only by a `*.` entry or on another port is refused at save.
+- The proxy opens and judges every request to a rule host. HTTPS to it goes through port 443 only.
+- A run that attaches the component carries its rules as one host rule set of their own, beside the policy's sets. Across sets any deny wins, so the rules only narrow: they can refuse or hold what the policy allows, never allow what it refuses.
+- A `hold` waits for a person as any [host rule hold](#a-host-rule-hold-effect-hold) does; while nobody decides, the request is not sent.
+- A remote MCP server's host may carry rules. The MCP broker's requests to it are judged by them too.
+- A template keeps a component's `request_rules` as written. A run from it meets the same checks at create.
+- A run carries at most 16 host rule sets: its policy's, those other layers add, and one per component with rules. A run past that is refused `component_request_rules_limit` at create; nothing is trimmed.
+
 ## `workspace_mounts[]` — `WorkspaceMount`
 
 | Field | Type | Default | What it does |

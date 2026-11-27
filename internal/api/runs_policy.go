@@ -345,7 +345,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		MacOS:            s.runMacOSView(run),
 		BackgroundWatch:  s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
 		MacWindow:        s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
-		LocalWindow:      s.localWindowViewFor(stored, principalFromRequest(r)),
+		LocalWindow:      s.localWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
 		MacOSPreparing:   macOSPrepRunning(stored),
 		MacOSDisk:        s.runMacOSDiskView(r.Context(), run),
 		WallPreset:       s.runWallPresetViewLabelled(r, run),

@@ -570,7 +570,10 @@ func TestLocalWindowRunnerCaps(t *testing.T) {
 			bgWatchPutRunner(r.h, tc.online, nil)
 			r.h.srv.runnerEndpoint(*r.h.run.RunnerID).sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
 			r.adoptRunner()
-			_, rf := r.h.srv.localWindowCheck(context.Background(), r.h.run, r.auth(), localWindowAsk{})
+			rn, rf := r.h.srv.localWindowCheck(context.Background(), r.h.run, r.auth())
+			if rf == nil {
+				rf = r.h.srv.localWindowHere(r.h.run, rn, localWindowAsk{})
+			}
 			if rf == nil || rf.body.Reason != tc.reason {
 				t.Fatalf("refusal = %+v, want %s", rf, tc.reason)
 			}
@@ -775,16 +778,19 @@ func TestLocalWindowClosesOnPause(t *testing.T) {
 	}
 }
 
-// Until the window is served end to end the key is unavailable: a write that turns it on is refused
-// feature_unavailable, and a stored switch reads off. Real registrations, no matrix server.
+// The window is served end to end, so the key is available: a write that turns it on is stored, and a stored
+// switch reads on. Real registrations, no matrix server.
 func TestLocalWindowUnavailableUntilServed(t *testing.T) {
-	if siteFeatureAvailable(featureLocalWindow) {
-		t.Fatal("local_window is available on this tree: only the commit that serves the window end to end may change this assertion")
+	if !siteFeatureAvailable(featureLocalWindow) {
+		t.Fatal("local_window is unavailable on this tree, but the browser desktop yields to a local window")
 	}
 	fake := &fakeSiteConfigStore{}
-	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"local_window":{"enabled":true}}}`), fake, reasonSiteFeatureUnavailable)
-	if localWindowOn(localWindowOnConfig()) {
-		t.Fatal("a stored local_window switch reads on while the key is unavailable")
+	w := putSiteFeatures(t, fake, `{"features":{"local_window":{"enabled":true}}}`)
+	if w.Code != http.StatusOK || fake.putSeen == nil || !localWindowOn(*fake.putSeen) {
+		t.Fatalf("PUT local_window on = %d %s, want 200 and the switch stored on", w.Code, w.Body.String())
+	}
+	if !localWindowOn(localWindowOnConfig()) {
+		t.Fatal("a stored local_window switch reads off while the key is available")
 	}
 }
 
@@ -919,7 +925,7 @@ func TestLocalWindowViewFor(t *testing.T) {
 						run.LostAt = &lost
 					}
 					want := kind == types.MachineLinuxVM && (state == types.RunStarting || state == types.RunRunning) && !kept && c.enters
-					v := r.h.srv.localWindowViewFor(run, c.principal)
+					v := r.h.srv.localWindowViewFor(context.Background(), run, macWindowAuthority{ActorType: types.ActorHuman, Principal: c.principal})
 					if (v != nil) != want || (v != nil && (v.Open || v.OpenedAt != nil)) {
 						t.Errorf("%s, %s, kept %v, %s: view = %+v, want present %v and closed", kind, state, kept, c.name, v, want)
 					}
@@ -937,23 +943,70 @@ func TestLocalWindowViewFor(t *testing.T) {
 	if !r.h.srv.localWindows.reserve(reserved) {
 		t.Fatal("reserve refused")
 	}
-	if v := r.h.srv.localWindowViewFor(opening, "alice"); v == nil || !v.Open || v.OpenedAt == nil || !v.OpenedAt.Equal(reserved.opened) {
+	if v := r.h.srv.localWindowViewFor(context.Background(), opening, macWindowAuthority{ActorType: types.ActorHuman, Principal: "alice"}); v == nil || !v.Open || v.OpenedAt == nil || !v.OpenedAt.Equal(reserved.opened) {
 		t.Errorf("a window still opening: view = %+v, want open at %v", v, reserved.opened)
 	}
 	r.h.srv.localWindows.release(reserved)
 
 	w := r.mustOpen()
-	if v := r.h.srv.localWindowViewFor(r.h.run, r.h.run.CreatedBy); v == nil || !v.Open || v.OpenedAt == nil || !v.OpenedAt.Equal(w.opened) {
+	if v := r.h.srv.localWindowViewFor(context.Background(), r.h.run, r.auth()); v == nil || !v.Open || v.OpenedAt == nil || !v.OpenedAt.Equal(w.opened) {
 		t.Errorf("an open window: view = %+v, want open at %v", v, w.opened)
 	}
-	if v := r.h.srv.localWindowViewFor(r.h.run, "bob"); v != nil {
+	if v := r.h.srv.localWindowViewFor(context.Background(), r.h.run, macWindowAuthority{ActorType: types.ActorHuman, Principal: "bob"}); v != nil {
 		t.Errorf("an open window seen by another member: view = %+v, want none", v)
 	}
 	other := r.h.run
 	other.ID = uuid.New()
-	if v := r.h.srv.localWindowViewFor(other, other.CreatedBy); v == nil || v.Open || v.OpenedAt != nil {
+	if v := r.h.srv.localWindowViewFor(context.Background(), other, r.auth()); v == nil || v.Open || v.OpenedAt != nil {
 		t.Errorf("another run beside an open window: view = %+v, want closed", v)
 	}
+}
+
+// GET /runs/{id}'s local_window names the sentence an open would be refused with by the rows the store answers
+// (localWindowCheck), one case per row the run page can show. It says nothing while a window is open, when those
+// rows allow one, when they could not be read, and on a background-only run or with the switch off, where the
+// page shows no window. The runner's connection and caps (row 8) are this replica's and stay the open's answer.
+func TestLocalWindowViewMessage(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		change func(r *localWindowRig)
+		want   string
+	}{
+		"nothing refuses":    {func(*localWindowRig) {}, ""},
+		"the switch off":     {func(r *localWindowRig) { r.site.setSite(types.SiteConfig{}, nil) }, ""},
+		"site config unread": {func(r *localWindowRig) { r.site.setSite(localWindowOnConfig(), errors.New("conn closed by peer")) }, ""},
+		"a background-only run": {func(r *localWindowRig) {
+			r.set(func(run *types.AgentRun) { run.Experience = types.ExperienceBackground })
+		}, ""},
+		"not your computer": {func(r *localWindowRig) { r.setRunner(func(rn *types.Runner) { rn.Owner = "carol" }) }, localWindowNotYourComputerMsg},
+		"the profile denies a desktop": {func(r *localWindowRig) {
+			walledRun(r.h)(types.GovernanceLimits{DenyInteractive: true})
+		}, macWindowProfileMsg},
+		"recording Screen and actions": {func(r *localWindowRig) {
+			r.set(func(run *types.AgentRun) { run.RecordingLevel = types.RecordingScreenActions })
+		}, localWindowRecordingMsg},
+		"paused":                   {func(r *localWindowRig) { r.set(func(run *types.AgentRun) { run.PausedAt = &now }) }, localWindowPausedMsg},
+		"preparing":                {func(r *localWindowRig) { r.set(func(run *types.AgentRun) { run.State = types.RunStarting }) }, localWindowPreparingMsg},
+		"the runner offline":       {func(r *localWindowRig) { r.offline.Store(true) }, ""},
+		"a runner without the cap": {func(r *localWindowRig) { r.sub.supported = false }, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newLocalWindowRig(t)
+			tc.change(r)
+			v := r.h.srv.localWindowViewFor(context.Background(), r.h.run, r.auth())
+			if v == nil || v.Open || v.Message != tc.want {
+				t.Fatalf("view = %+v, want closed with message %q", v, tc.want)
+			}
+		})
+	}
+	t.Run("a window open", func(t *testing.T) {
+		r := newLocalWindowRig(t)
+		r.mustOpen()
+		r.set(func(run *types.AgentRun) { run.PausedAt = &now })
+		if v := r.h.srv.localWindowViewFor(context.Background(), r.h.run, r.auth()); v == nil || !v.Open || v.Message != "" {
+			t.Fatalf("view = %+v, want open with no message", v)
+		}
+	})
 }
 
 // A presence stamp that fails after the runner opened the window closes the runner's session, frees the slot and

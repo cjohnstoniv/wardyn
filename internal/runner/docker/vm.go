@@ -338,7 +338,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	}
 	rollback = append(rollback, undoNet)
 
-	base, err := d.vmImage(ctx, spec, guestID)
+	base, err := d.vmBase(ctx, spec, guestID)
 	if err != nil {
 		return fail(err)
 	}
@@ -350,10 +350,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	part := func(p string) string { return filepath.Join(dir, p) }
 
 	// The run's overlay on the read-only base.
-	if err := d.runOneShot(ctx, spec.RunID, "overlay", qemu.OverlayArgs(), []mount.Mount{
-		{Type: mount.TypeBind, Source: base, Target: qemu.BaseDir, ReadOnly: true},
-		{Type: mount.TypeBind, Source: part("disk"), Target: qemu.DiskDir},
-	}); err != nil {
+	if err := d.runOneShot(ctx, spec.RunID, "overlay", vmOverlayArgs(spec), d.vmDiskMounts(spec, base, part("disk"))); err != nil {
 		return fail(err)
 	}
 
@@ -401,6 +398,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 		{Type: mount.TypeBind, Source: part("disk"), Target: qemu.DiskDir},
 		{Type: mount.TypeBind, Source: part("fwcfg"), Target: qemu.FWCfgDir, ReadOnly: true},
 	}
+	host.Mounts = append(host.Mounts, d.vmSnapMounts(spec)...)
 	labels := d.labels(spec.RunID, componentAgent, spec.Labels)
 	labels[labelMachineKind] = string(types.MachineLinuxVM)
 	if spec.Env[runner.AWSProfileRecordEnv] != "" {
@@ -789,7 +787,7 @@ func (d *Driver) bootVM(ctx context.Context, v *vmRun, ref string, spec runner.S
 	if err := d.vmUnderKVM(ctx, ctl); err != nil {
 		return "", err
 	}
-	in := guestagent.Init{Env: spec.Env, SecretEnv: spec.SecretEnv, Mounts: mounts, SignInsOff: spec.DesktopSignInsOff}
+	in := guestagent.Init{Env: spec.Env, SecretEnv: spec.SecretEnv, Mounts: mounts, SignInsOff: spec.DesktopSignInsOff, Fork: spec.Snapshot != nil}
 	in.Files = vmGuestFiles(spec.ManagedFiles)
 	res, err := v.agent.Init(ctx, in)
 	if err != nil {
@@ -897,6 +895,7 @@ func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 // teardownVM removes what a VM run adds to a container run's teardown: its sidecars and its run
 // directory. Safe on any run id; a container run has neither.
 func (d *Driver) teardownVM(ctx context.Context, agentRef string, runID uuid.UUID) {
+	d.cancelRunSnapshots(ctx, runID) // a snapshot's copy is cancelled first, bounded, its errors ignored
 	if v, ok := d.vms.LoadAndDelete(agentRef); ok {
 		v.(*vmRun).stop()
 		v.(*vmRun).agent.Close()

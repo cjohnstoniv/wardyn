@@ -168,6 +168,12 @@ const OpenAppScreen = React.lazy(() =>
     default: m.OpenAppScreen,
   })),
 );
+// /previews/{run}/{port}: the link an Organisation preview's Copy link gives. Inside the console shell: it names a run and a port, not an app.
+const PreviewOpenScreen = React.lazy(() =>
+  import("./components/screens/preview-open").then((m) => ({
+    default: m.PreviewOpenScreen,
+  })),
+);
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({
     default: m.WorkspacesScreen,
@@ -230,6 +236,7 @@ export {
   YourAccountScreen,
   CliSignInScreen,
   OpenAppScreen,
+  PreviewOpenScreen,
   WorkspacesScreen,
   WorkspaceDetailScreen,
   AuditScreen,

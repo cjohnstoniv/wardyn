@@ -29,8 +29,8 @@ import (
 // The preview routes' tests turn the key on with withSiteFeatureHooks, so none of them runs in parallel.
 
 // previewRows is an in-memory run_previews table with store_run_previews.go's semantics, and the faults a test
-// sets: a revoke above a ceiling that fails, an upsert or a row read that fails, and a step run just before an
-// upsert writes.
+// sets: a revoke above a ceiling or by id that fails, an upsert or a row read that fails, and a step run just
+// before an upsert writes or just after.
 type previewRows struct {
 	previewMu    sync.Mutex
 	rows         []types.RunPreview
@@ -39,20 +39,31 @@ type previewRows struct {
 	upsertErr    error                     // UpsertRunPreview's answer, with nothing written, when set
 	liveErr      error                     // LiveRunPreview's answer when set
 	beforeUpsert func()                    // run before UpsertRunPreview writes: what lands between a check and the write
+	afterUpsert  func()                    // run after UpsertRunPreview writes: what lands between the write and its second look
+	byIDErr      error                     // RevokeRunPreviewByID's answer, with nothing revoked, when set
 }
 
 func previewLive(p types.RunPreview) bool { return p.RevokedAt == nil && p.ExpiresAt.After(time.Now()) }
 
-func (s *previewRows) UpsertRunPreview(_ context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, _ []byte) (types.RunPreview, bool, error) {
+func (s *previewRows) UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, hash []byte) (types.RunPreview, bool, *types.RunPreview, error) {
 	if s.beforeUpsert != nil {
 		s.beforeUpsert()
 	}
+	p, created, replaced, err := s.upsert(ctx, runID, port, vis, ttl, by, hash)
+	if s.afterUpsert != nil {
+		s.afterUpsert()
+	}
+	return p, created, replaced, err
+}
+
+func (s *previewRows) upsert(_ context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, _ []byte) (types.RunPreview, bool, *types.RunPreview, error) {
 	s.previewMu.Lock()
 	defer s.previewMu.Unlock()
 	if s.upsertErr != nil {
-		return types.RunPreview{}, false, s.upsertErr
+		return types.RunPreview{}, false, nil, s.upsertErr
 	}
 	now := time.Now().UTC()
+	var replaced *types.RunPreview
 	for i := range s.rows {
 		p := &s.rows[i]
 		if p.RunID != runID || p.Port != port || p.RevokedAt != nil {
@@ -60,13 +71,15 @@ func (s *previewRows) UpsertRunPreview(_ context.Context, runID uuid.UUID, port 
 		}
 		if previewLive(*p) && p.Visibility == vis {
 			p.ExpiresAt, p.UpdatedAt = now.Add(ttl), now
-			return *p, false, nil
+			return *p, false, nil, nil
 		}
 		p.RevokedAt = &now
+		old := *p
+		replaced = &old
 	}
 	p := types.RunPreview{ID: uuid.New(), RunID: runID, Port: port, Visibility: vis, CreatedBy: by, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(ttl)}
 	s.rows = append(s.rows, p)
-	return p, true, nil
+	return p, true, replaced, nil
 }
 
 func (s *previewRows) ListRunPreviews(_ context.Context, runID uuid.UUID) ([]types.RunPreview, error) {
@@ -101,6 +114,22 @@ func (s *previewRows) RevokeRunPreview(_ context.Context, runID uuid.UUID, port 
 	defer s.previewMu.Unlock()
 	for i := range s.rows {
 		if p := &s.rows[i]; p.RunID == runID && p.Port == port && p.RevokedAt == nil {
+			now := time.Now().UTC()
+			p.RevokedAt = &now
+			return *p, nil
+		}
+	}
+	return types.RunPreview{}, store.ErrNotFound
+}
+
+func (s *previewRows) RevokeRunPreviewByID(_ context.Context, id uuid.UUID, _ string) (types.RunPreview, error) {
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+	if s.byIDErr != nil {
+		return types.RunPreview{}, s.byIDErr
+	}
+	for i := range s.rows {
+		if p := &s.rows[i]; p.ID == id && p.RevokedAt == nil {
 			now := time.Now().UTC()
 			p.RevokedAt = &now
 			return *p, nil
@@ -458,6 +487,47 @@ func TestPreviewCeilingLoweredDuringCreate(t *testing.T) {
 	}
 }
 
+// TestPreviewPutRevokesByRow: a PUT that replaces the port's row with another visibility writes a preview.revoke
+// for the row it replaced beside its preview.create. A create the ceiling no longer allows is revoked by its own
+// id, so a row another write put on the port since stays live; a second-look revoke that fails writes a
+// preview.revoke failure row and answers 500.
+func TestPreviewPutRevokesByRow(t *testing.T) {
+	g := newPreviewRig(t)
+	first := g.preview("create", g.put(previewOwner, "3000", `{}`))
+	second := g.preview("change the visibility", g.put(previewOwner, "3000", `{"visibility":"org"}`))
+	if rows := g.h.audit.auditRows("preview.revoke", "success"); second.ID == first.ID || len(rows) != 1 ||
+		rows[0].Target != "__preview-3000" || !strings.Contains(string(rows[0].Data), first.ID.String()) {
+		t.Fatalf("replacing row %s with %s: preview.revoke rows %+v, want one naming the replaced row", first.ID, second.ID, rows)
+	}
+	if rows := g.h.audit.auditRows("preview.create", "success"); len(rows) != 2 {
+		t.Fatalf("preview.create rows = %+v, want two", rows)
+	}
+
+	var later types.RunPreview
+	g.st.beforeUpsert = func() { g.st.setSite(previewSite(true, "private"), nil) }
+	g.st.afterUpsert = func() { // another write takes the port before this one's second look
+		g.st.beforeUpsert, g.st.afterUpsert = nil, nil
+		later, _, _, _ = g.st.UpsertRunPreview(context.Background(), g.h.run.ID, 3001, types.PreviewPrivate, time.Hour, "alice", nil)
+	}
+	g.refused("a create whose port another write took", g.put(previewOwner, "3001", `{"visibility":"org"}`), http.StatusForbidden, reasonPreviewAboveCeiling)
+	if live, err := g.st.LiveRunPreview(context.Background(), g.h.run.ID, 3001); err != nil || live.ID != later.ID {
+		t.Fatalf("the port's row after the second look = %+v (%v), want the later write's row %s live", live, err, later.ID)
+	}
+
+	g.st.setSite(previewSite(true, "org"), nil)
+	g.st.beforeUpsert = func() { g.st.setSite(previewSite(true, "private"), nil) }
+	g.st.byIDErr = errors.New("database is down")
+	rec := g.put(previewOwner, "3002", `{"visibility":"org"}`)
+	g.st.beforeUpsert, g.st.byIDErr = nil, nil
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a second look whose revoke fails: %d %s, want 500", rec.Code, rec.Body.String())
+	}
+	if fails := g.h.audit.auditRows("preview.revoke", "failure"); len(fails) != 1 || fails[0].Target != "__preview-3002" ||
+		!strings.Contains(string(fails[0].Data), `"ceiling":"private"`) {
+		t.Fatalf("preview.revoke failure rows = %+v, want one on __preview-3002 naming the ceiling", fails)
+	}
+}
+
 // TestPreviewFailsClosed: a kept run is not running; a store that cannot write the row or read it answers 500
 // with no row, no ticket and no preview.deny row, except that a caller the run's entry rule does not admit gets
 // the foreign-run 404 for a row it cannot read; a profile that cannot be read is 503 run_unreadable.
@@ -791,23 +861,23 @@ func TestPreviewPublicUnavailableUntilServed(t *testing.T) {
 	g.refused("public create under a stored public", g.put(previewOwner, "3000", `{"visibility":"public"}`), http.StatusForbidden, reasonPreviewAboveCeiling)
 }
 
-// TestPreviewUnavailableUntilServed (until previews are served end to end): the key registers with its
-// validate and afterWrite, but is unavailable, so a write that turns it on is refused feature_unavailable and a
-// stored true reads off: the create answers preview_urls_off.
+// TestPreviewUnavailableUntilServed (now that previews are served end to end): the key registers with its
+// validate and afterWrite and is available, so a write that turns it on reaches the validate (here refused, the UI
+// gateway being off) rather than feature_unavailable, and a stored true reads on: the create answers a row.
 func TestPreviewUnavailableUntilServed(t *testing.T) {
 	h, ok := siteFeatureHookFor(featurePreviewURLs)
 	if !ok || h.validate == nil || h.afterWrite == nil {
 		t.Fatal("preview_urls registers no hook with a validate and an afterWrite")
 	}
-	if siteFeatureAvailable(featurePreviewURLs) || previewURLsOn(previewSite(true, "org")) {
-		t.Fatal("preview_urls is available before this release serves previews")
+	if !siteFeatureAvailable(featurePreviewURLs) || !previewURLsOn(previewSite(true, "org")) {
+		t.Fatal("preview_urls is unavailable in a release that serves previews")
 	}
 	fake := &fakeSiteConfigStore{}
-	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"preview_urls":{"enabled":true}}}`), fake, reasonSiteFeatureUnavailable)
+	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"preview_urls":{"enabled":true}}}`), fake, reasonSiteConfigInvalid)
 
 	hs := newUIHarness(t, okBackend())
 	st := &previewTestStore{uiMemStore: hs.store, previewRows: &previewRows{}, site: previewSite(true, "org")}
 	hs.srv.cfg.Store = st
 	g := &previewRig{t: t, h: hs, st: st}
-	g.refused("create while unavailable", g.put(previewOwner, "3000", `{}`), http.StatusForbidden, reasonPreviewURLsOff)
+	g.preview("create once served", g.put(previewOwner, "3000", `{}`))
 }

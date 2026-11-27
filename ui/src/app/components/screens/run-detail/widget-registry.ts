@@ -42,6 +42,7 @@ import { ConnectSSHCard } from "../run-detail-ssh";
 import { MachineWidget } from "./widgets/machine-card";
 import { withheldCredentialHosts } from "./widgets/effective-policy";
 import { ServicePanel } from "./service-panel";
+import { PreviewsPanel, isPreviewCreator } from "./previews-panel";
 import {
   CredentialsWidget,
   EffectivePolicyWidget,
@@ -72,7 +73,8 @@ export type WidgetId =
   | "desktop"
   | "ssh"
   | "service"
-  | "machine";
+  | "machine"
+  | "previews";
 
 // Everything a widget can need, assembled once by the screen. Widgets keep
 // their own props — this is only the bag the registry destructures from, so a
@@ -98,6 +100,10 @@ export type WidgetContext = {
    *  "AND the user view" to owner-or-admin — the admin monitor carries no
    *  Connect-via-SSH door, even on the admin's own run. */
   view: ConsoleView;
+  /** The setup answer's features.preview_urls: the site switch for preview URLs is on. Absent reads off. */
+  previewsOn?: boolean;
+  /** Whether the viewer is a security admin (useSecurityOperator): the Preview URLs tile lists and revokes for them. */
+  securityOperator?: boolean;
   /** The doors of the OPEN support grant the viewer helps through on this run; null or absent for anyone else. A helper is
    *  an admin in the admin view, so the Desktop and Attach tiles admit them here, for the doors the grant opens only. */
   helperDoors?: readonly SupportDoor[] | null;
@@ -351,6 +357,23 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     presets: {},
     available: (ctx) => !!ctx.run.machine,
   },
+  // Preview URLs: a port the run listens on, opened in its own tab on another address. Its own tile, below the rail's others,
+  // because the Attach tile draws for no security admin and no background run, and both must see the previews or say why none.
+  previews: {
+    label: "Preview URLs",
+    Icon: Globe,
+    component: (ctx) => React.createElement(PreviewsPanel, { run: ctx.run }),
+    defaultLayout: { w: 4, h: 5, minW: 3, minH: 3 },
+    presets: { live: { x: 8, y: 37, w: 4, h: 5 } },
+    // The site switch is on, the run has not ended, /me has answered, and the viewer is the run's own person (who creates
+    // and opens) or a security admin (who lists and revokes). A service identity's sponsor is neither. Not gated on the view
+    // or the run's mode: a background run keeps the tile and says why it has no previews.
+    available: (ctx) =>
+      ctx.previewsOn === true &&
+      !ctx.finished &&
+      ctx.operatorResolved === true &&
+      (isPreviewCreator(ctx.run, ctx.principal, true) || ctx.securityOperator === true),
+  },
 };
 
 export const WIDGET_IDS = Object.keys(RUN_WIDGETS) as WidgetId[];
@@ -420,6 +443,29 @@ export const MACHINE_REMOVED: RunLayoutWidget = { widget: "machine", x: 0, y: 0,
 
 export const isMachineRemoved = (w: RunLayoutWidget): boolean => w.widget === "machine" && w.w === 1 && w.h === 1;
 
+/**
+ * What a saved layout holds in place of the Preview URLs tile once the person has removed it, as MACHINE_REMOVED does for
+ * the Machine tile. A saved live layout with no Preview URLs entry at all predates the tile and gets it (withPreviews); one
+ * with this entry was saved after, with the tile taken out, and does not.
+ */
+export const PREVIEWS_REMOVED: RunLayoutWidget = { widget: "previews", x: 0, y: 0, w: 1, h: 1 };
+
+export const isPreviewsRemoved = (w: RunLayoutWidget): boolean => w.widget === "previews" && w.w === 1 && w.h === 1;
+
+/** The layout with a Preview URLs tile when it has none: at the foot of the right column, where it costs the rest nothing. A layout that has the tile is left as it is. */
+export function withPreviews(layout: RunLayoutWidget[]): RunLayoutWidget[] {
+  if (layout.some((w) => w.widget === "previews")) return layout;
+  const { w, h } = RUN_WIDGETS.previews.defaultLayout;
+  const x = Math.min(rightColumnX(layout), GRID_COLS - w);
+  const y = layout.filter((o) => o.x < x + w && o.x + o.w > x).reduce((bottom, o) => Math.max(bottom, o.y + o.h), 0);
+  return [...layout, { widget: "previews", x, y, w, h }];
+}
+
+/** A saved layout for a live run: the Preview URLs tile is there unless the person took it out. The finished preset has no slot for it. */
+export function forPreviews(layout: RunLayoutWidget[], preset: RunLayoutPreset): RunLayoutWidget[] {
+  return preset === "live" ? withPreviews(layout) : layout;
+}
+
 /** The layout with a Machine tile when it has none: at the foot of the right column, where it costs the rest nothing. A layout that has the tile is left as it is. */
 export function withMachine(layout: RunLayoutWidget[]): RunLayoutWidget[] {
   if (layout.some((w) => w.widget === "machine")) return layout;
@@ -472,7 +518,7 @@ export function normalizeLayout(
   const seen = new Set<string>();
   const out: RunLayoutWidget[] = [];
   for (const w of layout) {
-    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w) || isDesktopRemoved(w) || isMachineRemoved(w)) continue;
+    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w) || isDesktopRemoved(w) || isMachineRemoved(w) || isPreviewsRemoved(w)) continue;
     seen.add(w.widget);
     out.push({ widget: w.widget, x: w.x, y: w.y, w: w.w, h: w.h });
   }

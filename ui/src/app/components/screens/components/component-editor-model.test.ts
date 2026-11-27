@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { Component } from "../../../lib/types";
-import { blankSecret, blankSetting, draftOf, headerHostChoices, imageNamesTagOrDigest, newUuid, requestOf, withStored } from "./component-editor-model";
+import { blankSecret, blankSetting, draftOf, headerHostChoices, imageNamesTagOrDigest, newUuid, requestOf, requestRulesRefusal, withStored } from "./component-editor-model";
 import { aheadByHours } from "../../../lib/test-clock";
 
 const stored: Component = {
@@ -123,5 +123,44 @@ describe("description", () => {
     expect(draftOf(withDesc).description).toBe("Charges cards.");
     expect(requestOf({ ...draftOf(withDesc), description: "  Refunds too.  " }).definition.description).toBe("Refunds too.");
     expect(requestOf({ ...draftOf(withDesc), description: "   " }).definition).not.toHaveProperty("description");
+  });
+});
+
+describe("request rules", () => {
+  it("draftOf and requestOf keep request_rules", () => {
+    const rules = [
+      { host: "api.pay.example", methods: ["GET"], paths: ["/v1"], effect: "allow" as const },
+      { host: "api.pay.example", methods: ["POST"], paths: ["/v1/refunds"], effect: "hold" as const },
+    ];
+    const withRules: Component = { ...stored, definition: { ...stored.definition, request_rules: rules } };
+    expect(draftOf(withRules).requestRules).toEqual(rules);
+    expect(requestOf(draftOf(withRules)).definition.request_rules).toEqual(rules);
+    // The save path sends the form's rules, not the stored row's: withStored carries none of its own.
+    const edited = [{ host: "api.pay.example", effect: "deny" as const }];
+    expect(withStored(requestOf({ ...draftOf(withRules), requestRules: edited }), withRules, "").definition.request_rules).toEqual(edited);
+    // A draft with no rules, or one that never had the field, sends none.
+    expect(requestOf(draftOf(stored)).definition).not.toHaveProperty("request_rules");
+    expect(requestOf(draftOf(null)).definition).not.toHaveProperty("request_rules");
+  });
+
+  it("removing every rule sends none, though the stored row has them", () => {
+    const rules = [{ host: "api.pay.example", effect: "deny" as const }];
+    const withRules: Component = { ...stored, definition: { ...stored.definition, request_rules: rules } };
+    const sent = withStored(requestOf({ ...draftOf(withRules), requestRules: [] }), withRules, "");
+    expect(sent.definition).not.toHaveProperty("request_rules");
+    expect(sent.definition.hosts).toEqual(stored.definition.hosts);
+  });
+
+  it("names the rule and part a server sentence is about, and nothing for other sentences", () => {
+    expect(requestRulesRefusal('invalid component: definition.request_rules[1].paths[0]: path "/v1/../admin" is not in normal form')).toEqual({ index: 1, part: "paths" });
+    expect(requestRulesRefusal('request_rules[0].host: "x" is not one of the component\'s hosts')).toEqual({ index: 0, part: "host" });
+    expect(requestRulesRefusal('invalid component: definition.request_rules[2].methods[0]: "get" must be uppercase ("GET")')).toEqual({ index: 2, part: "methods" });
+    expect(requestRulesRefusal('invalid component: definition.request_rules[3].effect: "x" (effects: allow, deny, hold)')).toEqual({ index: 3, part: "effect" });
+    expect(requestRulesRefusal("invalid component: definition.request_rules: at most 64 rules, got 65")).toEqual({});
+    expect(requestRulesRefusal("This component carries request rules, and request rules are off on this deployment. An admin turns them on with features.component_request_rules.enabled.")).toEqual({});
+    expect(requestRulesRefusal("This component carries request rules, and whether request rules are on could not be read. Try again in a moment.")).toEqual({});
+    expect(requestRulesRefusal("Someone saved this component since you opened it. Open it again to see their change, then make your edit again.")).toBeNull();
+    expect(requestRulesRefusal("invalid component: definition.hosts: at least one host")).toBeNull();
+    expect(requestRulesRefusal("invalid component: definition.secrets[0].delivery.var: bad")).toBeNull();
   });
 });

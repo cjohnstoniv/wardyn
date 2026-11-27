@@ -84,6 +84,9 @@ export const DESKTOP = {
   startingMacOS: "The macOS desktop is still starting.", // MV-D15
   // Viewer states and hints not on the boards (run-surfaces review).
   windowOpenTitle: "A window is open on the Mac",
+  windowOpenTitleLinuxVM: "A window onto this Linux VM is open on the person's computer",
+  // The view-only strip of a Linux VM desktop while a window onto it is open on the person's own computer.
+  viewOnlyBodyWindow: "A window is open on the computer of the person who started this run. Typing and clicking here don't reach this desktop.",
   windowOpenBody: "One keyboard at a time: while that window is open, this desktop only watches. Open the desktop again from the run page to watch it.",
   reconnecting: "Reconnecting to the desktop",
   reconnectingBody: "The connection dropped. This tab reconnects on its own.",

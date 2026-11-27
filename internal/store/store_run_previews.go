@@ -60,22 +60,23 @@ func (s PG) manyRunPreviews(ctx context.Context, what, sql string, args ...any) 
 // UpsertRunPreview creates or changes the preview of (runID, port) in one transaction. When the port's live row
 // is unexpired and already has vis, that row keeps its id and its link hash, expires_at becomes now() + ttl,
 // linkHash is not stored, and created is false. Otherwise the port's unrevoked row, an expired one included, is
-// revoked by by, and a new row with a new id, vis, linkHash and expires_at = now() + ttl is inserted; created
-// is true. So a link hash is only ever stored on a new row. linkHash is set exactly when vis is public.
-func (s PG) UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (p types.RunPreview, created bool, err error) {
-	p, created, err = s.upsertRunPreview(ctx, runID, port, vis, ttl, by, linkHash)
+// revoked by by and returned as replaced (nil when there was none), and a new row with a new id, vis, linkHash
+// and expires_at = now() + ttl is inserted; created is true. So a link hash is only ever stored on a new row.
+// linkHash is set exactly when vis is public.
+func (s PG) UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (p types.RunPreview, created bool, replaced *types.RunPreview, err error) {
+	p, created, replaced, err = s.upsertRunPreview(ctx, runID, port, vis, ttl, by, linkHash)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "run_previews_one_live" {
 		// Another write inserted the port's first row after this one looked: run once more, which sees it.
-		p, created, err = s.upsertRunPreview(ctx, runID, port, vis, ttl, by, linkHash)
+		p, created, replaced, err = s.upsertRunPreview(ctx, runID, port, vis, ttl, by, linkHash)
 	}
-	return p, created, err
+	return p, created, replaced, err
 }
 
-func (s PG) upsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (types.RunPreview, bool, error) {
+func (s PG) upsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (types.RunPreview, bool, *types.RunPreview, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return types.RunPreview{}, false, fmt.Errorf("store: upsert a run preview: %w", err)
+		return types.RunPreview{}, false, nil, fmt.Errorf("store: upsert a run preview: %w", err)
 	}
 	defer db.Rollback(ctx, tx) // a no-op after Commit
 	var (
@@ -87,10 +88,11 @@ func (s PG) upsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis
 		WHERE run_id = $1 AND port = $2 AND revoked_at IS NULL FOR UPDATE`, runID, port).Scan(&id, &was, &current)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return types.RunPreview{}, false, fmt.Errorf("store: read a run preview: %w", err)
+		return types.RunPreview{}, false, nil, fmt.Errorf("store: read a run preview: %w", err)
 	}
 	micros := ttl.Microseconds()
 	var out types.RunPreview
+	var replaced *types.RunPreview
 	created := true
 	switch {
 	case found && current && was == string(vis):
@@ -100,10 +102,12 @@ func (s PG) upsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis
 			WHERE id = $1 RETURNING `+runPreviewCols, id, micros))
 	default:
 		if found {
-			if _, err := tx.Exec(ctx, `UPDATE run_previews SET revoked_at = now(), revoked_by = $2, updated_at = now()
-				WHERE id = $1`, id, by); err != nil {
-				return types.RunPreview{}, false, fmt.Errorf("store: revoke a run preview: %w", err)
+			old, err := scanRunPreview(tx.QueryRow(ctx, `UPDATE run_previews SET revoked_at = now(), revoked_by = $2, updated_at = now()
+				WHERE id = $1 RETURNING `+runPreviewCols, id, by))
+			if err != nil {
+				return types.RunPreview{}, false, nil, fmt.Errorf("store: revoke a run preview: %w", err)
 			}
+			replaced = &old
 		}
 		out, err = scanRunPreview(tx.QueryRow(ctx, `INSERT INTO run_previews
 				(id, run_id, port, visibility, link_hash, created_by, expires_at)
@@ -111,12 +115,12 @@ func (s PG) upsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis
 			RETURNING `+runPreviewCols, uuid.New(), runID, port, string(vis), linkHash, by, micros))
 	}
 	if err != nil {
-		return types.RunPreview{}, false, fmt.Errorf("store: upsert a run preview: %w", err)
+		return types.RunPreview{}, false, nil, fmt.Errorf("store: upsert a run preview: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return types.RunPreview{}, false, fmt.Errorf("store: upsert a run preview: %w", err)
+		return types.RunPreview{}, false, nil, fmt.Errorf("store: upsert a run preview: %w", err)
 	}
-	return out, created, nil
+	return out, created, replaced, nil
 }
 
 // ListRunPreviews lists the run's live previews, by port.
@@ -144,6 +148,16 @@ func (s PG) RevokeRunPreview(ctx context.Context, runID uuid.UUID, port int, by 
 		SET revoked_at = now(), revoked_by = $3, updated_at = now()
 		WHERE run_id = $1 AND port = $2 AND revoked_at IS NULL
 		RETURNING `+runPreviewCols, runID, port, by)
+}
+
+// RevokeRunPreviewByID revokes preview id, an expired one included, by by, and returns it; ErrNotFound when it is
+// revoked already or there is none. A write that must revoke the row it wrote revokes it by id, never by port,
+// so a row another write has put on the port since is left alone.
+func (s PG) RevokeRunPreviewByID(ctx context.Context, id uuid.UUID, by string) (types.RunPreview, error) {
+	return s.oneRunPreview(ctx, "revoke a run preview by id", `UPDATE run_previews
+		SET revoked_at = now(), revoked_by = $2, updated_at = now()
+		WHERE id = $1 AND revoked_at IS NULL
+		RETURNING `+runPreviewCols, id, by)
 }
 
 // RevokeRunPreviewsAbove revokes, by by, every unrevoked preview of any run whose visibility is wider than

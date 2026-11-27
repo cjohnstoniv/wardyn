@@ -5,10 +5,9 @@ package api
 
 import "github.com/cjohnstoniv/wardyn/internal/types"
 
-// localWindowServed says this release can turn features.local_window on. It stays false until the browser desktop
-// yields its keyboard to an open local window; until then a write that turns the key on is refused
-// feature_unavailable, and localWindowOn reads off whatever is stored.
-const localWindowServed = false
+// localWindowServed says this release can turn features.local_window on: the browser desktop yields its keyboard to
+// an open local window, so a window and a browser desktop never both hold the run's keyboard.
+const localWindowServed = true
 
 func init() {
 	registerSiteFeature(featureLocalWindow, siteFeatureHook{available: func() bool { return localWindowServed }})

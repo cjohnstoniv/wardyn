@@ -412,6 +412,7 @@ func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
+	apps = s.withPreviewApps(r.Context(), runID, apps)
 	declared, found := uiDeclaredApp(apps, app)
 	if !found && !ta.admitBy.IsZero() && actx.Err() != nil { // the sign-in display's holder read ran out
 		refuseIssuerOpeningUnread(r.Context(), w, "desktop sign-in", uiSessionUnverifiableMsg, actx.Err())
@@ -477,7 +478,7 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := s.decodeUISession(r, s.cfg.Now())
 	if !ok || sess.Run != runID || sess.App != app || sess.Desktop {
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionSentence(app))
 		return
 	}
 	s.relayUISession(w, r, sess)
@@ -664,7 +665,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// ends in closeFn below, which net/http runs from whichever of its read or
 	// write loops closes first (uiConn.Close's sync.Once).
 	keepCtx, stopKeepalive := context.WithCancel(context.WithoutCancel(ctx))
-	go s.attachKeepalive(keepCtx, sess.Run)
+	go s.attachKeepalive(keepaliveNotPresence(keepCtx, uiPreviewSession(sess)), sess.Run)
 
 	opened := s.cfg.Now()
 	s.auditUISession(sess, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
@@ -702,6 +703,9 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 // dispatch time, uiEnsureAppBy). A probe that failed caches nothing, so the
 // next waiter probes again and gets its own answer.
 func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSession) error {
+	if uiPreviewSession(sess) { // a port the run already serves: probed, never launched
+		return s.uiPreviewProbe(ctx, run, sess)
+	}
 	key := sess.Run.String() + "/" + sess.App
 	ctx, cancel := context.WithTimeout(ctx, uiEnsureTimeout)
 	defer cancel()

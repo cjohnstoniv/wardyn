@@ -99,6 +99,14 @@ const (
 	// MethodNarrowProxy adds hosts to a Kubernetes sandbox's proxy deny list in place (NarrowProxyArgs, answered with
 	// NarrowProxyResult); an empty Deny reads the list. Sent only to a runner whose caps carry ProxyNarrow.
 	MethodNarrowProxy = "narrow_proxy"
+	// The snapshot calls (runner.Snapshotter, SnapshotArgs answered with SnapshotReply) are sent only to a
+	// runner whose caps carry Snapshots: a cut that returns while its copy runs, then exactly one of
+	// commit_snapshot or abort_snapshot for it; delete_snapshot and list_snapshots act on its kept layers.
+	MethodSnapshotSandbox = "snapshot_sandbox"
+	MethodCommitSnapshot  = "commit_snapshot"
+	MethodAbortSnapshot   = "abort_snapshot"
+	MethodDeleteSnapshot  = "delete_snapshot"
+	MethodListSnapshots   = "list_snapshots"
 )
 
 // kept_machine's ops. KeptMachineOpDelete removes a machine whatever its deadline says: a person's or an

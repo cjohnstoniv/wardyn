@@ -489,6 +489,9 @@ func (s *Server) uiSessionArms(ctx context.Context, sess uiSession, run types.Ag
 		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
 			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
 	}
+	if de := s.uiPreviewDenies(ctx, sess, run); de != nil {
+		return de
+	}
 	if sess.Inbound {
 		if de := s.uiInboundUnitDenies(ctx, sess, run); de != nil {
 			return de

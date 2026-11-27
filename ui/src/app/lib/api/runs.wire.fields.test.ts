@@ -233,6 +233,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "macos",
       "background_watch",
       "mac_window",
+      "local_window",
       "macos_preparing",
       "macos_disk",
       "wall_preset",
@@ -294,6 +295,13 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const goEnded = [...windowGo.matchAll(/^\s*macWindowEnded\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
     const tsEnded = [...(/reason: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunMacWindowClose")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
     expect(tsEnded).toEqual(goEnded);
+  });
+
+  it("RunLocalWindow's keys are exactly localWindowView's json tags (GET /runs/{id} local_window, run_local_window.go)", () => {
+    const windowGo = readFileSync(join(root, "internal/api/run_local_window.go"), "utf8");
+    const goTags = goJSONTags(windowGo, "localWindowView").sort();
+    expect(goTags).toEqual(["message", "open", "opened_at"]);
+    expect(tsInterfaceKeys(runsTs, "RunLocalWindow").sort()).toEqual(goTags);
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {

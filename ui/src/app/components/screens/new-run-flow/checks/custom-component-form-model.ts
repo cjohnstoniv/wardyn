@@ -19,6 +19,7 @@ import { CUSTOM_COMPONENT as T } from "../../../wardyn/copy/components";
 import {
   headerHostChoices,
   hostLines,
+  requestRulesRefusal,
   type ComponentDraft,
   type SecretDraft,
 } from "../../components/component-editor-model";
@@ -224,6 +225,7 @@ export function placeServerError(message: string, d: ComponentDraft): FormErrors
     const field = SERVER_SECRET_FIELD[secret[2]] ?? "secret_name";
     if (row) return { [secretField(row, field)]: text };
   }
+  if (requestRulesRefusal(text)) return { request_rules: text };
   if (/^hosts\b/.test(text)) return { hosts: text };
   if (/^name\b/.test(text)) return { name: text };
   const config = /^config\[([^\]]+)\]/.exec(text);
@@ -241,6 +243,7 @@ export function firstErrorField(errors: FormErrors, d: ComponentDraft): string |
   const order = [
     "name",
     "hosts",
+    "request_rules",
     "secrets",
     ...d.secrets.flatMap((s) => ["secret_name", "mode", "host", "header", "format", "var", "file"].map((f) => secretField(s, f))),
     "settings",
