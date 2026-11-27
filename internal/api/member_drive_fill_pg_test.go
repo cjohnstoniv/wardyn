@@ -510,14 +510,14 @@ func newFillQueuePG(t *testing.T) (*queueEnv, *fillPG) {
 }
 
 // wantNoQueuedFill asserts a refused fill left no run row and no queue row, and answered 409 with the reason and
-// sentence.
+// sentence. The run that fills the pool is the fixture's occupant, and is not counted.
 func (f *fillPG) wantNoQueuedFill(w *httptest.ResponseRecorder, sentence string) {
 	f.t.Helper()
 	f.wantReason(w, http.StatusConflict, reasonDriveSeedNoCapacity)
 	if !strings.Contains(w.Body.String(), sentence) {
 		f.t.Errorf("body = %s, want the sentence %q", w.Body.String(), sentence)
 	}
-	if runs, queued := f.count(`SELECT count(*) FROM agent_runs`), f.count(`SELECT count(*) FROM run_queue`); runs != 0 || queued != 0 {
+	if runs, queued := f.count(`SELECT count(*) FROM agent_runs WHERE created_by <> 'occupant'`), f.count(`SELECT count(*) FROM run_queue`); runs != 0 || queued != 0 {
 		f.t.Errorf("a queued fill left %d runs and %d queue rows", runs, queued)
 	}
 	if rows := f.rows("drive.seed"); len(rows) != 1 || rows[0].Outcome != "failure" {
@@ -532,6 +532,7 @@ func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
 	t.Run("a capped pool", func(t *testing.T) {
 		e, f := newFillQueuePG(t)
 		pool := e.cappedPool("Busy", 1)
+		e.occupy(pool) // the pool is at its cap of 1, so the fill's create would wait
 		e.orgDefaults(`{"pool_id":"` + pool.ID.String() + `"}`)
 		w := e.call(e.person, http.MethodPost, "/api/v1/me/drives/"+f.drive.ID.String()+"/seed", f.body(f.ws.ID, fillPGRepo, ""))
 		f.wantNoQueuedFill(w, driveFillCappedPoolMsg("Busy", "Notes"))

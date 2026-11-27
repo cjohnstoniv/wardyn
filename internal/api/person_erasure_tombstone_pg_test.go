@@ -6,6 +6,9 @@ package api
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +26,8 @@ func TestPersonErasureReachesADeletedRunsRecordingPG(t *testing.T) {
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	fs, err := recording.NewFSStore(t.TempDir())
+	dir := t.TempDir()
+	fs, err := recording.NewFSStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,9 +64,20 @@ func TestPersonErasureReachesADeletedRunsRecordingPG(t *testing.T) {
 	if got["recordings"] != 2 || got["tombstoned_runs"] != 1 || got["runs_fenced"] != 2 {
 		t.Fatalf("erasure detail = %v, want 2 recordings, 1 tombstoned run, 2 runs fenced", detail)
 	}
+	// An erased run answers ErrErased (its fence, recording.Store), and no cast or log of its recording is left: the
+	// fence would answer the same over one that survived. Its lock file is an empty control file and stays.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []uuid.UUID{gone, kept} {
-		if _, err := fs.OpenCast(ctx, id.String()); !errors.Is(err, recording.ErrNotFound) {
-			t.Errorf("run %s's recording after the erasure: %v, want not found", id, err)
+		if _, err := fs.OpenCast(ctx, id.String()); !errors.Is(err, recording.ErrErased) {
+			t.Errorf("run %s's recording after the erasure: %v, want erased", id, err)
+		}
+		for _, e := range entries {
+			if ext := filepath.Ext(e.Name()); strings.HasPrefix(e.Name(), id.String()) && (ext == ".cast" || ext == ".log") {
+				t.Errorf("run %s's recording file %s survived the erasure", id, e.Name())
+			}
 		}
 	}
 	var by string
