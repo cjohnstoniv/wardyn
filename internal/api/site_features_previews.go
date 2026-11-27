@@ -17,7 +17,7 @@ import (
 // set, and reads off whatever is stored.
 
 // previewServed is whether this release serves preview URLs end to end.
-const previewServed = false
+const previewServed = true
 
 // previewPublicServed is whether this release serves public preview links. Until it does, max_visibility public
 // is refused, and a stored public reads private.
@@ -84,7 +84,8 @@ func validatePreviewURLs(_ context.Context, s *Server, next, _ *types.SiteFeatur
 // every live preview wider than the ceiling the write left (every one, when previews are now off), then drops
 // this replica's cached inbound sessions, so their next request is checked again. A failed revoke writes a
 // preview.revoke failure row, and the next write that changes the key runs it again; until then the gateway's
-// re-check refuses the rows it missed.
+// re-check refuses the rows it missed. A preview PUT that lands after this write revokes its own row the same way
+// (previewStillAllowed), and a failed revoke there leaves its row to the same re-check.
 func revokePreviewsAboveCeiling(ctx context.Context, s *Server, _, after types.SiteConfig) {
 	defer s.dropInboundSessions()
 	ceiling := types.PreviewVisibility("")

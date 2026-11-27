@@ -42,7 +42,7 @@ const (
 	previewConsoleOnlyMsg    = "Only a person signed in to the console can create a preview."
 	previewVisibilityMsg     = "A preview's visibility is private, org or public; %q is none of them."
 	previewTTLMsg            = "A preview lives from 1 hour to 7 days (ttl_seconds 3600 to 604800); %d is outside that."
-	previewAboveCeilingMsg   = "This deployment allows previews no wider than %s, so a %s preview can't be created or opened."
+	previewAboveCeilingMsg   = "This deployment allows previews no wider than %s, so a preview set to %s can't be created or opened."
 	previewNotRunningMsg     = "This run is not running, so its previews can't be created or opened."
 	previewProfileMsg        = "Previews are not allowed under the governance profile %q this run was launched under."
 	previewPortReservedMsg   = "A preview needs a port from 1024 to 65535, other than 3128, which the run's proxy uses."
@@ -58,10 +58,11 @@ var errPreviewStoreUnsupported = errors.New("this store keeps no run previews")
 
 // runPreviewStore is the store's run_previews table (store_run_previews.go).
 type runPreviewStore interface {
-	UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (types.RunPreview, bool, error)
+	UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (types.RunPreview, bool, *types.RunPreview, error)
 	ListRunPreviews(ctx context.Context, runID uuid.UUID) ([]types.RunPreview, error)
 	LiveRunPreview(ctx context.Context, runID uuid.UUID, port int) (types.RunPreview, error)
 	RevokeRunPreview(ctx context.Context, runID uuid.UUID, port int, by string) (types.RunPreview, error)
+	RevokeRunPreviewByID(ctx context.Context, id uuid.UUID, by string) (types.RunPreview, error)
 	RevokeRunPreviewsAbove(ctx context.Context, ceiling types.PreviewVisibility, by string) ([]types.RunPreview, error)
 }
 
@@ -104,6 +105,19 @@ func previewPort(raw string) (int, bool) {
 
 // previewApp is the name the UI gateway presents a preview of port under.
 func previewApp(port int) string { return types.PreviewAppPrefix + strconv.Itoa(port) }
+
+// previewLabel is how a sentence names a visibility: Private, Organisation or Public, and any other value as it is.
+func previewLabel(v types.PreviewVisibility) string {
+	switch v {
+	case types.PreviewPrivate:
+		return "Private"
+	case types.PreviewOrg:
+		return "Organisation"
+	case types.PreviewPublic:
+		return "Public"
+	}
+	return string(v)
+}
 
 // previewConsolePerson reports whether the request's caller is a person signed in to the console: a human actor
 // with a name, not acting through a portal's delegated token, and neither an issuer portal's person nor a public
@@ -158,7 +172,7 @@ func (s *Server) runPreviewCheck(ctx context.Context, run types.AgentRun, ask *p
 		}
 	}
 	if ceiling := previewCeiling(sc); !ask.vis.AtMost(ceiling) {
-		return runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, ceiling, ask.vis))
+		return runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewLabel(ceiling), previewLabel(ask.vis)))
 	}
 	if run.State != types.RunRunning || runIsKept(run) {
 		return runError(http.StatusConflict, reasonPreviewNotRunning, previewNotRunningMsg)
@@ -306,8 +320,8 @@ func (s *Server) handleListRunPreviews(w http.ResponseWriter, r *http.Request) {
 // It asks the run's entry first (getRunForEntry: the foreign-run 404, or 403 run_owner_only for a super admin on a
 // person's run), then a console person (previewConsolePerson), then runPreviewCheck. The same visibility on a
 // live row extends it (preview.update); any other write stores a new row (preview.create), revoking the port's
-// live one in the same transaction. Which of the two it was is the upsert's own answer. Then previewStillAllowed
-// asks the ceiling again. It answers {"preview": row}.
+// unrevoked one in the same transaction (its own preview.revoke). Which it was, and the row it replaced, are the
+// upsert's own answer. Then previewStillAllowed asks the ceiling again. It answers {"preview": row}.
 func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -334,10 +348,13 @@ func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, by := actorFromRequest(r)
-	p, created, err := ps.UpsertRunPreview(r.Context(), run.ID, ask.port, ask.vis, ask.ttl, by, nil)
+	p, created, replaced, err := ps.UpsertRunPreview(r.Context(), run.ID, ask.port, ask.vis, ask.ttl, by, nil)
 	if err != nil {
 		writeServerError(w, r, "create a run preview", err)
 		return
+	}
+	if replaced != nil {
+		s.auditPreview(r, run.ID, replaced.Port, "preview.revoke", "success", previewData(*replaced))
 	}
 	if created {
 		s.auditPreview(r, run.ID, p.Port, "preview.create", "success", previewData(p))
@@ -355,8 +372,9 @@ func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 // lowers the ceiling or turns previews off revokes the rows above it (revokePreviewsAboveCeiling), but one that
 // lands between runPreviewCheck's read and this write cannot see the row the write adds. So the ceiling is read
 // again: a row it no longer allows is revoked here, as the writer, and the PUT answers as the ceiling does. A
-// site config that cannot be read again revokes the row too, as the first read refuses. The revoke is of the
-// port's unrevoked row, which is this write's unless another write on the port has replaced it since.
+// site config that cannot be read again revokes the row too, as the first read refuses. The revoke is of this
+// write's row, by its id, so a row another write has put on the port since is left alone; a revoke that fails
+// writes a preview.revoke failure row, and the gateway's re-check refuses the row while it is above the ceiling.
 func (s *Server) previewStillAllowed(r *http.Request, ps runPreviewStore, p types.RunPreview, by string) *runRefusal {
 	ctx := r.Context()
 	sc, siteErr := s.cfg.Store.GetSiteConfig(ctx)
@@ -369,23 +387,27 @@ func (s *Server) previewStillAllowed(r *http.Request, ps runPreviewStore, p type
 	case !previewURLsOn(sc):
 		rf = runError(http.StatusForbidden, reasonPreviewURLsOff, previewURLsOffMsg)
 	case !p.Visibility.AtMost(previewCeiling(sc)):
-		rf = runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewCeiling(sc), p.Visibility))
+		rf = runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewLabel(previewCeiling(sc)), previewLabel(p.Visibility)))
 	default:
 		return nil
 	}
-	gone, err := ps.RevokeRunPreview(ctx, p.RunID, p.Port, by)
+	gone, err := ps.RevokeRunPreviewByID(ctx, p.ID, by)
+	data := previewData(p)
+	if err == nil {
+		data = previewData(gone)
+	}
+	if siteErr == nil {
+		data["ceiling"] = ""
+		if previewURLsOn(sc) {
+			data["ceiling"] = string(previewCeiling(sc))
+		}
+	}
 	switch {
-	case errors.Is(err, store.ErrNotFound): // revoked already, by the site config write or a DELETE
+	case errors.Is(err, store.ErrNotFound): // revoked already: by the site config write, a DELETE or a later PUT
 	case err != nil:
+		s.auditPreview(r, p.RunID, p.Port, "preview.revoke", "failure", data)
 		return runServerError("revoke a run preview the ceiling no longer allows", err)
 	default:
-		data := previewData(gone)
-		if siteErr == nil {
-			data["ceiling"] = ""
-			if previewURLsOn(sc) {
-				data["ceiling"] = string(previewCeiling(sc))
-			}
-		}
 		s.auditPreview(r, p.RunID, gone.Port, "preview.revoke", "success", data)
 	}
 	return rf

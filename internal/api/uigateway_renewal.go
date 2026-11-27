@@ -160,7 +160,7 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	// code in an editor is not idle, and the reaper must not stop the run under
 	// them.
 	// A human relaying UI traffic is always real presence, so only the debounce applies.
-	if s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
+	if !uiPreviewSession(sess) && s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(ctx, sess.Run)
 	}
 	ctx = context.WithValue(ctx, uiSessionCtxKey{}, sess)
@@ -174,7 +174,7 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	}
 	// The same human is presence for the pause, and thaws a paused run: for an issuer portal's request, only
 	// before its dispatch time.
-	if !uiDispatchPast(ctx) {
+	if !uiPreviewSession(sess) && !uiDispatchPast(ctx) {
 		pctx, pcancel := uiBoundedCtx(ctx)
 		_ = s.markPresent(pctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
 		pcancel()
@@ -185,6 +185,7 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 
 // relayWatchCtx is the context and writer a relayed request runs under, and the stop its handler defers.
 //
+//   - A preview's session, whoever holds it, ahead of every arm below: previewWatchCtx.
 //   - An issuer portal's session, renewal on or off: a streamCut ends the request, a 101 and a streaming
 //     answer included, at its known end (the earliest of the cookie's signed expiry, its issue time plus this
 //     process's session TTL, and the end the re-check read: the chain's for a renewable session, else the
@@ -194,6 +195,9 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 //   - A support helper's session: supportWatchCtx.
 //   - Any other: ctx and w as they are, as today.
 func (s *Server) relayWatchCtx(ctx context.Context, w http.ResponseWriter, sess uiSession, checkStart, end time.Time) (context.Context, http.ResponseWriter, func()) {
+	if uiPreviewSession(sess) {
+		return s.previewWatchCtx(ctx, w, sess, checkStart, end)
+	}
 	if !issuerPortalPerson(sess.Via, sess.Principal) {
 		ctx, stop := s.supportWatchCtx(ctx, sess)
 		return ctx, w, stop
