@@ -222,6 +222,9 @@ type Config struct {
 	// handed to every proxy as the only root it trusts for ControlPlaneURL.
 	// Empty only when ControlPlaneURL is loopback http (a local install).
 	ControlPlaneCAPEM string
+	// InternalMTLS is WARDYN_INTERNAL_MTLS: internalAuth also requires each unrelayed proxy's run
+	// certificate (internal_peer.go). nil (the default) checks the bearer alone.
+	InternalMTLS *InternalMTLS
 	// ProxyURL, when set, overrides the WARDYN_PROXY_URL injected into sandbox
 	// env. Defaults to "http://wardyn-proxy:3128" (the per-run proxy sidecar
 	// hostname set by the docker driver). Non-secret: it is a network address,

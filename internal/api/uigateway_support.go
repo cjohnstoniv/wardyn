@@ -43,10 +43,11 @@ func uiSupportDoor(app string) supportDoor {
 // answer, once the session budget runs out), so the reverse proxy closes a 101's back connection or aborts a
 // streaming body (net/http/httputil closes a switched connection when the request's context ends). stop ends
 // the watch and must be called when the request is done.
-// An owner's request is never watched, as the check would only repeat the ownership rule.
+// A request with no grant runs under the limit watch instead (limitWatchCtx): the ownership rule needs no repeat,
+// the run's profile does.
 func (s *Server) supportWatchCtx(ctx context.Context, sess uiSession) (context.Context, func()) {
 	if sess.SupportGrant == uuid.Nil {
-		return ctx, func() {}
+		return s.limitWatchCtx(ctx, sess) // a session with no grant answers to the run's profile only (uigateway_limit_watch.go)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	go s.supportWatch(ctx, cancel, sess)

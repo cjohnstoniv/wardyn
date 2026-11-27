@@ -92,6 +92,7 @@ var proxyNestedSettings = map[string]string{
 // dropping it fails closed.
 var proxyFieldExemptions = map[string]string{
 	"ActivityIgnoreHosts": "advisory: an older runner keeps counting boot-host traffic as activity",
+	"ControlPlanePeerID":  "a run's SPIFFE ID; an older runner drops the field, so its proxy presents no SVID and, with the switch on, is refused internal_peer_required: fail closed",
 	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
 		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
 		"wardyn-runnerd never receives it set; dropped, " +

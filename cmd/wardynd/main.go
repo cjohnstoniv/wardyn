@@ -360,10 +360,13 @@ func run() error {
 		return err
 	}
 	defer closeRunner(run) // after the server drains, before the pool closes
+	// WARDYN_INTERNAL_MTLS: refused at the check below, with the AWS SSO hatch's own refusal, unless the
+	// identity provider is spire, the control-plane URL is https and the runner is k8s.
+	mtls, mtlsErr := loadInternalMTLS(*f.internalMTLS, idp, *f.controlURL, *f.runnerSel)
 
 	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
-	if err != nil {
+	if err = errors.Join(mtlsErr, err); err != nil {
 		return err
 	}
 
@@ -485,6 +488,7 @@ func run() error {
 		UIDir:                *f.uiDir,
 		ControlPlaneURL:      *f.controlURL,
 		ControlPlaneCAPEM:    feats.hop.caCertPEM(),
+		InternalMTLS:         mtls,
 		RecordingStore:       feats.recStore,
 		OIDC:                 feats.authn,
 

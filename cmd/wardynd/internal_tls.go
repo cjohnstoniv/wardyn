@@ -152,6 +152,11 @@ func startInternalListener(hop *hopTLS, f *bootFlags, handler http.Handler, errC
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	if f.internalMTLS != nil && *f.internalMTLS {
+		// Asked, not required: the ground-truth ingest presents none, and internalAuth refuses a run's
+		// request that comes without one (internal/api/internal_peer.go).
+		srv.TLSConfig.ClientAuth = tls.RequestClientCert
+	}
 	go func() {
 		slog.Info("wardynd: proxy-facing TLS listener (internal CA)", slog.String("listen", addr))
 		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {

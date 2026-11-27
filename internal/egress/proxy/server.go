@@ -27,6 +27,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/identity/svidsource"
 )
 
 // Server bundles a Proxy with its http.Server and async decision sink for
@@ -35,6 +36,9 @@ type Server struct {
 	proxy *Proxy
 	http  *http.Server
 	sink  *decisionSink
+	// runCert is the SPIRE source behind the control-plane client certificate (control_mtls.go), nil
+	// unless the config names a peer ID. Shutdown closes it.
+	runCert io.Closer
 	// renewStop stops the run-token renewer started by NewServer; renewStopped
 	// closes once it has exited. Both set ONCE in NewServer (never from
 	// ListenAndServe): production runs ListenAndServe in one goroutine and
@@ -254,6 +258,12 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	if err != nil {
 		return nil, err
 	}
+	runCert, err := withRunCertificate(ctx, cpTLS, cfg.ControlPlanePeerID, svidsource.Open)
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer closeUnlessStarted(runCert, &started)
 	client = controlPlaneClient(client, cpTLS)
 
 	sink, err := configuredDecisionSink(cfg, ts, client, stdout)
@@ -394,13 +404,14 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		// Marks the sign-in and relay listeners' connections (desktop_signin_lane.go, vmnet_flows.go).
 		ConnContext: laneConnContext,
 	}
-	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen, vm: cfg.VM}
+	out := &Server{proxy: p, http: srv, sink: sink, runCert: runCert, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen, vm: cfg.VM}
 	out.watchShutdown()
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
 	// for the pause presence clock.
 	hooks.start(out, p, ts, cfg, client)
+	started = true
 	return out, nil
 }
 
@@ -628,7 +639,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			procRegistry.Evict(key)
 		}()
 	}
-	return errors.Join(httpErr, sinkErr)
+	var certErr error
+	if s.runCert != nil {
+		certErr = s.runCert.Close()
+	}
+	return errors.Join(httpErr, sinkErr, certErr)
 }
 
 // Lapsed closes when the proxy's process must end: a k8s runner's proxy on any
