@@ -374,6 +374,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		Driver:   o.Name(),
 		Resolved: map[types.ConfinementClass]string{},
 		Freeze:   map[types.ConfinementClass]bool{},
+		GPU:      map[types.ConfinementClass][]types.GPUKind{},
 	}
 	locals := o.locals()
 	drives := len(locals) > 0
@@ -397,6 +398,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 				// claim can never vouch for runs it will not receive. An
 				// absent entry reads false.
 				caps.Freeze[c] = cs.Freeze[c]
+				caps.GPU[c] = cs.GPU[c] // as Freeze: the substrate the class routes to decides
 			}
 		}
 		for k, v := range cs.Resolved {

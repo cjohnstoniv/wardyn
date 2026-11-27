@@ -56,6 +56,8 @@ type CreateRunRequest struct {
 	// guest under QEMU/KVM, "macos_vm", a macOS guest on a managed Mac, or "windows_vm", a desktop-only
 	// Windows guest; only a registered runner offering the kind starts it.
 	MachineKind string `json:"machine_kind,omitempty"`
+	// GPU asks for a GPU in a container run: "nvidia" or "render". Empty asks for none.
+	GPU string `json:"gpu,omitempty"`
 	// MacOSBase is a macos_vm run's macOS base: "" or "Standard", the one prepare builds, or one of
 	// the Mac's other bases by name (PoolMacOSVM.Bases). Any other kind of sandbox sends none.
 	MacOSBase string `json:"macos_base,omitempty"`

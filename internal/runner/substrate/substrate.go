@@ -52,8 +52,9 @@ type ClassSupport struct {
 	// EphemeralDiskEnforcement names what binds runner.Resources.DiskMiB —
 	// `filesystem`, `eviction`, or `none`/empty. Aggregated as the WEAKEST.
 	EphemeralDiskEnforcement types.StorageEnforcement
-	Freeze                   map[types.ConfinementClass]bool // per-class pause/resume support; absent/false = none
-	ExecOutputUncaptured     bool                            // an exec's output cannot be captured (runner.Capabilities.ExecOutputUncaptured)
+	Freeze                   map[types.ConfinementClass]bool            // per-class pause/resume support; absent/false = none
+	GPU                      map[types.ConfinementClass][]types.GPUKind // per class, the GPU kinds this substrate hands in; absent = none
+	ExecOutputUncaptured     bool                                       // an exec's output cannot be captured (runner.Capabilities.ExecOutputUncaptured)
 	// UntaintedPools are the pinned classes whose RuntimeClass nodes the substrate's own placement may also
 	// use: a pool labelled and not tainted (k8s, read at boot). OR-merged; absent on an older runner.
 	UntaintedPools []types.ConfinementClass

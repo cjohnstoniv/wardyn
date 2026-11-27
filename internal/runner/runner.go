@@ -47,7 +47,8 @@ type Capabilities struct {
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
 	// Freeze reports, PER CLASS, pause/resume support; runsc/Kata pause is
 	// UNVERIFIED and never claimed here. Callers MUST check per the run's class.
-	Freeze map[types.ConfinementClass]bool `json:"freeze,omitempty"`
+	Freeze map[types.ConfinementClass]bool            `json:"freeze,omitempty"`
+	GPU    map[types.ConfinementClass][]types.GPUKind `json:"gpu,omitempty"` // per class, the GPU kinds the class's substrate hands in; absent = none
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
@@ -305,7 +306,8 @@ type Resources struct {
 	// fails closed only for a size a policy wrote, and runs a soft one uncapped.
 	// The JSON member keeps its old name, DiskMiBFilled, so a runner and a
 	// control plane of different versions still agree on the bit.
-	DiskMiBSoft bool `json:"DiskMiBFilled"`
+	DiskMiBSoft bool          `json:"DiskMiBFilled"`
+	GPU         types.GPUKind `json:",omitempty"` // the GPU to hand in (#2958); a driver that cannot gives none and refuses the create
 	// LifetimeCap is how much longer the run may live, counted from the sandbox
 	// create: the run's own lifetime cap (lifetime_cap_at) less now. Zero means the
 	// run has no cap. The k8s substrate reads it as the run pods'

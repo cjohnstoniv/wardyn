@@ -187,6 +187,8 @@ type AgentRun struct {
 	// MachineKind is the kind of the run's sandbox: empty for a container (every run before the
 	// field), linux_vm or macos_vm. Written once at create.
 	MachineKind MachineKind `json:"machine_kind,omitempty"`
+	// GPU is the GPU the run was given at create (GPUKind); empty for none. Written once at create.
+	GPU GPUKind `json:"gpu,omitempty"`
 	// VMMachine is the virtual hardware a VM run was started with, recorded after its create; nil
 	// for a container. A macOS VM run that picked a base holds only its MacOSBase until then.
 	VMMachine *VMMachine `json:"vm_machine,omitempty"`
