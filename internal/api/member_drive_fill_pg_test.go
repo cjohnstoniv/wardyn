@@ -459,17 +459,24 @@ func TestDriveSeed_CreateRefusalIsPassedThrough_PG(t *testing.T) {
 	f.noRunYet()
 }
 
-// TestDriveSeed_NoBaseImageRefuses_PG: a workspace with no base image keeps the create path's status and reason, with
-// the fill's own sentence.
-func TestDriveSeed_NoBaseImageRefuses_PG(t *testing.T) {
+// TestDriveSeed_NoBaseImageFillsOnTheAgentBaseImage_PG: a workspace with no base image fills on the agent base image,
+// as any background command with no harness runs, and the run is otherwise the fill's: exactly the own-token grant
+// and the fill's egress.
+func TestDriveSeed_NoBaseImageFillsOnTheAgentBaseImage_PG(t *testing.T) {
 	f := newFillPG(t)
 	ws := f.workspace(nil, nil)
-	w := f.fillAs(fillPGAlice, f.drive.ID, f.body(ws.ID, fillPGRepo, ""))
-	f.wantReason(w, http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage)
-	if !strings.Contains(w.Body.String(), driveFillNoBaseImageMsg()) {
-		t.Errorf("body = %s, want the fill's sentence", w.Body.String())
+	grants := f.grants(f.accepted(f.fillAs(fillPGAlice, f.drive.ID, f.body(ws.ID, fillPGRepo, ""))))
+	if len(grants) != 1 {
+		t.Fatalf("grants = %+v, want exactly one", grants)
 	}
-	f.noRunYet()
+	wantOwnTokenGrant(t, grants[0])
+	f.wantEgress() // waits for the sandbox
+	f.rn.mu.Lock()
+	image := f.rn.lastSpec.Image
+	f.rn.mu.Unlock()
+	if want := agentImage("base", f.h.srv.cfg.AgentImages); image != want {
+		t.Errorf("sandbox image = %q, want the agent base image %q", image, want)
+	}
 }
 
 // newFillQueuePG is the fill fixture over the pool test environment: the person has a drive, a workspace, an own
@@ -510,14 +517,14 @@ func newFillQueuePG(t *testing.T) (*queueEnv, *fillPG) {
 }
 
 // wantNoQueuedFill asserts a refused fill left no run row and no queue row, and answered 409 with the reason and
-// sentence.
+// sentence. The run that fills the pool is the fixture's occupant, and is not counted.
 func (f *fillPG) wantNoQueuedFill(w *httptest.ResponseRecorder, sentence string) {
 	f.t.Helper()
 	f.wantReason(w, http.StatusConflict, reasonDriveSeedNoCapacity)
 	if !strings.Contains(w.Body.String(), sentence) {
 		f.t.Errorf("body = %s, want the sentence %q", w.Body.String(), sentence)
 	}
-	if runs, queued := f.count(`SELECT count(*) FROM agent_runs`), f.count(`SELECT count(*) FROM run_queue`); runs != 0 || queued != 0 {
+	if runs, queued := f.count(`SELECT count(*) FROM agent_runs WHERE created_by <> 'occupant'`), f.count(`SELECT count(*) FROM run_queue`); runs != 0 || queued != 0 {
 		f.t.Errorf("a queued fill left %d runs and %d queue rows", runs, queued)
 	}
 	if rows := f.rows("drive.seed"); len(rows) != 1 || rows[0].Outcome != "failure" {
@@ -532,6 +539,7 @@ func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
 	t.Run("a capped pool", func(t *testing.T) {
 		e, f := newFillQueuePG(t)
 		pool := e.cappedPool("Busy", 1)
+		e.occupy(pool) // the pool is at its cap of 1, so the fill's create would wait
 		e.orgDefaults(`{"pool_id":"` + pool.ID.String() + `"}`)
 		w := e.call(e.person, http.MethodPost, "/api/v1/me/drives/"+f.drive.ID.String()+"/seed", f.body(f.ws.ID, fillPGRepo, ""))
 		f.wantNoQueuedFill(w, driveFillCappedPoolMsg("Busy", "Notes"))

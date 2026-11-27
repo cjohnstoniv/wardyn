@@ -172,7 +172,8 @@ func TestMemberTeamDriveDelete_WaitsForAnyStartingRun_PG(t *testing.T) {
 }
 
 // TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun_PG: a team drive already claimed for its delete is
-// refused in use while another person's run is STARTING, with no physical call and delete_issues still 0.
+// refused in use while another person's run is STARTING, with no physical call; the claim is given up, so
+// delete_issues moves from 0 to 2 (ClearMemberDriveClaim), never to an issued odd count.
 func TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun_PG(t *testing.T) {
 	e := newTeamDrivePGEnv(t)
 	ctx := withActor(context.Background(), types.ActorHuman, aliceSub)
@@ -188,10 +189,11 @@ func TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun_PG(t *testing
 	}
 	res := e.srv.deleteMemberDrive(ctx, e.pg, tomb, started, memberDriveByOwner)
 	var issues int
-	if err := e.pool.QueryRow(ctx, `SELECT delete_issues FROM user_drives WHERE id = $1`, d.ID).Scan(&issues); err != nil {
+	var claimed bool
+	if err := e.pool.QueryRow(ctx, `SELECT delete_issues, delete_started_at IS NOT NULL FROM user_drives WHERE id = $1`, d.ID).Scan(&issues, &claimed); err != nil {
 		t.Fatal(err)
 	}
-	if res.reason != reasonMemberDriveInUse || len(e.rn.calls) != 0 || issues != 0 {
-		t.Fatalf("delete = %+v, calls %d, issues %d; want in use, no call, no issue", res, len(e.rn.calls), issues)
+	if res.reason != reasonMemberDriveInUse || len(e.rn.calls) != 0 || issues != 2 || claimed {
+		t.Fatalf("delete = %+v, calls %d, issues %d, claimed %v; want in use, no call, claim given up at 2", res, len(e.rn.calls), issues, claimed)
 	}
 }
