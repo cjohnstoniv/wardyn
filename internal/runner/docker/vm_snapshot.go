@@ -121,7 +121,7 @@ func (d *Driver) SnapshotSandbox(ctx context.Context, ref string, req runner.Sna
 	if err != nil {
 		return runner.SnapshotCut{}, err
 	}
-	if d.vmConfig() == nil || v == nil || v.mac || req.ID == uuid.Nil {
+	if d.vmConfig() == nil || v == nil || v.mac || v.win != nil || req.ID == uuid.Nil {
 		return runner.SnapshotCut{}, runner.ErrSnapshotUnsupported
 	}
 	t := d.snaps()

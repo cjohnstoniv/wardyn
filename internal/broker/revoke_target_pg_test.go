@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -438,7 +439,8 @@ func TestPG_TokenSeal_PruneSkipsLockedRows(t *testing.T) {
 		VALUES ($1, 'old', 'someone', 1, '\x00'::bytea, now() - interval '10 minutes')`, other); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := f.pool.Begin(t.Context())
+	// The lock is held on a separate session, so the mint's own pool transaction is not a nested acquire.
+	tx, err := testutil.PGConn(t, f.pool).Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1510,7 +1510,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `move_plain_link` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a runner link is not TLS. |
 | `move_run_ended` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the run was killed, ended or lost during the move. |
 | `move_pause_changed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: a Resume took the run during the move. |
-| `move_orphaned` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the move's executor stopped answering. |
+| `move_orphaned` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the server running the move stopped answering. |
 | `move_stop_failed` | A failed move's reason, and `503` on `POST /runs/{id}/move` for a run already paused: the run could not be stopped. |
 | `move_create_failed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination's sandbox could not be created. |
 | `move_export_failed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the source's files could not be read. |

@@ -43,38 +43,46 @@ const (
 
 // isVMCensus is every non-test .IsVM() call in internal/api and internal/runner.
 var isVMCensus = map[string]censusSite{
-	"api/approvals_takeover.go:takeoverSurface":           {1, isVMAnyVM, "a VM run that is not background-only takes over at its desktop"},
-	"api/internal.go:handlePostDecision":                  {1, isVMAnyVM, "the relay mark counts for any VM guest's flow; the relay is guest-OS agnostic"},
-	"api/provider_env.go:applyClaudeToolSearchDefault":    {1, isVMGuest, "an agent's environment; a Windows run starts no agent"},
-	"api/run_agent_cut.go:cutAgent":                       {1, isVMAnyVM, "no agent cut on a VM"},
-	"api/run_agent_cut.go:keepable":                       {1, isVMAnyVM, "a VM is never kept with its agent cut off"},
-	"api/run_agent_cut.go:copyBackCut":                    {1, isVMGuest, "a computer folder's copy back; a Windows run has no computer folder"},
-	"api/run_computer_folder.go:quiesceKeptSandbox":       {2, isVMGuest, "a kept computer folder; a Windows run has none"},
-	"api/run_contain_d1.go:d1ServerMode":                  {1, isVMAnyVM, "false: a VM is never a hosted Kubernetes run"},
-	"api/run_contain_dispatch.go:containDispatch":         {1, isVMAnyVM, "a VM is not cut from the server"},
-	"api/run_desktop_signin.go:handleBeginDesktopSignin":  {1, isVMGuest, "desktop sign-ins need a guest agent; a VM is refused here"},
-	"api/run_desktop_vm_signin.go:recordDesktopVMSignIns": {1, isVMGuest, "sign-ins are refused at create, and a Windows sandbox reports none"},
-	"api/run_desktop_vm_signin.go:watchVMSignIn":          {1, isVMAnyVM, "a VM never takes a container desktop sign-in"},
-	"api/run_egress_edit.go:egressEditRunnerToUpdate":     {1, isVMAnyVM, "no runner update is named for a VM"},
-	"api/run_folder_pass_once.go:passGuardFor":            {1, isVMGuest, "a local folder pass; folders are refused at create"},
-	"api/run_folder_pass_once.go:holdUnquiesced":          {1, isVMGuest, "a local folder pass; folders are refused at create"},
-	"api/run_local_folder.go:holdForLocalFolder":          {1, isVMGuest, "a local folder sync; folders are refused at create"},
-	"api/run_lost_at_gen.go:generationStopperFor":         {1, isVMAnyVM, "no proxy generation stop on a VM"},
-	"api/run_lost_at_gen.go:runnerNeedsUpdateToRevive":    {1, isVMAnyVM, "no runner update is asked of a VM"},
-	"api/run_proxy_readback.go:folderKeepVerdict":         {1, isVMAnyVM, "a VM keeps no computer folder"},
-	"api/run_service.go:serviceRefusal":                   {1, isVMAnyVM, "a service runs in a container, never a VM"},
-	"api/runs_dispatch_mounts.go:recordVMMachine":         {1, isVMAnyVM, "a VM's machine is recorded; a Windows VM's is QEMU's"},
-	"api/uigateway_desktop.go:uiEnterDesktop":             {1, isVMAnyVM, "a VM's desktop is the one door a Windows run has"},
-	"api/via_org.go:handleViaOrg":                         {1, isVMAnyVM, "the relay mark counts for any VM guest's flow"},
-	"runner/docker/driver_network.go:runNetworkAndProxy":  {1, isVMAnyVM, "a VM's proxy serves the guest's relay"},
-	"runner/remote/substrate.go:CreateSandbox":            {2, isVMAnyVM, "a VM spec goes through the runner's VM caps check and is remembered as a VM"},
-	"runner/runneragent/dispatch.go:create":               {1, isVMAnyVM, "create_vm starts any VM kind"},
+	"api/approvals_takeover.go:takeoverSurface":                 {1, isVMAnyVM, "a VM run that is not background-only takes over at its desktop"},
+	"api/internal_decisions_batch.go:decisionRequest":           {1, isVMAnyVM, "the relay mark counts for any VM guest's flow; the relay is guest-OS agnostic"},
+	"api/provider_env.go:applyClaudeToolSearchDefault":          {1, isVMGuest, "an agent's environment; a Windows run starts no agent"},
+	"api/run_agent_cut.go:cutAgent":                             {1, isVMAnyVM, "no agent cut on a VM"},
+	"api/run_agent_cut.go:keepable":                             {1, isVMAnyVM, "a VM is never kept with its agent cut off"},
+	"api/run_agent_cut.go:copyBackCut":                          {1, isVMGuest, "a computer folder's copy back; a Windows run has no computer folder"},
+	"api/run_computer_folder.go:quiesceKeptSandbox":             {2, isVMGuest, "a kept computer folder; a Windows run has none"},
+	"api/run_containers.go:containersShapeRefusal":              {1, isVMAnyVM, "extra containers are refused on any VM, a Windows one too"},
+	"api/run_contain_d1.go:d1ServerMode":                        {1, isVMAnyVM, "false: a VM is never a hosted Kubernetes run"},
+	"api/run_contain_dispatch.go:containDispatch":               {1, isVMAnyVM, "a VM is not cut from the server"},
+	"api/run_desktop_signin.go:handleBeginDesktopSignin":        {1, isVMGuest, "desktop sign-ins need a guest agent; a VM is refused here"},
+	"api/run_desktop_vm_signin.go:recordDesktopVMSignIns":       {1, isVMGuest, "sign-ins are refused at create, and a Windows sandbox reports none"},
+	"api/run_desktop_vm_signin.go:watchVMSignIn":                {1, isVMAnyVM, "a VM never takes a container desktop sign-in"},
+	"api/run_egress_edit.go:egressEditRunnerToUpdate":           {1, isVMAnyVM, "no runner update is named for a VM"},
+	"api/run_fit.go:fitClass":                                   {1, isVMAnyVM, "a VM is sized as the CC3 pod, whatever its guest"},
+	"api/run_folder_quiesce.go:restartFencedForPass":            {1, isVMGuest, "a local folder pass; folders are refused at create"},
+	"api/run_folder_pass_once.go:passGuardFor":                  {1, isVMGuest, "a local folder pass; folders are refused at create"},
+	"api/run_folder_pass_once.go:holdUnquiesced":                {1, isVMGuest, "a local folder pass; folders are refused at create"},
+	"api/run_local_folder.go:holdForLocalFolder":                {1, isVMGuest, "a local folder sync; folders are refused at create"},
+	"api/run_lost_at_gen.go:generationStopperFor":               {1, isVMAnyVM, "no proxy generation stop on a VM"},
+	"api/run_lost_at_gen.go:runnerNeedsUpdateToRevive":          {1, isVMAnyVM, "no runner update is asked of a VM"},
+	"api/run_mcp_sandbox_gate.go:mcpSandboxRefusal":             {1, isVMAnyVM, "no runner capability read for a VM: a Windows run's stdio server is in no kind list, so the unsupported row refuses it"},
+	"api/run_proxy_readback.go:folderKeepVerdict":               {1, isVMAnyVM, "a VM keeps no computer folder"},
+	"api/run_service.go:serviceRefusal":                         {1, isVMAnyVM, "a service runs in a container, never a VM"},
+	"api/run_start_after_readback.go:startAfterReadbackRefused": {1, isVMGuest, "an agent's boot seed; a Windows run starts no agent, so it carries no seed and returns before the test"},
+	"api/runs_dispatch_mounts.go:recordVMMachine":               {1, isVMAnyVM, "a VM's machine is recorded; a Windows VM's is QEMU's"},
+	"api/site_config_watermark.go:runDesktopWatermark":          {1, isVMAnyVM, "a VM shows a desktop, so a Windows run carries the watermark too"},
+	"api/uigateway_desktop.go:serveDesktopRFB":                  {1, isVMAnyVM, "a stream with control is known to a window that opens; a Windows VM opens no Mac or local window, so nothing ends it"},
+	"api/uigateway_desktop.go:uiEnterDesktop":                   {1, isVMAnyVM, "a VM's desktop is the one door a Windows run has"},
+	"api/via_org.go:handleViaOrg":                               {1, isVMAnyVM, "the relay mark counts for any VM guest's flow"},
+	"runner/docker/driver_network.go:runNetworkAndProxy":        {1, isVMAnyVM, "a VM's proxy serves the guest's relay"},
+	"runner/remote/substrate.go:CreateSandbox":                  {2, isVMAnyVM, "a VM spec goes through the runner's VM caps check and is remembered as a VM"},
+	"runner/runneragent/dispatch.go:create":                     {1, isVMAnyVM, "create_vm starts any VM kind"},
 }
 
 // kindTestCensus is every non-test kind test in internal/api, internal/store, internal/runner and
 // cmd/wardyn-runnerd: a call X.IsMacOSVM(), X.RunsMemberImage() or X.HasDiskOverlay(), or a selector
 // MachineLinuxVM or MachineMacOSVM. The macOS-only files are keyed by file alone.
 var kindTestCensus = map[string]censusSite{
+	"api/attach_forward.go:handleAttachForward":                           {1, kindUnreachable, "the port-forwarding door refuses a Windows run first (backgroundOnlyRefusal)"},
 	"api/desktop_files.go:desktopRun":                                     {1, kindUnreachable, "the desktop door refuses a Windows run first"},
 	"api/run_agent_cast.go:recordMacOSAgent":                              {1, kindNonMac, "the macOS agent-output cast; a Windows run has no agent and records nothing"},
 	"api/run_agent_cast.go:agentOutputRecorded":                           {1, kindNonMac, "the macOS agent-output cast; nothing is owed for a Windows run"},
@@ -82,6 +90,7 @@ var kindTestCensus = map[string]censusSite{
 	"api/run_attachments.go:runAttachments":                               {1, kindNonMac, "folders are refused before the workspaces step, so the mount map is empty"},
 	"api/run_background_watch.go:backgroundWatchRefusal":                  {1, kindUnreachable, "a run that is not background-only is refused first"},
 	"api/run_background_watch.go:backgroundWatchViewFor":                  {1, kindNonMac, "nil: a Windows run shows no background watch"},
+	"api/run_browser_lockdown.go:browserLockdown":                         {1, kindNonMac, "not macOS: the managed policy file is built, and the Windows create refuses any managed file, so the run fails rather than show a lockdown nothing enforces"},
 	"api/run_computer_folder_bring_back.go:handleBringComputerFolderBack": {1, kindNonMac, "the container end-hold budget; a Windows run has no computer folder"},
 	"api/run_contain_d1.go:d1Stop":                                        {1, kindNonMac, "the linux_vm budget: an ACPI power-down, then the container stop"},
 	"api/run_desktop_vm_signin.go:macOSDesktopSignInsOffRead":             {1, kindNonMac, "false: there is no macOS sign-in roster"},
@@ -91,22 +100,27 @@ var kindTestCensus = map[string]censusSite{
 	"api/run_fold_steps.go:stepPlacementCapability":                       {2, kindNonMac, "no macOS ask; the Windows caps and recording checks are the Windows placement step's"},
 	"api/run_fold_steps.go:stepDriveEligibility":                          {1, kindUnreachable, "no drives: refused at create"},
 	"api/run_fold_steps.go:stepMainDrive":                                 {2, kindEdited, "a Windows disk is a qcow2 overlay: HasDiskOverlay in place"},
-	"api/run_image_admission.go:imageAdmission":                           {1, kindEdited, "a Windows image is the registered ref: RunsMemberImage in place"},
+	"api/run_image_admission.go:imageAdmissionOf":                         {1, kindEdited, "a Windows image is the registered ref: RunsMemberImage in place"},
 	"api/run_image_admission.go:imageAdmissionPreview":                    {1, kindEdited, "a Windows image is the registered ref: RunsMemberImage in place"},
 	"api/run_image_pin.go:conventionImageAdmission":                       {1, kindEdited, "a Windows image is the registered ref: RunsMemberImage in place"},
+	"api/run_local_window.go:localWindowCheck":                            {1, kindNonMac, "not a Linux VM: the local window is refused with its kind reason"},
+	"api/run_local_window.go:localWindowViewFor":                          {1, kindNonMac, "nil: a Windows run shows no local window"},
+	"api/run_mcp_sandbox_gate.go:(package)":                               {2, kindNonMac, "the gate's macOS and Linux VM rows; a Windows run takes neither and the unsupported row after them refuses it"},
 	"api/run_keep_work_folder.go:auditKeptDrive":                          {1, kindUnreachable, "keep_work_folder is refused at create"},
 	"api/run_keep_work_folder.go:dropUncreatedMacKeptDrive":               {1, kindNonMac, "returns at once: a Windows run keeps no drive"},
 	"api/run_kept_machine.go:keptMachineDecision":                         {1, kindUnreachable, "kept machines are refused at create"},
 	"api/run_kept_machine.go:keptResumeOf":                                {1, kindUnreachable, "machine.resume is refused at create"},
 	"api/run_lease.go:stopKeptRun":                                        {1, kindNonMac, "the sweep budget, as linux_vm; a lost Windows run is stopped here"},
 	"api/run_placement_capabilities.go:requestDemands":                    {2, kindNonMac, "windows reads as no VM demand; the Windows placement step owns the caps check"},
-	"api/run_placement_dispatch.go:createSandboxAtTarget":                 {1, kindNonMac, "a Windows run has no image arches, so the branch is not entered"},
+	"api/run_placement_dispatch.go:fillSandboxTarget":                     {1, kindNonMac, "a Windows run has no image arches, so the branch is not entered"},
 	"api/run_placement_resolve.go:runnerRecordingDemand":                  {1, kindNonMac, "linux_vm's answer; a Windows run under a recording requirement is refused"},
 	"api/run_placement_resolve.go:kindTargets":                            {1, kindNonMac, "keeps the registered-runner kind: an organisation runner is the only place a Windows run goes"},
 	"api/run_recording.go:applyRunRecording":                              {1, kindNonMac, "a Windows run's recording level is off, so the runner records nothing"},
 	"api/run_recording.go:refuseDeclinedUpload":                           {1, kindNonMac, "a Windows run's level is off, so an upload is refused as for any unrecorded run"},
 	"api/run_resources.go:handleRunResources":                             {1, kindUnreachable, "resource usage is refused before any exec"},
+	"api/run_revive_image.go:reviveContainersAdmission":                   {1, kindUnreachable, "reviveFromRequest, reviveRunProxy's one caller, refuses a Windows VM run first"},
 	"api/run_revive_image.go:reviveImageAdmission":                        {1, kindUnreachable, "reviveFromRequest, reviveRunProxy's one caller, refuses a Windows VM run first"},
+	"api/run_secret_facts.go:recordDispatchSecretFacts":                   {1, kindNonMac, "not linux_vm: no row is written, so a Windows run can never be snapshotted"},
 	"api/run_terminal_effects.go:macOSVMRun":                              {1, kindNonMac, "false: the container budgets, as linux_vm"},
 	"api/runs_create_validate.go:machineKindRefusal":                      {3, kindEdited, "windows_vm is admitted whatever the macOS switch says; the fold refuses it while the site switch is off"},
 	"api/runs_dispatch.go:dispatchRun":                                    {1, kindNonMac, "no unstarted-end marker: it serves a macOS kept drive"},
@@ -120,7 +134,7 @@ var kindTestCensus = map[string]censusSite{
 	"api/sshgateway_sftp.go:sftpServerPathFor":                            {1, kindUnreachable, "SSH is refused at authentication"},
 	"api/uigateway.go:uiDial":                                             {1, kindUnreachable, "a Windows run declares no app, so a non-desktop app is refused first"},
 	"api/uigateway.go:uiLauncherScriptFor":                                {2, kindUnreachable, "a Windows run declares no app, so a non-desktop app is refused first"},
-	"api/uigateway_desktop.go:serveDesktopRFB":                            {1, kindNonMac, "no macOS window tracking; one stream per Windows VM is the runner's rule"},
+	"api/uigateway_preview.go:uiPreviewProbeCmd":                          {2, kindNonMac, "the container's socat probe; its exec reaches the Windows VM's agent, which refuses with its one named error"},
 	"runner/docker/driver_network.go:CreateSandbox":                       {1, kindNonMac, "not macOS: goes to createVM, which branches to the Windows create"},
 	"runner/docker/driver_proxy_revive.go:ReplaceProxyHashedAt":           {1, kindUnreachable, "the VM lookup answers unsupported first; revive is refused in the API too"},
 	"runner/docker/macvm.go:CoversKind":                                   {2, kindEdited, "a windows_vm case while the Windows config is on"},
@@ -156,6 +170,7 @@ var dockerVMLookupCensus = map[string]censusSite{
 	"runner/docker/driver_exec.go:AgentStatus":                  {1, kindNonMac, "the container status for an empty exec id; the agent's named refusal otherwise"},
 	"runner/docker/driver_fence.go:FenceProxy":                  {1, kindNonMac, "unsupported, as for any VM"},
 	"runner/docker/driver_fence.go:EndSandboxAt":                {1, kindNonMac, "an ACPI power-down, then the container stop and the sidecars"},
+	"runner/docker/driver_fence.go:StartFenced":                 {1, kindNonMac, "unsupported, as for any VM"},
 	"runner/docker/driver_network.go:StopSandbox":               {1, kindNonMac, "an ACPI power-down, then the container stop"},
 	"runner/docker/driver_network.go:EndSandbox":                {1, kindNonMac, "as EndSandboxAt"},
 	"runner/docker/driver_proxy_revive.go:CanReplaceProxy":      {1, kindNonMac, "unsupported, as for any VM"},
@@ -167,6 +182,7 @@ var dockerVMLookupCensus = map[string]censusSite{
 	"runner/docker/session.go:execStream":                       {1, kindUnreachable, "the agent's named refusal; SSH, the UI relay, resources and files are refused"},
 	"runner/docker/session_signin.go:ExecStreamAs":              {1, kindNonMac, "sign-ins are unsupported, as for any VM"},
 	"runner/docker/session_signin.go:SignalMain":                {1, kindNonMac, "sign-ins are unsupported, as for any VM"},
+	"runner/docker/vm_snapshot.go:SnapshotSandbox":              {1, kindEdited, "a Windows VM answers ErrSnapshotUnsupported, as a Mac does"},
 	"runner/docker/vm.go:vmFor":                                 {1, kindNonMac, "the lookup itself"},
 	"runner/docker/vm.go:EndVM":                                 {1, kindNonMac, "EndSandbox, as for any VM"},
 	"runner/docker/vm_desktop.go:DialDesktop":                   {1, kindEdited, "a Windows VM's desktop keeps one stream, the newest"},
@@ -305,7 +321,7 @@ func selectorCall(n ast.Node, names ...string) bool {
 // a guest-agent feature that a Windows run is refused before it reaches.
 func TestIsVMCensus(t *testing.T) {
 	got := censusScan(t, []string{"../api", "../runner"}, nil, func(n ast.Node) bool { return selectorCall(n, "IsVM") })
-	censusCompare(t, "IsVM", got, isVMCensus, 28)
+	censusCompare(t, "IsVM", got, isVMCensus, 35)
 }
 
 // Every kind test outside the .IsVM() census is classified for windows_vm.
@@ -318,7 +334,7 @@ func TestMachineKindTestCensus(t *testing.T) {
 		sel, ok := n.(*ast.SelectorExpr)
 		return ok && (sel.Sel.Name == "MachineLinuxVM" || sel.Sel.Name == "MachineMacOSVM")
 	})
-	censusCompare(t, "kind test", got, kindTestCensus, 88)
+	censusCompare(t, "kind test", got, kindTestCensus, 97)
 }
 
 // Every Docker driver VM lookup is classified for the Windows VM's vmRun.
@@ -331,5 +347,5 @@ func TestDockerVMLookupCensus(t *testing.T) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		return ok && (sel.Sel.Name == "vmLookup" || sel.Sel.Name == "vmFor")
 	})
-	censusCompare(t, "VM lookup", got, dockerVMLookupCensus, 23)
+	censusCompare(t, "VM lookup", got, dockerVMLookupCensus, 25)
 }
