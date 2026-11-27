@@ -18,20 +18,33 @@
 # would start the agent over a half-cloned tree on a big repo or a slow proxy
 # (agent-run-lib.sh boot_seed_wait_for_prep). A failed clone still writes prep-done
 # (agent-run continues past clone failure), so the wait ends; if the idle process is
-# gone without it, say so and do not auto-start the agent. No-op for runs with no repo
-# or start folder to prepare (no marker, no WARDYN_REPOS / WARDYN_START_FOLDER).
+# gone without it, say so and do not auto-start the agent. A run with no repo or start
+# folder waits too when this shell is about to start the agent: the same prep writes
+# the agent CLI's own setup (its onboarding state, the MITM CA, the AWS SSO profile),
+# and on Kubernetes the agent container starts beside its proxy and waits for it, so a
+# first attach can arrive before any of that exists. Otherwise such a run does not wait.
 
 # Only for interactive shells (attach); skip scripts/non-interactive execs.
 case $- in *i*) ;; *) return 2>/dev/null || true ;; esac
 
 _prep_gone=
-if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}${WARDYN_START_FOLDER:-}" ] || [ -f "$HOME/.wardyn/workdir" ]; then
+_ws=
+if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}${WARDYN_START_FOLDER:-}" ] || [ -f "$HOME/.wardyn/workdir" ]; then _ws=1; fi
+if [ -n "$_ws" ] || { [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-started" ]; }; then
   if [ ! -f "$HOME/.wardyn/prep-done" ]; then
-    printf '\033[36m⏳ Preparing workspace (cloning the repo)… one moment.\033[0m\n'
+    if [ -n "$_ws" ]; then
+      printf '\033[36m⏳ Preparing workspace (cloning the repo)… one moment.\033[0m\n'
+    else
+      printf '\033[36m⏳ Preparing the sandbox for the agent… one moment.\033[0m\n'
+    fi
     while [ ! -f "$HOME/.wardyn/prep-done" ] && kill -0 "${WARDYN_IDLE_PID:-1}" 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done
     [ -f "$HOME/.wardyn/prep-done" ] || {
       _prep_gone=1
-      printf '\033[33mwardyn: workspace preparation ended without finishing; not starting the agent. Check the run for a failed clone.\033[0m\n'
+      if [ -n "$_ws" ]; then
+        printf '\033[33mwardyn: workspace preparation ended without finishing; not starting the agent. Check the run for a failed clone.\033[0m\n'
+      else
+        printf '\033[33mwardyn: workspace preparation ended without finishing; not starting the agent.\033[0m\n'
+      fi
     }
   fi
   _wd="$(cat "$HOME/.wardyn/workdir" 2>/dev/null)"
@@ -41,6 +54,7 @@ if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}${WARDYN_START_FOLDER:-}" ] || [ -
   fi
   unset _wd
 fi
+unset _ws
 
 # Per-image attach hint, when the image ships one. An image whose box is not a
 # coding agent has something to say that no generic shell greeting can (the

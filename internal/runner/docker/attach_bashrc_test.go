@@ -100,6 +100,8 @@ func newAttachHome(t *testing.T) (home, binDir string) {
 // get a plain prompt, not a second agent.
 func TestAttachBashrc_StartsAgentOnceWhenRequested(t *testing.T) {
 	home, binDir := newAttachHome(t)
+	_, finish := attachPrep(t, home)
+	finish() // the attach comes after agent-run --idle's prep, as it does once the sandbox is up
 
 	if got := runAttachShell(t, home, binDir, "WARDYN_INTERACTIVE_START=agent"); got != 1 {
 		t.Fatalf("first attach shell: agent CLI ran %d times, want 1", got)
@@ -161,6 +163,59 @@ func TestAttachBashrc_StartFolderRunWaitsForPrep(t *testing.T) {
 		"WARDYN_INTERACTIVE_START=agent", "WARDYN_START_FOLDER=/work/sub", "WARDYN_IDLE_PID="+idle)
 	if len(calls) != 1 || calls[0] != workdir {
 		t.Fatalf("agent started in %v, want exactly once in the prepared workspace %s; output: %s", calls, workdir, out)
+	}
+}
+
+// TestAttachBashrc_AgentWaitsForPrepWithNoRepo: a run with no repo and no start folder still has its
+// agent's setup written by prep (its onboarding state, the MITM CA, the AWS SSO profile). On Kubernetes the
+// agent container starts beside its proxy and waits for it, so the console's first attach can come before
+// that prep; the agent started then came up on Claude Code's first-run theme picker instead of the trust
+// prompt. The attach that starts the agent now waits for prep-done, then starts it once, in the workspace.
+func TestAttachBashrc_AgentWaitsForPrepWithNoRepo(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	workdir, finish := attachPrep(t, home)
+	idle := liveIdle(t)
+	prepped := make(chan struct{})
+	time.AfterFunc(1500*time.Millisecond, func() {
+		finish()
+		close(prepped)
+	})
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_IDLE_PID="+idle)
+	select {
+	case <-prepped:
+	default:
+		t.Fatalf("the shell returned before prep finished; agent starts %v; output: %s", calls, out)
+	}
+	if len(calls) != 1 || calls[0] != workdir {
+		t.Fatalf("agent started in %v, want exactly once in the prepared workspace %s; output: %s", calls, workdir, out)
+	}
+
+	// No agent requested: a run with nothing to prepare still never waits.
+	home2, binDir2 := newAttachHome(t)
+	calls, out = runAttachShellOut(t, home2, binDir2, 5*time.Second, "WARDYN_IDLE_PID="+idle)
+	if len(calls) != 0 || strings.Contains(out, "Preparing") {
+		t.Fatalf("an attach that starts no agent waited or started one (%v); output: %s", calls, out)
+	}
+}
+
+// TestAttachBashrc_NoRepoPrepGoneDoesNotStartAgent: with no repo, an idle process gone before prep-done
+// leaves the agent unstarted too, and the shell does not point at a clone that never existed.
+func TestAttachBashrc_NoRepoPrepGoneDoesNotStartAgent(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatalf("run idle stand-in: %v", err)
+	}
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_IDLE_PID="+strconv.Itoa(dead.Process.Pid))
+	if len(calls) != 0 {
+		t.Fatalf("agent started %v although preparation never finished", calls)
+	}
+	if !strings.Contains(out, "ended without finishing") || strings.Contains(out, "failed clone") {
+		t.Fatalf("the shell did not say preparation ended, or blamed a clone; output: %s", out)
 	}
 }
 
