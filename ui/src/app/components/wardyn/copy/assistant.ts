@@ -149,7 +149,15 @@ export const ASSISTANT = {
   PART_FROM_BUILD_FILE: "From a build file (unverified)", // PROPOSED
   PART_EDIT_DONE: "Done", // PROPOSED: not on the board
   PART_EDIT_INVALID: "That isn't valid JSON.", // PROPOSED: not on the board
+  PART_EDIT_LIST: "That must be a list.", // PROPOSED: not on the board
+  PART_EDIT_OBJECT: "That must be an object.", // PROPOSED: not on the board
+  PART_EDIT_VALUE: "That must be one value: text, a number, or true or false.", // PROPOSED: not on the board
+  DOMAIN_ENTRY_BAD: (h: string) =>
+    `"${h}" is not a host the proxy can match. Write a name like example.com, *.example.com, or an IP address, each with an optional :port.`, // PROPOSED: not on the board
   RULE_HOST_WILDCARD: (h: string) => `"${h}": a rule names one exact host, never a wildcard.`, // PROPOSED: not on the board
+  RULE_HOST_BAD: (h: string) => `"${h}": a rule's host is a lower-case host name or an IPv4 address, with no port, path or trailing dot.`, // PROPOSED: not on the board
+  REVIEW_HELD_LEFT_OUT: "A host in your draft is left out by your ceiling. Take it out of the draft before you review the run.", // PROPOSED
+  REVIEW_HELD_CHECKING: "Review opens once the checks have answered valid for this draft.", // PROPOSED
   CHANGED_SINCE: "Changed since the assistant's proposal", // PROPOSED
   YOU_CHANGED: (field: string) => `You changed ${field}. Checked again.`, // PROPOSED
   CHECKS: "Checks", // PROPOSED

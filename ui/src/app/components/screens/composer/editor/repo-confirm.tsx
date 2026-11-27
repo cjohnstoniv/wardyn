@@ -8,7 +8,7 @@
 // the confirmation lists their names and sizes, what was skipped and what was held back, and nothing is sent to the
 // provider until the person presses Send files.
 import * as React from "react";
-import { assistant, type AssistantPreview, type AssistantPurpose, type AssistantSessionRequest, type AssistantTarget } from "../../../../lib/api/assistant";
+import { assistant, type AssistantConfirmedView, type AssistantPreview, type AssistantPurpose, type AssistantSessionRequest, type AssistantTarget } from "../../../../lib/api/assistant";
 import { HttpError } from "../../../../lib/api/core";
 import { getErrorMessage } from "../../../../lib/format";
 import { workspaces as workspacesApi } from "../../../../lib/api/workspaces";
@@ -137,14 +137,16 @@ export interface RepoConfirmProps {
   previewDigest: string;
   purpose: AssistantPurpose;
   target: AssistantTarget;
-  /** The files were sent and the assistant's run has started. */
-  onSent: () => void;
+  /** The files were sent and the assistant's run has started, on the session the server answered with: a new one. */
+  onSent: (session: AssistantConfirmedView) => void;
   /** Any other refusal: the entry is shown again, with the server's sentence. */
   onReturn: (message: string) => void;
 }
 
 export function RepoConfirm({ sessionId, provider, files, previewDigest, purpose, target, onSent, onReturn }: RepoConfirmProps) {
   const [digest, setDigest] = React.useState(previewDigest);
+  // The provider the files would go to: the preview's, and the fresh preview's once a stale answer made it be read again.
+  const [to, setTo] = React.useState(provider);
   // The records of the preview read again after a stale answer: shown before the person sends the new digest.
   const [records, setRecords] = React.useState<AssistantPreview["sections"] | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -155,14 +157,14 @@ export function RepoConfirm({ sessionId, provider, files, previewDigest, purpose
     setBusy(true);
     setError(null);
     try {
-      await assistant.confirmBuildFiles(sessionId, digest);
-      onSent();
+      onSent(await assistant.confirmBuildFiles(sessionId, digest));
     } catch (e) {
       if (e instanceof HttpError && e.status === 409 && e.reason === "assistant_preview_stale") {
         // What is sent changed: the preview is read again, and the person presses Send files once more.
         try {
           const fresh = await assistant.postPreview(purpose, target);
           setDigest(fresh.digest);
+          setTo(`${fresh.provider} · ${fresh.model}`);
           setRecords(fresh.sections ?? []);
         } catch (again) {
           setError(getErrorMessage(again));
@@ -179,7 +181,7 @@ export function RepoConfirm({ sessionId, provider, files, previewDigest, purpose
 
   return (
     <section data-testid="composer-repo-confirm" className="min-w-0 space-y-2.5">
-      <h3 className="text-body font-medium">{T.SEND_FILES_TITLE(files.files.length, provider)}</h3>
+      <h3 className="text-body font-medium">{T.SEND_FILES_TITLE(files.files.length, to)}</h3>
       {records && <Notice tone="info">{T.PREVIEW_CHANGED}</Notice>}
       {records && (
         <div data-testid="composer-repo-records" className="min-w-0 space-y-2">

@@ -124,10 +124,13 @@ export function hostError(entry: string): string | null {
   return entry.trim() === canon ? null : T.ERR.HOST_SPELLING(entry, canon);
 }
 
-/** The sentence for the first host of a list a person may not write, or one listed twice; null when the list is fine. */
-export function hostListError(hosts: readonly string[]): string | null {
+/**
+ * The sentence for the first host of a list a person may not write, or one listed twice; null when the list is fine.
+ * `judge` is the rule for one entry: Guided setup's own unless a list has its own (a policy's domain lists).
+ */
+export function hostListError(hosts: readonly string[], judge: (entry: string) => string | null = hostError): string | null {
   for (let i = 0; i < hosts.length; i++) {
-    const e = hostError(hosts[i]) ?? (hosts.indexOf(hosts[i]) < i ? T.ERR.HOST_TWICE(hosts[i]) : null);
+    const e = judge(hosts[i]) ?? (hosts.indexOf(hosts[i]) < i ? T.ERR.HOST_TWICE(hosts[i]) : null);
     if (e) return e;
   }
   return null;

@@ -79,6 +79,12 @@ export function mergeProposal(current: readonly PartState[], proposal: EditorPro
 // phone does not lose it.
 const kept = new Map<string, PartState[]>();
 
+/** A new session takes over from another (Try again): what the person accepted and edited goes with it. */
+export function carryKept(from: string, to: string): void {
+  const parts = kept.get(from);
+  if (parts) kept.set(to, parts);
+}
+
 /** The left-out entries of the proposal, each with the count the server's checks gave for that unit when they did. */
 export function mergeDropped(proposed: readonly DroppedItem[], fromChecks: readonly AssistantDropped[] | null | undefined): DroppedItem[] {
   const checked = fromChecks ?? [];
@@ -117,8 +123,9 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   const [answered, setAnswered] = React.useState(0);
   const [editedAt, setEditedAt] = React.useState<Record<string, number>>({});
   const changed = React.useRef(0);
-  // The change whose post of the edit was answered last: an older answer arriving late never overrides a newer one.
-  const editAnswered = React.useRef(0);
+  // Posts of the person's edits go one at a time, the latest draft after the one in flight: a snapshot that left
+  // earlier can never be stored after a later one.
+  const posting = React.useRef<{ busy: boolean; next: { draft: Record<string, unknown>; changed: Map<string, string> } | null }>({ busy: false, next: null });
   const latest = React.useRef(parts);
   latest.current = parts;
   const proposed = React.useRef("");
@@ -127,17 +134,33 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
     setParts((cur) => mergeProposal(cur, proposal));
     // A proposal that says something new asks again, so the strip is never the answer for an older draft.
     const said = JSON.stringify(proposal);
-    if (proposal && said !== proposed.current) setChanges((changed.current += 1));
+    if (proposal && said !== proposed.current) {
+      setChecks(null);
+      setChanges((changed.current += 1));
+    }
     proposed.current = said;
   }, [proposal]);
   React.useEffect(() => {
     if (sessionId) kept.set(sessionId, parts);
   }, [sessionId, parts]);
 
-  const answerEdit = (stamp: number, failure: string | null) => {
-    if (stamp < editAnswered.current) return;
-    editAnswered.current = stamp;
-    setEditFailed(failure);
+  const postEdit = (id: string, draft: Record<string, unknown>, changes: Map<string, string>) => {
+    const q = posting.current;
+    if (q.busy) {
+      q.next = { draft, changed: new Map([...(q.next?.changed ?? []), ...changes]) };
+      return;
+    }
+    q.busy = true;
+    assistant
+      .postEdits(id, { draft, changed: [...changes].map(([field, value]) => ({ field, value })) })
+      .then(() => setEditFailed(null))
+      .catch((e: unknown) => setEditFailed(getErrorMessage(e)))
+      .finally(() => {
+        const next = q.next;
+        q.busy = false;
+        q.next = null;
+        if (next) postEdit(id, next.draft, next.changed);
+      });
   };
 
   const act = (section: string, change: (p: PartState) => PartState | null, edit = false) => {
@@ -151,12 +174,10 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
     const stamp = (changed.current += 1);
     setChanges(stamp);
     if (edit) setEditedAt((m) => ({ ...m, [section]: stamp }));
+    setChecks(null);
     if (sessionId) {
       const after = next.find((p) => p.section === section);
-      assistant
-        .postEdits(sessionId, { draft: draftOf(next), changed: [{ field: section, value: JSON.stringify(after ? after.value : null) }] })
-        .then(() => answerEdit(stamp, null))
-        .catch((e: unknown) => answerEdit(stamp, getErrorMessage(e)));
+      postEdit(sessionId, draftOf(next), new Map([[section, JSON.stringify(after ? after.value : null)]]));
     }
   };
 
@@ -199,6 +220,11 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   const edited = parts.filter((p) => p.status === "accepted" && p.edited && !same(p.value, p.proposed));
   const checkedAgain = edited.filter((p) => (editedAt[p.section] ?? Infinity) <= answered);
   const left = mergeDropped(proposal?.dropped ?? [], checks?.dropped);
+
+  // New run gets only what the person saw checked: the checks of this very draft answered valid and left nothing out.
+  // The answer carries no clamped policy to hand on instead, so a draft with a left-out host waits for the person.
+  const checkedLeftOut = (checks?.dropped ?? []).length > 0;
+  const reviewable = checks?.valid === true && !checkedLeftOut;
 
   const review = () =>
     navigate(NEW_RUN_PATH, {
@@ -252,9 +278,14 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
       )}
       {(accepted > 0 || checks || failed || editFailed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={[editFailed, failed]} leftOut={left.length > 0} />}
       {accepted > 0 && (
-        <Button type="button" disabled={checks?.valid === false} onClick={review}>
-          {NR_SHARED.REVIEW_RUN}
-        </Button>
+        <>
+          <Button type="button" disabled={!reviewable} onClick={review}>
+            {NR_SHARED.REVIEW_RUN}
+          </Button>
+          {!reviewable && (
+            <p className="text-meta text-muted-foreground">{checkedLeftOut ? T.REVIEW_HELD_LEFT_OUT : T.REVIEW_HELD_CHECKING}</p>
+          )}
+        </>
       )}
     </div>
   );

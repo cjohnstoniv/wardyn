@@ -82,19 +82,27 @@ function cloneIntent(s: PrefillState): RunIntent {
   return { ...common, shape: "agent_task", experience: "interactive", ...(s.agent ? { startup: { kind: "harness", tool: s.agent, ...prompt } } : {}) };
 }
 
-/** The assistant's draft becomes an inline policy and nothing else; the steps choose the rest. */
-function assistantIntent(document: unknown): RunIntent {
+/** The assistant's inline policy, when the router state carries a usable one; the steps choose everything else. */
+function assistantPolicy(document: unknown): RunIntent["inline_policy"] | undefined {
   const policy = (document as { inline_policy?: unknown } | null)?.inline_policy;
-  return policy && typeof policy === "object" && !Array.isArray(policy) ? { inline_policy: policy as RunIntent["inline_policy"] } : {};
+  return policy && typeof policy === "object" && !Array.isArray(policy) ? (policy as RunIntent["inline_policy"]) : undefined;
 }
 
-const assistantOrigin = (session: unknown): NewRunOrigin => (typeof session === "string" && session ? { kind: "assistant", assistantSession: session } : { kind: "assistant" });
+/** A session id with nothing in it is no session. */
+const assistantOrigin = (session: unknown): NewRunOrigin => {
+  const id = typeof session === "string" ? session.trim() : "";
+  return id ? { kind: "assistant", assistantSession: id } : { kind: "assistant" };
+};
 
 /** The seed a router-state prefill makes, or undefined when the state holds none. */
 export function prefillSeed(state: unknown): { origin: NewRunOrigin; intent: RunIntent } | undefined {
   const prefill = (state as RouterPrefill | null)?.prefill;
   if (!prefill) return undefined;
-  if (prefill.document) return { origin: assistantOrigin(prefill.assistantSession), intent: assistantIntent(prefill.document) };
+  if (prefill.source === "assistant" || prefill.document) {
+    // The assistant's door takes its inline policy and nothing else; with none it seeds nothing, never another door's fields.
+    const inline_policy = assistantPolicy(prefill.document);
+    return inline_policy ? { origin: assistantOrigin(prefill.assistantSession), intent: { inline_policy } } : undefined;
+  }
   const s = prefill.state ?? {};
   return prefill.source === "composer"
     ? { origin: { kind: "composer" }, intent: composerIntent(s) }

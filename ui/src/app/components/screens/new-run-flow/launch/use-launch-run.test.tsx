@@ -29,6 +29,11 @@ describe("useLaunchRun and the assistant's session", () => {
     expect(create).toHaveBeenCalledWith(BODY, { "X-Wardyn-Assistant-Session": "s-1" });
   });
 
+  it("sends no header for a session that is only whitespace", async () => {
+    const create = await launched("   ");
+    expect(create.mock.calls[0]).toEqual([BODY]);
+  });
+
   it("sends the request exactly as before when there is no session", async () => {
     const create = await launched();
     expect(create).toHaveBeenCalledTimes(1);

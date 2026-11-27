@@ -79,10 +79,17 @@ describe("an assistant's run document", () => {
     expect(seed?.intent).toEqual({ inline_policy: { allowed_domains: ["github.com"] } });
   });
 
-  it("takes no policy that is not an object", () => {
-    expect(prefillSeed({ prefill: { source: "assistant", document: { inline_policy: ["x"] } } })?.intent).toEqual({});
-    expect(prefillSeed({ prefill: { source: "assistant", document: { inline_policy: null } } })?.intent).toEqual({});
-    expect(prefillSeed({ prefill: { source: "assistant", document: "x" } })?.intent).toEqual({});
+  it("seeds nothing from a document with no usable inline policy, and never another door's fields", () => {
+    expect(prefillSeed({ prefill: { source: "assistant", document: { inline_policy: ["x"] } } })).toBeUndefined();
+    expect(prefillSeed({ prefill: { source: "assistant", document: { inline_policy: null } } })).toBeUndefined();
+    expect(prefillSeed({ prefill: { source: "assistant", document: "x" } })).toBeUndefined();
+    expect(prefillSeed({ prefill: { source: "assistant" } })).toBeUndefined();
+    expect(prefillSeed({ prefill: { source: "assistant", document: null, state: { runType: "command", command: "rm -rf /", selectedPolicyId: "p", workspaces: [{ workspaceId: "w" }] } } })).toBeUndefined();
+  });
+
+  it("treats a whitespace-only session as none", () => {
+    expect(prefillSeed({ prefill: { source: "assistant", document, assistantSession: "   " } })?.origin).toEqual({ kind: "assistant" });
+    expect(prefillSeed({ prefill: { source: "assistant", document, assistantSession: " s-1 " } })?.origin).toEqual({ kind: "assistant", assistantSession: "s-1" });
   });
 
   it("changes nothing for the other doors", () => {

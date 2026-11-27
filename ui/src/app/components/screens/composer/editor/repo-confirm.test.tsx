@@ -34,8 +34,8 @@ const fetchSpy = vi.fn();
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchSpy);
   fetchSpy.mockReset();
-  confirm.mockReset().mockResolvedValue({ id: "s-1", state: "starting", preview_digest: "d2" } as never);
-  preview.mockReset().mockResolvedValue({ digest: "d-new", sections: [{ label: "Your unit", text: "ceiling: github.com\nnew since you looked", untrusted: false }] } as never);
+  confirm.mockReset().mockResolvedValue({ id: "s-2", state: "starting", preview_digest: "d2" } as never);
+  preview.mockReset().mockResolvedValue({ digest: "d-new", provider: "Provider B", model: "model-b", sections: [{ label: "Your unit", text: "ceiling: github.com\nnew since you looked", untrusted: false }] } as never);
   vi.spyOn(workspaces, "listWorkspaces").mockResolvedValue(WORKSPACES);
 });
 afterEach(() => {
@@ -106,7 +106,7 @@ describe("RepoConfirm", () => {
     const { onSent } = show();
     await press();
     expect(confirm).toHaveBeenCalledWith("s-1", "d1");
-    await waitFor(() => expect(onSent).toHaveBeenCalled());
+    await waitFor(() => expect(onSent).toHaveBeenCalledWith({ id: "s-2", state: "starting", preview_digest: "d2" }));
   });
 
   it("on a stale preview, previews again, says so, and sends the new digest only on a second press", async () => {
@@ -117,12 +117,15 @@ describe("RepoConfirm", () => {
     // The new preview's records are on screen before the person can send again.
     expect(screen.getByText("Your unit")).toBeInTheDocument();
     expect(screen.getByText(/new since you looked/)).toBeInTheDocument();
+    // And the provider they would go to is the fresh preview's, never the one first named.
+    expect(screen.getByText(T.SEND_FILES_TITLE(2, "Provider B · model-b"))).toBeInTheDocument();
+    expect(screen.queryByText(T.SEND_FILES_TITLE(2, "Org provider · model-name"))).toBeNull();
     expect(preview).toHaveBeenCalledWith("compose", { kind: "template" });
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(onSent).not.toHaveBeenCalled();
     await press();
     expect(confirm).toHaveBeenLastCalledWith("s-1", "d-new");
-    await waitFor(() => expect(onSent).toHaveBeenCalled());
+    await waitFor(() => expect(onSent).toHaveBeenCalledWith({ id: "s-2", state: "starting", preview_digest: "d2" }));
   });
 
   it("returns to the entry with the server's sentence on any other 409", async () => {

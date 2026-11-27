@@ -78,7 +78,8 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
   // `assistantSession` is the assistant session the draft came from; with none, the request carries no header.
   const launch = (body: CreateRunWire, assistantSession?: string) =>
     send(async (still) => {
-      const created = assistantSession ? await runs.createRunWire(body, assistantSessionHeader(assistantSession)) : await runs.createRunWire(body);
+      const session = assistantSession?.trim();
+      const created = session ? await runs.createRunWire(body, assistantSessionHeader(session)) : await runs.createRunWire(body);
       // A run that was created is shown even when the dialog is gone; one made for another person never is.
       if (still()) latest.current.onCreated(created);
     });

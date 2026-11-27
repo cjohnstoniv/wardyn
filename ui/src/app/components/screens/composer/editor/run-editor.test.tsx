@@ -100,6 +100,7 @@ describe("the run editor's draft", () => {
   it("names the assistant session in what it hands to New run", async () => {
     editor();
     accept("allowed_domains");
+    await settle(400);
     fireEvent.click(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN }));
     const arrived = JSON.parse(screen.getByTestId("arrived").textContent as string) as { source: string; assistantSession: string };
     expect(arrived).toMatchObject({ source: "assistant", assistantSession: SESSION() });
@@ -131,6 +132,7 @@ describe("accepting, discarding and editing", () => {
   it("marks an edit as Edited by you, posts the field that changed and lists it in the diff", async () => {
     editor();
     accept("allowed_domains");
+    await settle();
     edit("allowed_domains", '["github.com"]');
     expect(screen.getByText(T.PART_EDITED)).toBeInTheDocument();
     expect(edits).toHaveBeenLastCalledWith(SESSION(), { draft: { allowed_domains: ["github.com"] }, changed: [{ field: "allowed_domains", value: '["github.com"]' }] });
@@ -186,47 +188,96 @@ describe("accepting, discarding and editing", () => {
     expect(alerts).toEqual(["The session could not take that edit.", "Could not run the checks."]);
   });
 
-  it("does not let an older answer to a post of an edit clear or replace a newer one", async () => {
+  it("posts one edit at a time and sends the latest draft after it, never an older one last", async () => {
     const answers: { ok: () => void; no: (e: Error) => void }[] = [];
     edits.mockImplementation(() => new Promise((ok, no) => answers.push({ ok: () => ok({ seq: 1 }), no })));
     editor();
     accept("allowed_domains");
     accept("eligible_grants");
-    expect(answers).toHaveLength(2);
-    await act(async () => answers[1].no(new Error("The newer edit was refused.")));
-    expect(screen.getByRole("alert")).toHaveTextContent("The newer edit was refused.");
+    fireEvent.click(within(card("allowed_domains"), T.PART_DISCARD));
+    // One in flight; the others wait for it.
+    expect(answers).toHaveLength(1);
     await act(async () => answers[0].ok());
-    expect(screen.getByRole("alert")).toHaveTextContent("The newer edit was refused.");
-    await act(async () => answers[0].no(new Error("The older edit was refused.")));
-    expect(screen.getByRole("alert")).toHaveTextContent("The newer edit was refused.");
+    expect(answers).toHaveLength(2);
+    // The one sent after is the latest draft, and says every field that changed since the last one sent.
+    expect(edits.mock.calls[1][1]).toEqual({
+      draft: { eligible_grants: CRED.value },
+      changed: [{ field: "eligible_grants", value: JSON.stringify(CRED.value) }, { field: "allowed_domains", value: "null" }],
+    });
+    await act(async () => answers[1].ok());
+    expect(answers).toHaveLength(2);
   });
 
-  it("drops an answer for a check a newer change replaced, and its failure too", async () => {
-    let first: { ok: (c: AssistantChecks) => void; no: (e: Error) => void } | undefined;
-    checks.mockImplementationOnce(() => new Promise<AssistantChecks>((ok, no) => (first = { ok, no })));
+  it("keeps a refused edit on screen until a later edit is taken", async () => {
+    const answers: { ok: () => void; no: (e: Error) => void }[] = [];
+    edits.mockImplementation(() => new Promise((ok, no) => answers.push({ ok: () => ok({ seq: 1 }), no })));
+    editor();
+    accept("allowed_domains");
+    accept("eligible_grants");
+    await act(async () => answers[0].no(new Error("The first edit was refused.")));
+    expect(screen.getByRole("alert")).toHaveTextContent("The first edit was refused.");
+    await act(async () => answers[1].ok());
+    expect(screen.queryByText(/first edit was refused/)).toBeNull();
+  });
+
+  it("drops the answer of a check a newer change replaced", async () => {
+    let first: (c: AssistantChecks) => void = () => undefined;
+    checks.mockImplementationOnce(() => new Promise<AssistantChecks>((ok) => (first = ok)));
     editor();
     accept("allowed_domains");
     await settle(400);
-    expect(first).toBeDefined();
     accept("eligible_grants");
     await settle(400);
     expect(checks).toHaveBeenCalledTimes(2);
-    await act(async () => {
-      first?.ok({ ...CHECKS, valid: false, errors: [{ field: "allowed_domains", message: "STALE ANSWER" }] });
-      await Promise.resolve();
-    });
+    await act(async () => first({ ...CHECKS, valid: false, errors: [{ field: "allowed_domains", message: "STALE ANSWER" }] }));
     expect(screen.queryByText(/STALE ANSWER/)).toBeNull();
-    await act(async () => {
-      first?.no(new Error("STALE FAILURE"));
-      await Promise.resolve();
-    });
+    expect(screen.getByTestId("composer-checks")).toHaveTextContent(T.VALID);
+  });
+
+  it("drops the failure of a check a newer change replaced", async () => {
+    let first: (e: Error) => void = () => undefined;
+    checks.mockImplementationOnce(() => new Promise<AssistantChecks>((_, no) => (first = no)));
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    accept("eligible_grants");
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(2);
+    await act(async () => first(new Error("STALE FAILURE")));
     expect(screen.queryByText(/STALE FAILURE/)).toBeNull();
     expect(screen.getByTestId("composer-checks")).toHaveTextContent(T.VALID);
+  });
+
+  it("holds Review while the checks list a host as left out, and says so", async () => {
+    checks.mockResolvedValue({ ...CHECKS, dropped: [{ host: "x.example", unit: "Payments", code: "outside_ceiling", admin_change_approvals: 2 }] });
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
+    expect(screen.getByText(T.REVIEW_HELD_LEFT_OUT)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN }));
+    expect(screen.queryByTestId("arrived")).toBeNull();
+  });
+
+  it("holds Review until a check for the current draft answers valid", async () => {
+    editor();
+    accept("allowed_domains");
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
+    await settle(400);
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeEnabled();
+    // An edit takes the old answer away; when its check fails, nothing is left to review on.
+    checks.mockRejectedValue(new Error("Could not run the checks."));
+    edit("allowed_domains", '["github.com"]');
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
+    await settle(400);
+    expect(screen.getByRole("button", { name: NR_SHARED.REVIEW_RUN })).toBeDisabled();
+    expect(screen.queryByText(T.VALID)).toBeNull();
   });
 
   it("takes a discarded part out of the draft and tells the session", async () => {
     editor();
     accept("allowed_domains");
+    await settle();
     fireEvent.click(within(card("allowed_domains"), T.PART_DISCARD));
     expect(screen.queryByText(SUMMARY.allowedHosts)).toBeNull();
     expect(edits).toHaveBeenLastCalledWith(SESSION(), { draft: {}, changed: [{ field: "allowed_domains", value: "null" }] });

@@ -8,9 +8,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CHANGES } from "../../../../lib/governance-copy";
 import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
-import { hostError, hostListError } from "../../new-run-flow/checks/custom-component-form-model";
+import { hostListError } from "../../new-run-flow/checks/custom-component-form-model";
 import { SUMMARY } from "../../run-detail/policy-tab-copy";
-import { PartCard, parsePartText, valueLines, type PartCardProps } from "./part-card";
+import { domainEntryError, PartCard, parsePartText, valueLines, type PartCardProps } from "./part-card";
 
 afterEach(cleanup);
 
@@ -72,16 +72,31 @@ describe("PartCard", () => {
   });
 });
 
+describe("domainEntryError", () => {
+  // internal/egress/proxy/policy.go ValidDomainEntry: a host, "*." and a host, an IP address, each with an optional port.
+  it("accepts what the proxy's domain check accepts, literal IPs included", () => {
+    for (const ok of ["github.com", "*.github.com", "github.com:443", "*.github.com:443", "10.0.0.5", "10.0.0.5:443", "fd00::1", "[fd00::1]:443", "XN--nxasmq6b.example"]) {
+      expect(domainEntryError(ok), ok).toBeNull();
+    }
+  });
+
+  it("refuses what it refuses", () => {
+    for (const bad of ["", "https://x.example/path", "a b.example", "*", "a.*.example", "github.com:0", "github.com:65536", "github.com:x", "010.0.0.5", "300.0.0.5", "134744072", "0x7f.0.0.1", "[fd00::1]", "*.fd00::1", "ünï.example", "*.10.0.0.5"]) {
+      expect(domainEntryError(bad), bad).toBe(T.DOMAIN_ENTRY_BAD(bad));
+    }
+  });
+});
+
 describe("parsePartText", () => {
-  it("judges each host of a host list with Guided setup's own host check", () => {
+  it("judges each entry of a domain list with the proxy's own rules, and takes a literal IP", () => {
     const bad = "https://x.example/path";
-    expect(hostError(bad)).not.toBeNull();
-    expect(parsePartText("allowed_domains", JSON.stringify(["github.com", bad]))).toEqual({ error: hostError(bad) });
-    expect(parsePartText("allowed_domains", '["github.com"]')).toEqual({ value: ["github.com"] });
+    expect(parsePartText("allowed_domains", JSON.stringify(["github.com", bad]))).toEqual({ error: T.DOMAIN_ENTRY_BAD(bad) });
+    expect(parsePartText("allowed_domains", '["github.com","10.0.0.5","*.example.com:443"]')).toEqual({ value: ["github.com", "10.0.0.5", "*.example.com:443"] });
+    expect(parsePartText("denied_domains", '["10.0.0.5"]')).toEqual({ value: ["10.0.0.5"] });
   });
 
   it("refuses a host listed twice with Guided setup's own sentence, however long the list", () => {
-    const twice = hostListError(["github.com", "github.com"]);
+    const twice = hostListError(["github.com", "github.com"], domainEntryError);
     expect(twice).toBeTruthy();
     expect(parsePartText("allowed_domains", '["github.com","github.com"]')).toEqual({ error: twice });
     expect(parsePartText("denied_domains", '["a.example","b.example","a.example"]')).toEqual({ error: hostListError(["a.example", "b.example", "a.example"]) });
@@ -90,28 +105,30 @@ describe("parsePartText", () => {
     expect(parsePartText("allowed_domains", JSON.stringify([...many, "h3.example"]))).toEqual({ error: hostListError([...many, "h3.example"]) });
   });
 
-  it("judges the host of each rule of host_rules, which may name a host more than once", () => {
-    const bad = "https://x.example/path";
+  it("judges the host of each rule of host_rules as the server does, and allows the same host in two rules", () => {
     const rules = (...hosts: string[]) => JSON.stringify([{ rules: hosts.map((host) => ({ host, effect: "allow" })) }]);
-    expect(parsePartText("host_rules", rules("github.com", bad))).toEqual({ error: hostError(bad) });
+    for (const ok of ["github.com", "10.0.0.5", "my_host.internal"]) expect(parsePartText("host_rules", rules(ok)), ok).toEqual({ value: JSON.parse(rules(ok)) });
     expect(parsePartText("host_rules", rules("github.com", "github.com"))).toEqual({ value: JSON.parse(rules("github.com", "github.com")) });
-    expect(parsePartText("host_rules", '{"rules":1}')).toEqual({ error: T.PART_EDIT_INVALID });
-  });
-
-  it("takes an IPv4 host in a rule as the server does, and refuses a wildcard or a badly written address", () => {
-    const rules = (host: string) => JSON.stringify([{ rules: [{ host, effect: "deny" }] }]);
-    expect(parsePartText("host_rules", rules("10.0.0.5"))).toEqual({ value: JSON.parse(rules("10.0.0.5")) });
     expect(parsePartText("host_rules", rules("*.github.com"))).toEqual({ error: T.RULE_HOST_WILDCARD("*.github.com") });
-    expect(parsePartText("host_rules", rules("010.0.0.5"))).toHaveProperty("error");
-    expect(parsePartText("host_rules", rules("300.0.0.5"))).toHaveProperty("error");
-    expect(parsePartText("host_rules", rules("10.0.0.5:80"))).toHaveProperty("error");
-    // A host list is still a DNS-name list: an address is refused there.
-    expect(parsePartText("allowed_domains", '["10.0.0.5"]')).toHaveProperty("error");
+    // internal/types/host_rules.go validHostRule: no port, path, trailing dot, upper case; an IPv4 is written in full.
+    for (const bad of ["github.com:443", "10.0.0.5:80", "https://x.example/path", "github.com.", ".github.com", "GitHub.com", "010.0.0.5", "300.0.0.5", "", "a b", "[::1]", "ünï.example"]) {
+      expect(parsePartText("host_rules", rules("ok.example", bad)), bad).toEqual({ error: T.RULE_HOST_BAD(bad) });
+    }
+    expect(parsePartText("host_rules", '{"rules":1}')).toEqual({ error: T.PART_EDIT_LIST });
   });
 
-  it("wants a list of strings for a host list, and any JSON for another field", () => {
-    expect(parsePartText("denied_domains", '{"a":1}')).toEqual({ error: T.PART_EDIT_INVALID });
+  it("wants the kind of value a known field holds, and any JSON for another", () => {
+    expect(parsePartText("denied_domains", '{"a":1}')).toEqual({ error: T.PART_EDIT_LIST });
+    expect(parsePartText("ui_apps", "{}")).toEqual({ error: T.PART_EDIT_LIST });
+    expect(parsePartText("eligible_grants", '"x"')).toEqual({ error: T.PART_EDIT_LIST });
+    expect(parsePartText("resources", "[]")).toEqual({ error: T.PART_EDIT_OBJECT });
+    expect(parsePartText("llm_inspection", "null")).toEqual({ error: T.PART_EDIT_OBJECT });
+    expect(parsePartText("allow_all_egress", "[]")).toEqual({ error: T.PART_EDIT_VALUE });
+    expect(parsePartText("max_holds", '{"a":1}')).toEqual({ error: T.PART_EDIT_VALUE });
+    expect(parsePartText("ui_apps", "[]")).toEqual({ value: [] });
+    expect(parsePartText("allow_all_egress", "true")).toEqual({ value: true });
     expect(parsePartText("workspace_repos", '[{"url":"x"}]')).toEqual({ value: [{ url: "x" }] });
+    expect(parsePartText("something_else", '{"a":1}')).toEqual({ value: { a: 1 } });
   });
 });
 

@@ -21,6 +21,7 @@ import { Chip } from "../../wardyn/primitives";
 import { usePrincipal } from "../../wardyn/operator-context";
 import { ComposerChat } from "./composer-chat";
 import { ComposerDraftPanel, draftLines } from "./composer-draft-panel";
+import { carryKept } from "./editor/run-editor";
 import { PhoneDraftBar, PhoneDraftSheet, useIsPhone } from "./composer-phone";
 import { ComposerPreview, kindLabel } from "./composer-preview";
 import { ComposerStarting } from "./composer-starting";
@@ -79,6 +80,8 @@ export function ComposerScreen() {
 
   // The one live session, so leaving the screen can end it, and the stream that reads it.
   const live = React.useRef<string | null>(null);
+  // The session a Try again or Start again took over from: the next one inherits what the person accepted.
+  const takesOver = React.useRef<string | null>(null);
   const closeStream = React.useRef<(() => void) | null>(null);
   // Bumped when the screen is left or the URL changes: an answer that arrives after that belongs to nobody.
   const gen = React.useRef(0);
@@ -142,6 +145,7 @@ export function ComposerScreen() {
   );
 
   React.useEffect(() => {
+    takesOver.current = null;
     void begin(EMPTY_COMPOSER);
     return () => {
       supersede();
@@ -169,6 +173,9 @@ export function ComposerScreen() {
         return;
       }
       live.current = session.id;
+      // A session that took over from another (Try again) keeps what the person accepted and edited.
+      if (takesOver.current) carryKept(takesOver.current, session.id);
+      takesOver.current = null;
       setLetters(session.letters ?? preview.letters ?? {});
       setPhase({ name: "session", session, endedBy: null, note: null, closed: false });
       closeStream.current = openComposerStream({
@@ -230,7 +237,10 @@ export function ComposerScreen() {
   };
 
   // The new session's seqs start at 1 again, so what is carried over keeps its own generation.
-  const again = (keepChat: boolean) => void begin({ ...EMPTY_COMPOSER, gen: fold.gen + 1, proposal: fold.proposal, items: keepChat ? fold.items : [] });
+  const again = (keepChat: boolean) => {
+    if (phase.name === "session") takesOver.current = phase.session.id;
+    void begin({ ...EMPTY_COMPOSER, gen: fold.gen + 1, proposal: fold.proposal, items: keepChat ? fold.items : [] });
+  };
 
   // Once the chat shows it is over, nothing more is read from the session.
   const stopped = phase.name === "session" && (fold.toolsUnavailable || fold.providerError || fold.ended || pollEnded);

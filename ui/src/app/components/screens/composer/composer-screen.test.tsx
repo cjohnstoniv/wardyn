@@ -360,6 +360,30 @@ describe("when the assistant stops", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps what the person accepted and edited when Try again starts a new session", async () => {
+    const first = { ...SESSION, id: "5b1d2f3a-0000-4000-8000-0000000000a1" };
+    const second = { ...SESSION, id: "5b1d2f3a-0000-4000-8000-0000000000a2" };
+    create.mockReset().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    await ready();
+    await push(ev("proposal", { parts: [{ section: "allowed_domains", value: ["github.com", "api.github.com"] }], dropped: [] }));
+    const panel = await screen.findByTestId("composer-draft-panel");
+    await userEvent.click(within(panel).getByRole("button", { name: T.PART_ACCEPT }));
+    await userEvent.click(within(panel).getByRole("button", { name: CHANGES.OP.update }));
+    await userEvent.clear(within(panel).getByRole("textbox"));
+    await userEvent.click(within(panel).getByRole("textbox"));
+    await userEvent.paste('["github.com"]');
+    await userEvent.click(within(panel).getByRole("button", { name: T.PART_EDIT_DONE }));
+    await push(ev("notice", { notice: "provider_error" }));
+    await userEvent.click(await screen.findByRole("button", { name: T.TRY_AGAIN }));
+    await userEvent.click(await screen.findByRole("button", { name: T.START }));
+    await push(ev("state", { state: "ready" }));
+    const again = await screen.findByTestId("composer-part");
+    expect(again).toHaveAttribute("data-status", "accepted");
+    expect(again).toHaveTextContent(T.PART_EDITED);
+    expect(again).toHaveTextContent("github.com");
+    expect(again).not.toHaveTextContent("api.github.com");
+  });
+
   it("answers a message refused with assistant_off by ending the chat with that reason, keeping the draft", async () => {
     await withDraft();
     message.mockRejectedValueOnce(new HttpError(409, "off", "assistant_off"));
