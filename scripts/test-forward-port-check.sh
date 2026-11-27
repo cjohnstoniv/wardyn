@@ -263,6 +263,7 @@ awk '/- name: Forward-port keeps main/ { s = 1 } s && /^        run: \|/ { r = 1
      r { if ($0 ~ /^          / || $0 ~ /^$/) { sub(/^          /, ""); print } else exit }' "$ROOT/.github/workflows/ci.yml" >"$STEP"
 [ -s "$STEP" ] || fail "no run block found for the forward-port step in ci.yml"
 grep -qF "startsWith(github.base_ref, 'release/')" "$ROOT/.github/workflows/ci.yml" || fail "the forward-port step does not take release/** bases"
+grep -qE "^ +GIT_ATTR_SOURCE: .*pull_request.base.sha" "$ROOT/.github/workflows/ci.yml" || fail "the forward-port step does not read attributes from the base"
 grep -qF "startsWith(github.head_ref, 'train/')" "$ROOT/.github/workflows/ci.yml" || fail "the forward-port step does not take train/* heads"
 mkdir -p "$TMP/ci" "$TMP/rt"; cd "$TMP/ci"
 git init -q -b main .
@@ -274,6 +275,7 @@ commit base; git tag v0.10.2
 git checkout -q -b rel
 printf '# Changelog\n\n## [Unreleased]\n\n## [0.10.3]\n\n- patch line\n\n## [0.10.2]\n\n- old entry\n' >CHANGELOG.md
 commit patch; git tag -a -m v0.10.3 v0.10.3      # annotated: the step must see through the tag object
+git tag -a -m rc v0.10.3-rc.1 'v0.10.3^{commit}'             # a candidate on the same commit: the final's allow file is the one read
 git checkout -q main
 printf '# Notes\n\nshared line\nmain-only line\n' >NOTES.md
 commit "main moves on"
@@ -291,12 +293,28 @@ git checkout -q -b train/allow "$CIBASE"; tagmerge --no-commit >/dev/null
 printf '# Notes\n\nshared line\n' >NOTES.md; mkdir -p scripts/forward-port-check.d
 printf 'NOTES.md\tmain-only line\treplaced by the release wording\n' >scripts/forward-port-check.d/0.10.3.allow
 git add -A; git commit -q -m "Merge tag v0.10.3, with its allow entry"; TRAINALLOW="$(git rev-parse HEAD)"
-git checkout -q main
-step() {  # step HEAD_REF PR_HEAD
-  HEAD_REF="$1" BASE_SHA="$CIBASE" PR_HEAD="$2" RUNNER_TEMP="$TMP/rt" bash -e "$STEP" >"$out" 2>&1
+# an allow row that a later commit deletes, and one that a later commit only leaves alone
+git checkout -q -b train/del "$CIBASE"; tagmerge --no-commit >/dev/null
+printf '# Notes\n\nshared line\n' >NOTES.md; mkdir -p scripts/forward-port-check.d
+printf 'NOTES.md\tmain-only line\treplaced by the release wording\n' >scripts/forward-port-check.d/0.10.3.allow
+git add -A; git commit -q -m "Merge tag v0.10.3, with its allow entry"
+git rm -q scripts/forward-port-check.d/0.10.3.allow; commit "drop the allow entry"; TRAINDEL="$(git rev-parse HEAD)"
+git checkout -q train/allow; printf 'later\n' >later.txt; commit "after the allow merge"; TRAINALLOW="$(git rev-parse HEAD)"
+# a loss in the tag merge, and a later .gitattributes that marks the file -diff
+git checkout -q -b train/attr train/drop; printf 'NOTES.md -diff\n' >.gitattributes; commit "mark NOTES.md -diff"; TRAINATTR="$(git rev-parse HEAD)"
+# a tag merged on a sub-train, which the train then merges: no first-parent tag merge
+git checkout -q -b sub "$CIBASE"; tagmerge --no-commit >/dev/null
+printf '# Notes\n\nshared line\n' >NOTES.md; git add -A; git commit -q -m "sub-train tag merge, dropping a main line"
+git checkout -q -b train/outer "$CIBASE"; git merge -q --no-ff -m "Merge sub" sub; TRAINSUB="$(git rev-parse HEAD)"
+# a release/** destination: its own tip, a clean tag merge into it
+git checkout -q -b release/0.11 "$CIBASE"; printf 'release only\n' >REL.txt; commit "release only"; RELBASE="$(git rev-parse HEAD)"
+git checkout -q -b train/rel "$RELBASE"; tagmerge; TRAINREL="$(git rev-parse HEAD)"
+step() {  # step HEAD_REF PR_HEAD [BASE]: with the PR head checked out, as the runner has it (attributes read from the base)
+  git checkout -q --detach "$2"
+  HEAD_REF="$1" BASE_SHA="${3:-$CIBASE}" PR_HEAD="$2" GIT_ATTR_SOURCE="${3:-$CIBASE}" RUNNER_TEMP="$TMP/rt" bash -e "$STEP" >"$out" 2>&1
 }
-want_step() {  # want_step N what HEAD_REF PR_HEAD
-  local rc=0; step "$3" "$4" || rc=$?
+want_step() {  # want_step N what HEAD_REF PR_HEAD [BASE]
+  local rc=0; step "$3" "$4" "${5:-}" || rc=$?
   [ "$rc" = "$1" ] || fail "ci step: $2 exited $rc, want $1: $(cat "$out")"
 }
 want_step 0 "chore route" chore/forward-port-v0.10.3 "$CHORE"
@@ -307,7 +325,16 @@ want_step 0 "train range with no tag merge" train/side "$TRAINNONE"
 grep -q 'nothing to check' "$out" || fail "ci step: no-tag-merge range did not say so: $(cat "$out")"
 want_step 1 "train route that drops a main line" train/drop "$TRAINDROP"
 grep -qxF 'NOTES.md: main-only line' "$out" || fail "ci step: dropped line not named: $(cat "$out")"
-want_step 0 "train route with the allow entry in the tag merge" train/allow "$TRAINALLOW"
+want_step 0 "train route with the allow entry in the tag merge, a commit after it" train/allow "$TRAINALLOW"
+grep -q '1 allow-listed' "$out" || fail "ci step: the allow entry was not used: $(cat "$out")"
+want_step 1 "train route whose allow entry is deleted after the tag merge" train/del "$TRAINDEL"
+grep -q 'differs between the tag merge' "$out" || fail "ci step: deleted allow entry not named: $(cat "$out")"
+want_step 1 "train route with a later .gitattributes, PR head checked out" train/attr "$TRAINATTR"
+grep -q 'may not change a .gitattributes' "$out" || fail "ci step: .gitattributes not refused: $(cat "$out")"
+want_step 1 "train route with the tag merged on a sub-train" train/outer "$TRAINSUB"
+grep -q 'v0.10.3 is in train/outer but not through a first-parent tag merge' "$out" || fail "ci step: side-branch tag not named: $(cat "$out")"
+want_step 0 "train route into a release/** base" train/rel "$TRAINREL" "$RELBASE"
+grep -q 'forward-port-check: PASS' "$out" || fail "ci step: release/** route printed no PASS: $(cat "$out")"
 cd "$TMP"
 
 # Four real forward-ports: each fails with no allow file and passes with the one fixture under

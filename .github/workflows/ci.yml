@@ -3372,15 +3372,22 @@ jobs:
       # scripts/forward-port-check.d/<version>.allow). Two routes, into main or release/**:
       # a chore/forward-port-* branch, and a train/* head that carries 0.10.x patch lines in
       # as tag merges (a first-parent merge whose second parent is a v0.10.* tag), each of
-      # which is checked on its own with BASE = its first parent and HEAD = the merge. The
-      # train route reads <version>.allow from the tag merge itself, so an exception holds
-      # only for the BASE and HEAD it was committed with. Skipped on every other pull request.
+      # which is checked on its own with BASE = its first parent and HEAD = the merge. This is
+      # W6 check (1) only: the arrival rule, the version tests, the file-state check and the
+      # destination/BASE/HEAD-bound .arrive rows are owed with forward-port.sh (L0-C), before
+      # release/0.11 exists. The train route reads <version>.allow from the tag merge and
+      # requires it to be unchanged at the PR head, so the exception a merge used is visible
+      # in the final tree. A v0.10.* tag merged anywhere but on the first parent is refused,
+      # and so is a .gitattributes change on the train (attributes are read from the base).
+      # Skipped on every other pull request.
       - name: Forward-port keeps main's content
         if: ${{ github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'release/')) && (startsWith(github.head_ref, 'chore/forward-port-') || startsWith(github.head_ref, 'train/')) }}
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          # Git reads the diff attribute from the base, never from the PR's own tree.
+          GIT_ATTR_SOURCE: ${{ github.event.pull_request.base.sha }}
         run: |
           # The base's copy of the check, never the PR's own: a port could edit the check.
           fpc() { git show "$BASE_SHA:scripts/forward-port-check.sh" >"$RUNNER_TEMP/fpc.sh"; }
@@ -3395,19 +3402,29 @@ jobs:
               bash "$RUNNER_TEMP/fpc.sh" --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
               ;;
             *)
+              if git diff --name-only "$BASE_SHA...$PR_HEAD" | grep -qE '(^|/)\.gitattributes$'; then
+                echo "a train/* head may not change a .gitattributes: it can mark a file -diff and hide a loss" >&2; exit 1
+              fi
               MERGES="$(git rev-list --first-parent --merges "$BASE_SHA..$PR_HEAD")"
-              n=0
+              n=0; CHECKED=" "
               for M in $MERGES; do
-                T="$(git tag --list 'v0.10.*' --points-at "$M^2" --sort=-v:refname | head -1)"
+                T="$({ git tag --list 'v0.10.*' --points-at "$M^2" | grep -xE 'v0\.10\.[0-9]+' || true; } | head -1)"
                 [ -n "$T" ] || continue
-                n=$((n + 1)); V="${T#v}"
+                n=$((n + 1)); V="${T#v}"; CHECKED="$CHECKED$T "
                 [ "$n" -gt 1 ] || fpc
                 echo "tag merge $M (v$V) on $HEAD_REF"
                 PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$M^1")"
                 [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
                 ALLOW="$RUNNER_TEMP/allow-$M"; mkdir -p "$ALLOW"
                 git show "$M:scripts/forward-port-check.d/$V.allow" >"$ALLOW/$V.allow" 2>/dev/null || rm -f "$ALLOW/$V.allow"
+                if ! git diff --quiet "$M" "$PR_HEAD" -- "scripts/forward-port-check.d/$V.allow"; then
+                  echo "scripts/forward-port-check.d/$V.allow differs between the tag merge $M and the PR head" >&2; exit 1
+                fi
                 bash "$RUNNER_TEMP/fpc.sh" --version "$V" --allow-dir "$ALLOW" "$PREV" "$M^1" "$M"
+              done
+              # A tag that reached the head any other way (a side branch, a sub-train) has no merge to check.
+              for T in $(git tag --merged "$PR_HEAD" --no-merged "$BASE_SHA" -l 'v0.10.*' | { grep -xE 'v0\.10\.[0-9]+' || true; }); do
+                case "$CHECKED" in *" $T "*) ;; *) echo "$T is in $HEAD_REF but not through a first-parent tag merge: merge it on the train's first parent" >&2; exit 1 ;; esac
               done
               [ "$n" -gt 0 ] || echo "no v0.10.* tag merge in $BASE_SHA..$PR_HEAD: nothing to check"
               ;;
