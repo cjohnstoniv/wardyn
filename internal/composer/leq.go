@@ -165,6 +165,7 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqToolRules(a.ToolRules, b.ToolRules) &&
 		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
 		leqDesktop(a.Desktop, b.Desktop) &&
+		leqOutage(a.Outage, b.Outage) &&
 		a.Recording.Rank() >= b.Recording.Rank() &&
 		leqDataOut(a.DataOut, b.DataOut)
 }
@@ -175,6 +176,25 @@ func leqDesktop(a, b *types.DesktopControls) bool {
 	x, y := a.Effective(), b.Effective()
 	opens := func(p, q types.TransferRule) bool { return types.TransferStrictness(p) < types.TransferStrictness(q) }
 	return !opens(x.PasteIn, y.PasteIn) && !opens(x.CopyOut, y.CopyOut) && !opens(x.Upload, y.Upload) && !opens(x.Download, y.Download)
+}
+
+// leqOutage holds when a's outage terms are no looser than b's: no longer an allowance (unset read as the longest a site
+// can set), and strict and "end" kept where b sets them.
+func leqOutage(a, b *types.OutageControls) bool {
+	if b == nil {
+		return true
+	}
+	if a == nil {
+		a = &types.OutageControls{}
+	}
+	longest := func(m int) int {
+		if m <= 0 {
+			return types.OutageAllowanceMaxMinutes
+		}
+		return m
+	}
+	return longest(a.AllowanceMinutes) <= longest(b.AllowanceMinutes) && (a.Strict || !b.Strict) &&
+		(a.Unattended == types.OutageUnattendedEnd || b.Unattended != types.OutageUnattendedEnd)
 }
 
 // leqMounts holds when every mount of a is a (source, target) mount of b, and

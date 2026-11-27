@@ -254,7 +254,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
 	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
 	if !p.lapse.serving() {
-		refuseClosed(w)
+		p.lapse.refuse(w)
 		return
 	}
 	// The person's sign-in lane has its own listener and rules (desktop_signin_lane.go).

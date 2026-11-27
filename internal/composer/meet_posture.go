@@ -77,6 +77,13 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 		d := c.Desktop.Meet(o.Desktop)
 		c.Desktop = &d
 	}
+	if o.Outage != nil {
+		if !leqOutage(o.Outage, c.Outage) {
+			m.widen("outage", "the overlay's outage terms are looser than the base's")
+		}
+		t := c.Outage.Meet(o.Outage)
+		c.Outage = &t
+	}
 	if o.Recording != nil {
 		// A level is a minimum: the overlay may record more than the base, and less is a widening.
 		if o.Recording.Rank() < c.Recording.Rank() {
@@ -409,4 +416,15 @@ func (m *meeter) meetInnerWall(field, base, over string) string {
 		m.fail(ReasonOverlayInvalid, field, "the overlay chooses %q and the base %q; set it on one side only", over, base)
 	}
 	return base
+}
+
+// validateOutage refuses an overlay's outage terms outside their bounds (meet.go validatePresence).
+func (m *meeter) validateOutage(o *types.OutageControls) {
+	if o == nil {
+		return
+	}
+	// Every field named, so the meet guard sees each one judged.
+	if err := types.ValidateOutageControls(&types.OutageControls{AllowanceMinutes: o.AllowanceMinutes, Strict: o.Strict, Unattended: o.Unattended}); err != nil {
+		m.fail(ReasonOverlayInvalid, "outage", "%v", err)
+	}
 }

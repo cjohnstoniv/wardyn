@@ -47,6 +47,7 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/approvals/{id}/expire":          true,
 	"POST /api/v1/internal/approvals/{id}/sent":            true,
 	"POST /api/v1/internal/token/renew":                    true,
+	"POST /api/v1/internal/token/recover":                  true, // a runner's proxy recovers through its relay
 	"POST /api/v1/internal/proxy/loaded":                   true, // the run proxy's readback, on its run token
 	"GET /api/v1/internal/injection/{grantID}":             true, // delivery = own only: refuseRelayedDelivery
 	"POST /api/v1/internal/credentials/mint":               true, // delivery = own only: refuseRelayedDelivery

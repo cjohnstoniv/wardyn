@@ -1672,6 +1672,10 @@ These risks are **not closed by v1 Wardyn**.
 7. **The 1-hour minted-token usage window before kill-switch revocation fires.**
    - Minimized via short TTL, not eliminated.
    - A token used within its window before revocation reaches the upstream service.
+   - A run's GitHub installation token is kept sealed under the run owner's key in Postgres (`run_github_token_seals`;
+     an erasure deletes it, and destroying the key leaves it unreadable), so that a worker hands it back to GitHub
+     after the run's revoke, without delaying the revoke, and retries a failed hand-back until the token expires. A
+     token with no sealed copy, or one GitHub never accepts back, keeps the window.
 
 8. **Per-run SPIRE registration-entry churn at scale.**
    - The experimental `spire` provider (off by default, Kubernetes only) writes one SPIRE entry per run at its first mint and deletes it in the stop cascade. The host sensor's token makes none.
@@ -4751,7 +4755,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 | Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
 | Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3 enforces `deny` and `approve_each` at the proxy for remote MCP servers attached through it, and its `tool_rules` and `wardyn-toolgate` relay are cooperative for the rest, so this row is NOT "always active" for a tool that is not an attached remote MCP server |
 | Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
-| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟢 **[shipped]** under the experimental `spire` provider. NOTE: the cascade does not revoke a GitHub installation token, which lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
+| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟢 **[shipped]** under the experimental `spire` provider. NOTE: the cascade queues each sealed GitHub installation token for hand-back and does not wait for it; one with no sealed copy lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |
 | Tamper-evident audit export | AU 🟢 **[shipped]**: Postgres log + PTY replay, eBPF/Tetragon ground-truth stream (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.bypass`) | In-sandbox log tampering; audit vendor lock-in |
 | Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) 🟢 **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) 🟢 **[shipped]** for hold runs | Policy disablement before malicious action |
@@ -4819,9 +4823,9 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
   plus a distinct `run.revoke` failure event) instead of reporting containment — NOT fully
   contained, retry the kill.
 - Under the experimental `spire` provider, revocation also deletes the run's SPIRE entry 🟢 **[shipped]**. Its X.509-SVID
-  is not revoked and lives out its 10-minute life, so the bearer and the deny-list stay the authority. The kill does not revoke a GitHub
-  installation token, which lasts until it expires (residual #7). The proxy's stop hands its GitHub CLI tokens back.
-- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, and the Azure DevOps PATs Wardyn created for the run are revoked then. The runner's proxy stops adding API keys and Git broker tokens within 30 minutes of its last contact with the server (residual #77). Wardyn's kill does not revoke a GitHub App token at GitHub, so one already minted stays valid there until it expires (residual #7). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
+  is not revoked and lives out its 10-minute life, so the bearer and the deny-list stay the authority. The kill queues each sealed GitHub
+  installation token for hand-back to GitHub; one with no sealed copy lasts until it expires (residual #7). The proxy's stop hands its GitHub CLI tokens back.
+- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, and the Azure DevOps PATs Wardyn created for the run are revoked then. The runner's proxy stops adding API keys and Git broker tokens within 30 minutes of its last contact with the server (residual #77). Wardyn's kill queues each sealed GitHub App token for hand-back at GitHub, which the control plane makes whether or not the runner is connected; one with no sealed copy stays valid there until it expires (residual #7). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
 - Non-kill stops (completion, failure, idle auto-stop) also win the durable-state compare-and-swap
   *first* — same C002 invariant, a lost CAS never revokes a still-live run.
 - But the caller wins it BEFORE calling the shared `finalizeRunTail`, whose internal order is

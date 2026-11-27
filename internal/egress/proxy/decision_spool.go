@@ -244,7 +244,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 	// Also the gate for a terminated tunnel's inner requests: no credential is
 	// injected once a self-lapsing proxy has closed.
 	if !p.lapse.serving() {
-		refuseClosed(w)
+		p.lapse.refuse(w)
 		return nil, nil
 	}
 	if p.sink == nil || (p.sink.local == nil && p.sink.remote == nil) {

@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -363,10 +362,13 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("hard deny: %w", err)
 	}
-	// k8s runners only: the proxy is closed until its first renew and lapses
-	// for good at the last renew's send time + RunTokenTTL (§6.2).
+	// k8s runners: the proxy is closed until its first renew, pauses at the last renew's send time + the
+	// run's outage allowance (lapses there for good under strict terms), and the process ends on a lapse
+	// (#4082). A pause sends the runner no frame.
 	if cfg.SelfLapse {
-		p.lapse = newLapseGate(hooks.clock(), selfLapseTTL)
+		span, strict := outageSpan(cfg)
+		p.lapse = newLapseGate(hooks.clock(), span, gateOpts{pausable: !strict, exitOnLapse: true})
+		p.lapse.onPause = logGatePause
 		if sink.remote != nil {
 			p.lapse.onLapse = sink.remote.lapse
 		}
@@ -402,6 +404,20 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	return out, nil
 }
 
+// outageSpan is the gate's span and strictness from the run's outage terms (cfg.Outage): absent, one
+// hour (the token's lifetime), not strict.
+func outageSpan(cfg *Config) (time.Duration, bool) {
+	if cfg.Outage == nil {
+		return selfLapseTTL, false
+	}
+	return time.Duration(cfg.Outage.AllowanceS) * time.Second, cfg.Outage.Strict
+}
+
+// logGatePause is a gate's onPause: one line, under the gate's lock.
+func logGatePause() {
+	slog.Warn("wardyn-proxy: run egress paused: the control plane has not confirmed the run within its outage allowance")
+}
+
 // gatesFirstRenew is the one rule for which sidecars stay closed until their first token renewal: a
 // proxy with a control plane that the runner started as a replacement (FirstRenewGateEnv).
 func gatesFirstRenew(cfg *Config) bool {
@@ -419,12 +435,15 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
-	// A replacement proxy serves nothing until a renewal under its own token has landed: one started
-	// late by a superseded revive, whose token was retired or revoked, never binds. A self-lapsing
-	// proxy (k8s runner) already has its gate; any other gets one with no deadline.
-	selfLapse := p.lapse != nil
-	if !selfLapse && gatesFirstRenew(cfg) {
-		p.lapse = newLapseGate(clock, math.MaxInt64)
+	// Every proxy with a control plane is gated at its outage allowance (#4082). A replacement proxy serves
+	// nothing until a renewal under its own token has landed: one started late by a superseded revive, whose
+	// token was retired or revoked, never binds. A self-lapsing proxy (k8s runner) already has its gate; any
+	// other serves from its start.
+	selfLapse := cfg.SelfLapse
+	if !selfLapse {
+		span, strict := outageSpan(cfg)
+		p.lapse = newLapseGate(clock, span, gateOpts{pausable: !strict, startOpen: !gatesFirstRenew(cfg)})
+		p.lapse.onPause = logGatePause
 	}
 	gate := p.lapse
 	rctx, cancel := context.WithCancel(context.Background())
@@ -437,6 +456,7 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, gate, tune)
 			return
 		}
+		go gate.watch(rctx, time.Second)
 		runTokenRenewerGated(rctx, ts, cfg.ControlPlaneURL, client, defaultRenewerTuning(), gate)
 	}()
 	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
@@ -611,9 +631,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return errors.Join(httpErr, sinkErr)
 }
 
-// Lapsed closes when a self-lapsing proxy lapses; the process must then shut
-// down and exit non-zero, never serve again. Nil (never fires) otherwise.
-func (s *Server) Lapsed() <-chan struct{} { return s.proxy.lapse.Done() }
+// Lapsed closes when the proxy's process must end: a k8s runner's proxy on any
+// lapse, and any other gated proxy only on a lapse before its first renew. It
+// must then shut down and exit non-zero, never serve again. A gated proxy that
+// lapses after serving refuses everything and stays up until its owner stops
+// it. Nil (never fires) for a gate-less proxy.
+func (s *Server) Lapsed() <-chan struct{} { return s.proxy.lapse.exited() }
 
 // Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.http.Addr }

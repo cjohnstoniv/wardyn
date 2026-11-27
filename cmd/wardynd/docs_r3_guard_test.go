@@ -690,14 +690,19 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	if !strings.Contains(fn, `d["kind"] = mc.Kind`) {
 		t.Fatal("Broker.RevokeRun no longer stamps kind conditionally — the doc row's \"absent when the grant row behind the mint is gone\" claim depends on it")
 	}
-	// The honesty limitation the row publishes: GitHub's endpoint is REAL but
-	// needs the token itself, and RevokeRun holds only the jti.
-	if !strings.Contains(src, "DELETE /installation/token") || !strings.Contains(src, "RevokeRun has only the jti") {
-		t.Fatal("RevokeRun's doc comment no longer states the per-token revocation limitation — re-derive the doc row before trusting this guard")
+	// What the row publishes: GitHub's endpoint is REAL but needs the token
+	// itself, so RevokeRun only queues the sealed copies for the hand-back
+	// worker and makes no GitHub call of its own, keeping the kill off GitHub.
+	if !strings.Contains(src, "DELETE /installation/token") || !strings.Contains(src, "RevokeRun itself makes no GitHub call") {
+		t.Fatal("RevokeRun's doc comment no longer states that it only queues GitHub tokens for hand-back — re-derive the doc row before trusting this guard")
+	}
+	if !strings.Contains(fn, `"target_revoke"`) || !strings.Contains(fn, "b.queueGitHubRevokes(ctx, runID, nil)") || strings.Contains(fn, "b.github.Revoke") {
+		t.Fatal("Broker.RevokeRun no longer stamps target_revoke and queues the sealed tokens without calling GitHub — re-derive the doc row before trusting this guard")
 	}
 	note := funcBody(t, src, "revokeNote")
 	for _, want := range []string{
-		"RevokeRun does not call GitHub's DELETE /installation/token",
+		"handed back to GitHub (DELETE /installation/token, presented the sealed token) by a background worker",
+		"expires on GitHub's own <=1h TTL",
 		"operator must rotate this secret at the forge",
 		"api_key values stay proxy-side",
 	} {
@@ -743,10 +748,16 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 		"the cascade enumerates the run's successful `credential.mint` rows UNION the approvals whose `minted_jti` was burnt",
 		"`mintedCredentialsSQL`",
 		"`revokeNote`",
-		"`RevokeRun` does not call GitHub's `DELETE /installation/token`",
-		"`RevokeRun` holds only the `jti`",
+		"`RevokeRun` itself makes no GitHub call",
+		"`target_revoke`", "`queued`", "`handed_back`", "`abandoned`", "`none`",
+		"`github_token.revoke`",
 		"`api_key`", "`ssh_key`",
 		"TTL expiry",
+	)
+	// The claim the hand-back worker falsifies: the broker now keeps a sealed copy.
+	mustNotSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"`RevokeRun` holds only the `jti`",
+		"`RevokeRun` does not call GitHub's `DELETE /installation/token`",
 	)
 
 	// R-06. Once the mint HAS a discard door that calls GitHub's endpoint

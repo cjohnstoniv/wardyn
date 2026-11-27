@@ -268,6 +268,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveLocalContained(ctx, run); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.reviveRecoverContainment(ctx, run, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -468,6 +471,24 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // session applies it, and refuses this revive; the next revive, once the runner applied it, leases the run.
 // A run held any other way (a kill, a quarantine, a hold pending a node record) is not recovered, and the
 // revive goes on to the lease refusal it met before.
+// reviveLocalContained refuses a run a local operator contained on its runner (wardyn-runnerd contain): the runner
+// refuses recover_containment for it, so no recovery is queued. A read error answers nil; the run is still refused
+// further on, since RunHeldContainedOnRunner includes the latch and the runner drops its leases.
+func (s *Server) reviveLocalContained(ctx context.Context, run types.AgentRun) *reviveError {
+	if run.RunnerID == nil {
+		return nil
+	}
+	st, err := s.runnerExecutionStore()
+	if err != nil {
+		return nil
+	}
+	if held, err := st.RunLocallyContained(ctx, run.ID); err != nil || !held {
+		return nil
+	}
+	return reviveRefused(http.StatusConflict, reasonReviveLocalContained,
+		"A local operator contained this run on its runner. End the run and start a new one.")
+}
+
 func (s *Server) reviveRecoverContainment(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) *reviveError {
 	if run.RunnerID == nil {
 		return nil
@@ -759,7 +780,7 @@ func (s *Server) reviveEligible(ctx context.Context, run types.AgentRun, startAg
 	default:
 		return reviveRefused(http.StatusConflict, reasonReviveUnknownLostReason, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
-	return nil
+	return s.reviveStrictSpent(ctx, run)
 }
 
 // markReviving takes run's reviving mark. It refuses a second revive of the

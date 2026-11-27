@@ -4298,6 +4298,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0300` (`0300_agent_runs_end_time_idx`) adds `agent_runs_end_time_idx` on `agent_runs` (`0001`'s table): the end time the Runs board orders and windows ended runs by, then `id`. It is built without `CONCURRENTLY`, so writes to `agent_runs` wait while it builds. On a large table, run `CREATE INDEX CONCURRENTLY IF NOT EXISTS agent_runs_end_time_idx ON agent_runs ((CASE WHEN lost_reason = 'ended' THEN lost_at ELSE ended_at END) DESC, id DESC);` before you upgrade, and the migration finds it built. No grant changes. If that build fails, drop the index and run it again.
 - `0400` (`0400_governance_change_approvals`) adds `required_approvals` and `require_security` to `governance_changes` (`0126`'s table) and the nullable `roles` to `principal_groups`, and creates `governance_change_approvals` (each person's approval of a held change) and `governance_approval_counts` (a kind's own count). The migration grants `SELECT, INSERT, UPDATE, DELETE` on both new tables to every role granted `UPDATE` on `governance_changes`, other than that table's owner.
 - `0401` (`0401_assistant_sessions`) creates `assistant_sessions`, a row for each assistant session with the person it acts as, its target, provider and model, state and draft, and `assistant_session_events`, its transcript. Both are granted to the roles that write `run_attach_leases`.
+- `0401` (`0401_run_outage_terms`) creates `run_outage_terms`: each run's outage terms (the allowance in seconds, strict, and whether a long outage ends it when unattended), written once at dispatch and removed with the run. The migration grants `SELECT, INSERT` on it to every role granted `UPDATE` on `agent_runs`, other than that table's owner. A split-role install whose app role is not one of those roles, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand. Until then a run whose terms are not the default ones is refused at start, a default run starts with a warning in the log, and a run on a connected runner cannot be leased: it does not start, or it stops when its current lease runs out.
 - `0402` (`0402_attach_ticket_purpose`) adds `attach_tickets.purpose` (not null, default empty) and the nullable `attach_tickets.ports` (`0026`'s table): the one door a ticket opens, and the ports a forwarding ticket may reach. No grant changes.
 - `0403` (`0403_outage_windows`) creates `cp_heartbeat`, the row each replica beats every 10 seconds, and `outage_windows`, the recorded outage windows. The migration grants `SELECT, INSERT, UPDATE` on `cp_heartbeat` and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows` to every role granted `UPDATE` on `agent_runs`, other than that table's owner. The window id is an identity column, so no sequence grant is needed. A split-role install whose app role is not one of those roles, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when the runner connects.
 - `0405` (`0405_agent_rules`) creates `agent_rules`: one row per agent harness holding the organisation's walls spec and optional inner walls for it, with a version. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role that was granted `UPDATE` on `delegates`, other than that table's owner; an app role outside those needs the same grant by hand on a split-role install. Without it a run that includes a harness is refused.
@@ -5961,6 +5962,19 @@ What the switch needs, and refuses to render or boot without:
       and app role install grants the app role `SELECT, INSERT, DELETE` on
       `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
       `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
+  - **the GitHub installation token hand-back** — `run_github_token_seals` holds each
+    `github_token` a run minted, sealed under the run's masking-manifest owner's `cred` key
+    (AAD: the run id, the jti and the key version), so a worker on any replica can hand it
+    back to GitHub after the run's revoke.
+    - A run with no masking manifest keeps no copy.
+    - The sealed copy is emptied when its hand-back ends (handed back, expired or
+      abandoned); a token no revoke asked for keeps its copy until its row goes.
+    - A row goes within one worker pass once it is 5 minutes past the token's expiry, or
+      at the person's erasure; the manifest fence stops a write after an erasure.
+    - A split migrator and app role install grants the app role
+      `SELECT, INSERT, UPDATE, DELETE` on `run_github_token_seals`; without it a GitHub
+      token mint fails for a run with a masking manifest, and a revoke shows as
+      `broker_error` on `run.revoke`.
 - **A desktop Close is shared through the database** (`ui_desktop_closed`): every replica refuses the closed cookie,
   and a stream open on another replica ends within 15 s.
   - While the database is unreachable, open desktops end and new opens are refused until it is back.

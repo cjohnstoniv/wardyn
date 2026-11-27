@@ -170,6 +170,18 @@ type SiteConfig struct {
 	// value and carries the stored one forward; a dropped value is reported
 	// as onboarding_completed_at_ignored.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+	// OutageAllowanceMinutes is how long a run's network keeps serving while Wardyn cannot be reached (#4082): 0 for
+	// the default, 60, else 60 to 1440. A policy can only shorten it (OutageControls). A pointer, as GovernanceMaxDepth
+	// is, so an explicit 0 (the reset) stays on the wire: nil is absent and keeps the stored value.
+	OutageAllowanceMinutes *int `json:"outage_allowance_minutes,omitempty"`
+}
+
+// OutageAllowance is the site's outage allowance in minutes as stored: 0, the default, when it is unset.
+func (c SiteConfig) OutageAllowance() int {
+	if c.OutageAllowanceMinutes == nil {
+		return 0
+	}
+	return *c.OutageAllowanceMinutes
 }
 
 // SiteMacOSVM is SiteConfig.MacOSVM.

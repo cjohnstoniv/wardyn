@@ -152,6 +152,11 @@
       "intercept_tls",
       "block_min_severity"
     ],
+    "OutageControls": [
+      "allowance_minutes",
+      "strict",
+      "unattended"
+    ],
     "PushRuleOverride": [
       "provider",
       "host",
@@ -516,6 +521,14 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter.",
+      "section": "run_wide"
+    },
+    {
+      "name": "outage",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The site's outage allowance applies. A template can only make the terms stricter: a shorter allowance, the run ended at it, or an unattended run ended in a long outage.",
       "section": "run_wide"
     },
     {

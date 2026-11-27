@@ -155,12 +155,12 @@ NIGHTLY=.github/workflows/nightly.yml
 # ai-gateway-kind (#3862): the pinned agentgateway image in front of test/gatewayfake on a kind cluster. It was exempt
 # here until a scheduled green (45036863985); it is in notify-new-lanes.needs and release.yml's watched= now
 # (guard 13), and runs under scope=candidate. Its own notify job went with the exemption.
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan k6-rerun-rate kind-node-restart kind-agent-sandbox-keep-walk released-agent-base-run cp-outage-kind cp-outage-compose cp-outage-weekly"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan k6-rerun-rate kind-node-restart kind-agent-sandbox-keep-walk released-agent-base-run cp-outage-kind cp-outage-compose cp-outage-weekly kind-outage-recover-walk"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
 # and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the
 # date is renewed in a reviewed change. Empty while no job is waiting.
-NOTIFY_EXEMPT_UNTIL="kind-node-restart=2026-12-06 kind-agent-sandbox-keep-walk=2026-12-06 released-agent-base-run=2026-12-06 cp-outage-kind=2026-12-08 cp-outage-compose=2026-12-08 cp-outage-weekly=2026-12-08"
+NOTIFY_EXEMPT_UNTIL="kind-node-restart=2026-12-06 kind-agent-sandbox-keep-walk=2026-12-06 released-agent-base-run=2026-12-06 cp-outage-kind=2026-12-08 cp-outage-compose=2026-12-08 cp-outage-weekly=2026-12-08 kind-outage-recover-walk=2026-12-08"
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
     local pair job until max

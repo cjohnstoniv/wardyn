@@ -321,6 +321,10 @@ func buildBroker(pool *pgxpool.Pool, secrets secretstore.Store, rec audit.Record
 	if fan != nil {
 		brk = brk.WithSIEM(fan)
 	}
+	// The GitHub token hand-back seals under the key service adorunpat uses; with none, tokens expire on GitHub's TTL.
+	if k := subjectKeysOf(secrets); k != nil {
+		brk = brk.WithTokenSeal(broker.NewTokenSeal(pool, k))
+	}
 	return brk
 }
 

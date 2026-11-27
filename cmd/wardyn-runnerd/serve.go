@@ -26,6 +26,9 @@ type runnerRuntime struct {
 	hooks runnerwire.RunnerHooks
 	run   func(context.Context) error
 	close func() error
+	// onLatch, when set, takes the connection's RequireFresh once the client exists: the offline manager calls it
+	// when wardyn-runnerd contain latches a run while connected (offline.Manager.SetOnLatch).
+	onLatch func(func())
 }
 
 type runnerHooksBuilder func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error)
@@ -207,6 +210,9 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient, LinkChanged: status.linkChanged})
 		if err != nil {
 			return err
+		}
+		if runtime.onLatch != nil {
+			runtime.onLatch(client.RequireFresh)
 		}
 		slog.InfoContext(cmd.Context(), "runner's connection to the organisation", "route", runnerwire.OrgRoute(org, identity.RunnerID.String()))
 		return runRunnerServices(cmd.Context(), client.Run, runtime.run)

@@ -418,13 +418,19 @@ func (s *remoteSink) track(c net.Conn) func() {
 	}
 }
 
-// trackTunnel is the Proxy's hook at each hijack: a no-op unless decisions go
-// to a runner sink (k8s runners).
+// trackTunnel is the Proxy's hook at each hijack: it registers the tunnel with
+// the gate, which closes it on a pause or a lapse, and, when decisions go to a
+// runner sink (k8s runners), with that sink.
 func (p *Proxy) trackTunnel(c net.Conn) func() {
+	untrackGate := p.lapse.track(c)
 	if p.sink == nil || p.sink.remote == nil {
-		return func() {}
+		return untrackGate
 	}
-	return p.sink.remote.track(c)
+	untrackSink := p.sink.remote.track(c)
+	return func() {
+		untrackSink()
+		untrackGate()
+	}
 }
 
 // enter counts a request being served until the returned func runs.

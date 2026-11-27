@@ -247,6 +247,7 @@ func (m *meeter) validatePresence(ov Overlay) {
 			m.fail(ReasonOverlayInvalid, "desktop", "%v", err)
 		}
 	}
+	m.validateOutage(c.Outage)
 	if d := c.DataOut; d != nil && !types.ValidDataOut(*d) {
 		m.fail(ReasonOverlayInvalid, "data_out", "data_out: %q is not a rule; want allowed, review or blocked", *d)
 	}

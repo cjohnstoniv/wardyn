@@ -647,7 +647,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}()
 		return manager.Run(ctx)
 	}
-	return runnerRuntime{hooks: hooks, run: run, close: func() error {
+	return runnerRuntime{hooks: hooks, run: run, onLatch: manager.SetOnLatch, close: func() error {
 		err := errors.Join(local.Close(), manager.Close(), relay.Close())
 		if extra.closeAlso != nil {
 			err = errors.Join(err, extra.closeAlso())

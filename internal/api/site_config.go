@@ -321,6 +321,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateSiteSessions(cfg.Sessions); err != nil {
 		return err
 	}
+	if err := validateSiteOutageAllowance(cfg.OutageAllowanceMinutes); err != nil {
+		return err
+	}
 	if err := validateSiteBranding(cfg.Branding); err != nil {
 		return err
 	}
@@ -451,6 +454,7 @@ var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
 	"recording", "governance_max_depth", "macos_vm", "images", "sessions", "features", "desktop_watermark",
+	"outage_allowance_minutes",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -466,8 +470,9 @@ var siteConfigFieldsAfter066 = []string{
 // A bare carry-forward would make them unclearable, which is why this keys on
 // the body's own keys rather than on emptiness: `{"internal_hosts": []}` and
 // `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
-// as a client intends. Only silence is treated as silence. The exception is
-// governance_max_depth, a pointer: null and absent both keep the stored value, and 0 is the reset.
+// as a client intends. Only silence is treated as silence. The exceptions are
+// governance_max_depth and outage_allowance_minutes, both pointers: null and absent both keep
+// the stored value, and 0 is the reset.
 func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
 	if cfg.GovernanceMaxDepth == nil { // null or absent keeps it; 0 is the explicit reset
 		cfg.GovernanceMaxDepth = existing.GovernanceMaxDepth
@@ -520,6 +525,11 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteSessions(cfg, existing, present)
 	carryForwardSiteFeatures(cfg, existing, present)
 	carryForwardSiteDesktopWatermark(cfg, existing, present)
+	// outage_allowance_minutes on the same terms: an older client or MDM file cannot name it, so its silence (or a
+	// null) keeps the admin's allowance; an explicit 0 names it and resets it to the default.
+	if cfg.OutageAllowanceMinutes == nil {
+		cfg.OutageAllowanceMinutes = existing.OutageAllowanceMinutes
+	}
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -829,6 +839,7 @@ func siteConfigAuditDatum(saved types.SiteConfig) map[string]any {
 		"sign_in_help_text":            saved.SignInHelpText,
 		"sign_in_help_url":             saved.SignInHelpURL,
 		"session_unconfirmed_budget_s": int(saved.Sessions.UnconfirmedBudget() / time.Second),
+		"outage_allowance_minutes":     saved.OutageAllowance(),
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true

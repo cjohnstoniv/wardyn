@@ -49,6 +49,9 @@ var clampRules = map[string]string{
 	"desktop.copy_out":                 "blocked where the ceiling blocks it (clampDesktop)",
 	"desktop.upload":                   "blocked where the ceiling blocks it (clampDesktop)",
 	"desktop.download":                 "blocked where the ceiling blocks it (clampDesktop)",
+	"outage.allowance_minutes":         "no longer than the ceiling's (clampOutage)",
+	"outage.strict":                    "strict where the ceiling is (clampOutage)",
+	"outage.unattended":                "end where the ceiling says end (clampOutage)",
 	"recording":                        "raised to the ceiling's level (clampRecording)",
 	"data_out":                         "raised to the ceiling's rule, and blocked denies every push (clampDataOut)",
 	"push_rules.deny_paths":            "the ceiling's unioned in (clampPushRules)",
@@ -79,7 +82,7 @@ var withoutClampRules = map[string]string{
 // clampWhole are the structs Clamp bounds as one value through their own meet
 // (DesktopControls.Meet), keyed by wire name with the Go name clamp.go reads.
 // Each of their leaves still needs a row, so a new one is looked at.
-var clampWhole = map[string]string{"desktop": "Desktop"}
+var clampWhole = map[string]string{"desktop": "Desktop", "outage": "Outage"}
 
 // clampSelectors is every identifier clamp.go reads off a value or names in a
 // composite literal, outside cloneProposal: copying a field is not a rule.

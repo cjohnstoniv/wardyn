@@ -42,10 +42,16 @@ func (m *Manager) CoversRef(localRef string) bool {
 }
 
 // refusesExecution is the one refusal an agent execution, start, proxy replacement, selftest and
-// local attach share: the runner offline or revoked, or the run failed, contained, quarantined,
-// mid-failure or past its lease. Callers hold m.mu.
+// local attach share: the runner offline or revoked, or the run failed, contained (by the org or by a local
+// operator on this host), quarantined, mid-failure or past its lease. Callers hold m.mu.
 func (m *Manager) refusesExecution(id uuid.UUID, r localRun) bool {
-	return !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id)
+	return !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || r.LocalContain != nil || m.expired(id)
+}
+
+// refusedAfterCall is the recheck after an execution, start or proxy replacement returned: refusesExecution's
+// conditions but the containment-only one, which this recheck has never carried. Callers hold m.mu.
+func (m *Manager) refusedAfterCall(id uuid.UUID, r localRun) bool {
+	return !m.online || m.state.Revoked || r.FailedCreation || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || r.LocalContain != nil || m.expired(id)
 }
 
 // AttachRef is run id's local sandbox ref for a local attach, or "" when the runner holds no such
@@ -180,7 +186,7 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, 
 			err = m.save()
 		}
 	}
-	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && (!m.online || m.state.Revoked || r.FailedCreation || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id)) {
+	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && m.refusedAfterCall(id, r) {
 		err = runner.ErrRunnerOffline
 	}
 	if err != nil && ok {

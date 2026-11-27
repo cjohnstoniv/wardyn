@@ -29,6 +29,7 @@ const (
 	reasonReviveAlreadyInProgress           = "revive_already_in_progress"            // another revive of this run is already running
 	reasonReviveLiveTooSoon                 = "revive_live_too_soon"                  // a live run's proxy was replaced less than reviveLiveEvery ago
 	reasonReviveContainmentRecovering       = "revive_containment_recovering"         // the run's runner held it contained; a recovery is queued for its next session
+	reasonReviveLocalContained              = "revive_local_contained"                // a local operator contained the run on its runner; only ending it clears that
 	reasonReviveMintIdentityFailed          = "revive_mint_identity_failed"           // minting the fresh run token failed
 	reasonReviveEncodeConfigFailed          = "revive_encode_config_failed"           // the rewritten proxy config would not marshal to JSON
 	reasonRevivePullImageFailed             = "revive_pull_image_failed"              // the proxy image could not be pulled
