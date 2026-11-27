@@ -21,6 +21,7 @@ var sweepFamilies = map[string]string{
 	"run_output.sweeper":       db.SweeperFamilyRuns,
 	"egress.reconcile":         db.SweeperFamilyRuns,
 	"portal.lifecycle.sweeper": db.SweeperFamilyRuns,
+	"run.retention":            db.SweeperFamilyRuns,
 	"credential.sweeper":       db.SweeperFamilyCredentials,
 	"aws_sso.renewer":          db.SweeperFamilyCredentials,
 	"service.grant.cleanup":    db.SweeperFamilyCredentials,
