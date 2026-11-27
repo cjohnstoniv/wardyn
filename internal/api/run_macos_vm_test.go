@@ -456,7 +456,7 @@ func TestMachineKindRefusal(t *testing.T) {
 	for kind, want := range map[types.MachineKind]string{
 		"": "", types.MachineContainer: "", types.MachineLinuxVM: "",
 		types.MachineMacOSVM: macOSVMsOff,
-		"windows_vm":         `machine_kind "windows_vm" is neither "container" nor "linux_vm"`,
+		"plan9_vm":           `machine_kind "plan9_vm" is neither "container" nor "linux_vm"`,
 	} {
 		if got := machineKindRefusal(kind); got != want {
 			t.Errorf("switch off, kind %q: %q, want %q", kind, got, want)
@@ -468,7 +468,7 @@ func TestMachineKindRefusal(t *testing.T) {
 			t.Errorf("switch on, kind %q refused: %q", kind, got)
 		}
 	}
-	if got := machineKindRefusal("windows_vm"); !strings.Contains(got, `"windows_vm"`) || !strings.Contains(got, `"macos_vm"`) {
+	if got := machineKindRefusal("plan9_vm"); !strings.Contains(got, `"plan9_vm"`) || !strings.Contains(got, `"macos_vm"`) {
 		t.Errorf("switch on, unknown kind: %q", got)
 	}
 }

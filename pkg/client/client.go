@@ -129,12 +129,16 @@
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/org-sites      — organisation sites (0.11), with PUT and DELETE /api/v1/runner-pools/{id}/site and
 //     /api/v1/drives/{id}/site: which place each pool and admin drive is at, and each site's default pool
+//   - /api/v1/windows-licence-pools, /api/v1/windows-images — the Windows VM licence
+//     pools, their holders and seats (admin), and the registered Windows images
+//     (admin or security admin)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
 //   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.
-//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens
+//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens,
+//     windows-images
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
 //   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a

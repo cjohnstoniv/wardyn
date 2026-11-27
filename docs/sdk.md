@@ -1619,7 +1619,7 @@ The rest reach the wire only through
 | `deciders_unreadable` | `POST /approvals/{id}/{approve,deny}` (503): the unit deciders, or the unit tree, could not be read, so the request is not decided now. The run's owner gets this; anyone else gets the usual `404`, and a security admin still decides, `once` at most. |
 | `support_disabled` | `POST /runs/{id}/support` and `.../accept` (409): support sessions are off on this deployment (`WARDYN_SUPPORT_SESSIONS`). |
 | `support_not_allowed` | `POST /runs/{id}/support` (403): the caller is not a super admin signed in as a person (a personal token without a CLI sign-in, the admin token, a portal and a security admin are not), or is the run's own owner. On `.../accept` and `.../decline` (403): the caller is the owner on a sign-in that may not answer, or an admin. `.../end` takes the owner (a personal token included), the open grant's helper and any admin, who ends it as `ended_by_security`; anyone else gets the foreign-run `404`. |
-| `support_run_ineligible` | `POST /runs/{id}/support` and `.../accept` (409): the run cannot take a helper: it is not running, it is lost, it has no personal owner, it belongs to a service identity, it is a background task, it is a sign-in or a workspace step, or the deployment is in local mode. |
+| `support_run_ineligible` | `POST /runs/{id}/support` and `.../accept` (409): the run cannot take a helper: it is not running, it is lost, it has no personal owner, it belongs to a service identity, it is a background task, it is a sign-in or a workspace step, it is a Windows VM run, or the deployment is in local mode. |
 | `support_grant_open` | `POST /runs/{id}/support` (409): the run already has a help request or session open. |
 | `support_grant_not_found` | `.../accept`, `.../decline` and `.../end` (404): no such open help request on the run, or it was already answered, ended or lapsed (an unanswered request lapses after 15 minutes). |
 | `support_request_invalid` | `POST /runs/{id}/support` and `.../accept` (400): `doors` is empty, repeats a door, names one of the six doors wrongly or (on accept) one the helper did not ask for; `reason` is empty or over 500 characters; or `minutes` is not 15, 30 or 60. `field` names the part. |
@@ -1743,6 +1743,25 @@ The portal person routes (`POST /people/{principal}/suspend`, `/reactivate`, `/p
 | `portal_person_param_invalid` | (400, 422): `issuer` or `person_id` is missing, or `purge_after_seconds` is out of range. |
 
 The lookups (`GET /people/portal-person`, `GET /people/{principal}/portals`) answer `principal`, `state` (`active`, `deactivated` or `purged`), `display_email`, `deactivated_at`, `purged_at` and `portals_used`, a list of `{delegate, name, run_in_under, revoked_at}` that keeps revoked portals; they never carry `purge_after`. Suspend, reactivate and purge answer `principal`, `state`, `deactivated_at`, `purge_after` and `purged_at`. `GET /admin/portal-lifecycle/status` answers `deactivated`, `pending`, `pending_suspensions` and `pending_purges`. A suspend with a positive `purge_after_seconds` is a super admin's; a security admin suspends without one. A purge refused because a reactivation committed first answers `person_not_suspended`. [The steps](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
+
+A Windows VM run (`machine_kind: "windows_vm"`, `windows_image`) and the licence routes (`/windows-licence-pools`, its `holders` and `seats`, `/windows-images` and `GET /me/windows-images`; [Windows VM sandboxes](operations/windows-vm-sandboxes.md)) answer with:
+
+| Reason | Meaning |
+|---|---|
+| `windows_vms_off` | (403): `features.windows_vm.enabled` is off. No Windows VM starts, and no pool, holder or image is added. |
+| `windows_image_required` | (400): a Windows VM run names no image in `windows_image`, or names a raw `image`. |
+| `windows_image_unregistered` | (422): no active registered Windows image has that name, or its pool was deleted. |
+| `windows_licence_not_holder` | (403): you hold no seat in the image's licence pool. An admin adds you. |
+| `windows_licence_in_use` | (409): your seat is held by another live run, which the message names. End that run first. |
+| `windows_licence_pool_full` | (409): every seat in the pool has a holder. |
+| `windows_licence_seat_live` | (409): a live run holds a seat through that holder, pool or image. The message names the run. |
+| `windows_vm_feature_refused` | (403; 409 at a live run's door): a Windows VM run is desktop-only. `field` names what it refused, `recording` among them. |
+| `windows_vm_runner_unsupported` | (422): no organization runner that offers Windows VMs can take the run. |
+| `windows_vm_fenced` | (409): the database refused a change to a Windows VM run. No route should reach it. |
+| `windows_licences_unavailable` | (501): this store keeps no Windows licence pools. |
+| `windows_licence_invalid` | (400): a malformed pool, holder or image body. |
+| `windows_licence_not_found` | (404): no active pool, holder or image has that id. |
+| `windows_licence_conflict` | (409): a name, ref or holder already taken, a stale `revision`, or fewer seats than holders. |
 
 ### The Walls view
 

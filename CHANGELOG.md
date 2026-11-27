@@ -75,6 +75,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run that
   names a disk drive is refused at create and at Review, because the server cannot read the table.
+- Windows VM sandboxes (`machine_kind: "windows_vm"`, `windows_image`): a desktop-only Windows guest on an organization runner, started from an image your organisation registers, with one seat of a licence pool per running VM. Admins manage pools, holders and images under `/windows-licence-pools` and `/windows-images` ([Windows VM sandboxes](docs/operations/windows-vm-sandboxes.md)). Windows VM sandboxes have not yet been tried with a real Windows image on a real host. The checks that run on every backend change cover the VM's settings, the licence pool's limits, the network path and the start of the VM's firmware. They do not boot Windows. A Windows VM run needs recording off in the policy that launches it: on an install that keeps recordings and sets no level, a plain launch is refused until that policy says off.
 
 ### Before you upgrade
 
@@ -98,6 +99,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover these three tables: the migration takes every other
   privilege on them away from every role but their owner. Until the app role is granted `DELETE` on
   `run_sandbox_specs`, a terminal run's sealed spec is not deleted; its proxy config still is.
+- Windows VM sandboxes are off until an admin sets `features.windows_vm.enabled` in the site config and a runner's operator sets `WARDYN_RUNNER_WINDOWS_VM=1`. Wardyn does not supply, download or activate Windows: your organisation registers its own image and is responsible for its licences. Migrations `0400_windows_licences` and `0401_windows_vm_kind` add the tables `windows_licence_pools`, `windows_licence_holders`, `windows_images` and `windows_licence_leases`, three triggers on `agent_runs`, and `windows_vm` to `agent_runs.machine_kind`; split-role installs grant the app role the new tables (read only on `windows_licence_leases`). Stop every wardynd older than 0.11 first: an older server cannot read a `windows_vm` run. Runners that offer Windows VMs need the 0.11 QEMU image. Windows VM sandboxes have not yet been tried with a real Windows image on a real host.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT` on `windows_licence_leases`, and
+  `SELECT, INSERT, UPDATE, DELETE` on `windows_licence_pools`, `windows_licence_holders` and `windows_images`, to every role that
+  was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, grant it the same on each table as soon as the migration has run: the `ALTER DEFAULT PRIVILEGES` step in
+  Operations no longer covers the leases, since the migration takes back every other grant on them. Seats are taken and
+  freed only by the migrations' triggers, which run as the table owner.
 
 ## [0.11.0-rc.4] — 2026-11-26
 
