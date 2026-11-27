@@ -517,8 +517,8 @@ func TestAgentSandboxKeepAdmissionBoundsServices(t *testing.T) {
 			AddressType: discoveryv1.AddressTypeIPv4,
 		}
 	}
-	const svcMsg = "wardynd may make only a run's own ClusterIP Service"
-	const sliceMsg = "wardynd may write EndpointSlices only for a run's own Service"
+	const svcMsg = "wardynd may make, change or delete only a run's own ClusterIP Service"
+	const sliceMsg = "wardynd may write or delete EndpointSlices only for a run's own Service"
 
 	cases := []struct {
 		name    string
