@@ -554,7 +554,7 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 		if !ok {
 			return noProxyStop
 		}
-		if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+		if err := runner.CutEgress(ctx, stopper, ref); errors.Is(err, runner.ErrEndUnsupported) {
 			return noProxyStop
 		} else if err != nil {
 			// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so

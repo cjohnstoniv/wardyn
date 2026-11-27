@@ -737,7 +737,19 @@ func TestTemplateWireTypesHoldNoAuthority(t *testing.T) {
 // and the unknown-key classifier apart: a field a template carries is never
 // one of the names the classifier refuses.
 func TestTemplateCarriedFieldsNeverReadAsRunStateOrSecrets(t *testing.T) {
+	// carriedRefusedNameExempt is each carried field, by exact owner and name, whose name the classifier refuses
+	// elsewhere, with why it is not what that name refuses.
+	carriedRefusedNameExempt := map[string]string{
+		// The server's own definition (the policy of its own sandbox), not run state; the decoder reads it as a
+		// known struct field before unknownKey's run-state check (template_decode.go).
+		"ComponentMCP.sandbox": "an MCP server's own sandbox policy",
+	}
+	used := map[string]bool{}
 	check := func(owner, name string) {
+		if _, ok := carriedRefusedNameExempt[owner+"."+name]; ok {
+			used[owner+"."+name] = true
+			return
+		}
 		if types.ConfigKeyLooksSecret(name) || slices.Contains(templateRunStateKey, strings.ToLower(name)) {
 			t.Errorf("%s.%s is carried but reads as a refused name", owner, name)
 		}
@@ -750,6 +762,11 @@ func TestTemplateCarriedFieldsNeverReadAsRunStateOrSecrets(t *testing.T) {
 	for typeName, names := range templateNestedCarried {
 		for _, name := range strings.Fields(names) {
 			check(typeName, name)
+		}
+	}
+	for key := range carriedRefusedNameExempt {
+		if !used[key] {
+			t.Errorf("exemption %s names no carried field; remove it", key)
 		}
 	}
 }

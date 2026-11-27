@@ -470,7 +470,7 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 	if !ok {
 		return errProxyAloneUnsupported
 	}
-	switch err := stopper.StopProxy(ctx, ref); {
+	switch err := runner.CutEgress(ctx, stopper, ref); {
 	case err == nil:
 		return nil
 	case errors.Is(err, runner.ErrEndUnsupported):

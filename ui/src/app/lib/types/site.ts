@@ -226,6 +226,8 @@ export interface ComponentSettings {
   require_vault_for_credentials?: boolean;
   deny_resident_delivery?: boolean;
   autonomy_cap?: "" | "L1" | "L0";
+  /** The organisation's Local MCP servers setting; unset reads on. */
+  local_mcp_servers?: "off" | "on";
 }
 
 // policyref.Contact — who owns a policy and how a person it refuses asks for a

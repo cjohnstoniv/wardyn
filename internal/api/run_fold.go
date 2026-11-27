@@ -231,6 +231,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepContainersPlacement, foldAll},
+	{(*Server).stepMCPSandbox, foldAll},
 	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepDenyLists, foldAll},

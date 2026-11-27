@@ -196,3 +196,82 @@ func TestSiteConfigComponentSettings_AuditRecordsSetAndClear(t *testing.T) {
 		}
 	}
 }
+
+// local_mcp_servers takes nil, "", "off" and "on"; anything else is refused with the field's own sentence.
+// It reads on unless it is stored as off.
+func TestComponentSettings_LocalMCPServers(t *testing.T) {
+	set := func(v string) *types.ComponentSettings {
+		s := types.LocalMCPSetting(v)
+		return &types.ComponentSettings{LocalMCPServers: &s}
+	}
+	for _, ok := range []*types.ComponentSettings{{}, set(""), set("off"), set("on")} {
+		if err := validateComponentSettings(ok); err != nil {
+			t.Errorf("%+v refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"On", "true", "enabled", " off"} {
+		err := validateComponentSettings(set(bad))
+		want := `components.local_mcp_servers: "` + bad + `" is not accepted — use "off" or "on"; unset reads on`
+		if err == nil || err.Error() != want {
+			t.Errorf("%q: %v, want %q", bad, err, want)
+		}
+	}
+	for v, want := range map[string]bool{"": true, "on": true, "off": false} {
+		if got := localMCPOn(types.SiteConfig{Components: set(v)}); got != want {
+			t.Errorf("localMCPOn(%q) = %v", v, got)
+		}
+	}
+	if !localMCPOn(types.SiteConfig{}) {
+		t.Error("no block reads off; want on")
+	}
+}
+
+// A body that names components without local_mcp_servers (an older console tab or managed file, {} and null
+// included) keeps the stored setting; only an explicit value changes it, "" is stored as none, and the
+// site_config.write row records the effective value.
+func TestSiteConfigComponentSettings_LocalMCPServersCarriedForward(t *testing.T) {
+	off, on := types.LocalMCPOff, types.LocalMCPOn
+	stored := types.SiteConfig{Components: &types.ComponentSettings{LocalMCPServers: &off}}
+	for _, tc := range []struct {
+		name, body string
+		want       *types.LocalMCPSetting
+		cap        types.AutonomyLevel
+		audit      string
+	}{
+		{"block not named", `{"scm_hosts":["github.com"]}`, &off, "", "off"},
+		{"{} keeps it", `{"components":{}}`, &off, "", "off"},
+		{"null keeps it", `{"components":null}`, &off, "", "off"},
+		{"another field keeps it", `{"components":{"autonomy_cap":"L1"}}`, &off, types.AutonomyL1, "off"},
+		{"explicit on", `{"components":{"local_mcp_servers":"on"}}`, &on, "", "on"},
+		{"explicit empty clears it", `{"components":{"local_mcp_servers":""}}`, nil, "", "on"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSiteConfigStore{cfg: stored}
+			srv, audit := newSiteConfigHarness(t, fake)
+			if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, tc.body); w.Code != http.StatusOK {
+				t.Fatalf("PUT = %d %s", w.Code, w.Body.String())
+			}
+			got := fake.putSeen.Components
+			switch {
+			case tc.want == nil && tc.cap == "":
+				if got != nil {
+					t.Errorf("stored %+v, want none", got)
+				}
+			case got == nil || (got.LocalMCPServers == nil) != (tc.want == nil) || (tc.want != nil && *got.LocalMCPServers != *tc.want) || got.AutonomyCap != tc.cap:
+				t.Errorf("stored %+v, want local_mcp_servers %v and cap %q", got, tc.want, tc.cap)
+			}
+			for _, ev := range audit.snapshot() {
+				if ev.Action != "site_config.write" {
+					continue
+				}
+				var d map[string]any
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					t.Fatal(err)
+				}
+				if d["components_local_mcp_servers"] != tc.audit {
+					t.Errorf("components_local_mcp_servers = %v, want %q", d["components_local_mcp_servers"], tc.audit)
+				}
+			}
+		})
+	}
+}

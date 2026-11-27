@@ -283,6 +283,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 				"reaches a host that serves a model, which a component may not.")
 		}
 	}
+	if refused := mcpAdmissionRefusal(adm.site, c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
 	if problem := componentDefinitionProblem(c); problem != "" {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.")
 	}

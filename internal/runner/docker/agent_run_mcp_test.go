@@ -102,11 +102,9 @@ func TestCodexAgentRun_MCPServersRenderedOnceAfterTables(t *testing.T) {
 	}
 }
 
-// TestCodexAgentRun_MCPStdioTablesAfterBrokerTables: a run's servers that run
-// in the sandbox arrive as dispatch's own [mcp_servers.<key>] tables and are
-// added after the broker tables, each replaced (not duplicated) on a second
-// start, alone or beside remote servers.
-func TestCodexAgentRun_MCPStdioTablesAfterBrokerTables(t *testing.T) {
+// TestCodexAgentRun_IgnoresMCPStdioTOML: an MCP server that starts from a command never runs inside the agent's
+// sandbox, so agent-run writes no table from WARDYN_MCP_STDIO_TOML, alone or beside the broker's servers.
+func TestCodexAgentRun_IgnoresMCPStdioTOML(t *testing.T) {
 	const stdio = "[mcp_servers.files]\ncommand = \"npx\"\nargs = [\"-y\",\"@example/mcp-files@1.4.2\"]\nenv_vars = [\"HTTPS_PROXY\",\"PATH\"]\n"
 	for name, env := range map[string][]string{
 		"alone":       {"WARDYN_MCP_STDIO_TOML=" + stdio},
@@ -115,19 +113,14 @@ func TestCodexAgentRun_MCPStdioTablesAfterBrokerTables(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			home, binDir, codexLog := cxFakeCodex(t)
 			cfgPath := filepath.Join(home, ".codex", "config.toml")
-			cxWrite(t, cfgPath, "model = \"x\"\n\n[mcp_servers.files]\ncommand = \"stale\"\n")
+			cxWrite(t, cfgPath, "model = \"x\"\n")
 			cxRunTask(t, home, binDir, codexLog, env...)
-			first := ccRead(t, cfgPath)
-			cxRunTask(t, home, binDir, codexLog, env...)
-			if got := ccRead(t, cfgPath); got != first {
-				t.Fatalf("a second start changed config.toml:\n%s\n---\n%s", first, got)
+			got := ccRead(t, cfgPath)
+			if strings.Contains(got, "[mcp_servers.files]") || strings.Contains(got, "npx") || !strings.HasPrefix(got, "model = \"x\"\n") {
+				t.Fatalf("config.toml took the stdio server:\n%s", got)
 			}
-			if !strings.HasSuffix(first, stdio) || strings.Contains(first, "stale") || strings.Count(first, "[mcp_servers.files]") != 1 ||
-				!strings.HasPrefix(first, "model = \"x\"\n") {
-				t.Fatalf("config.toml:\n%s", first)
-			}
-			if remote := len(env) > 1; remote != strings.Contains(first, "[mcp_servers.linear]\nurl = ") {
-				t.Fatalf("broker table present %v, want %v:\n%s", !remote, remote, first)
+			if remote := len(env) > 1; remote != strings.Contains(got, "[mcp_servers.linear]\nurl = ") {
+				t.Fatalf("broker table present %v, want %v:\n%s", !remote, remote, got)
 			}
 		})
 	}

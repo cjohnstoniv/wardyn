@@ -161,9 +161,17 @@ type SetupFeatures struct {
 	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
 	// each agent its own task (#1987).
 	MultiAgentTasks bool `json:"multi_agent_tasks"`
-	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
-	// MCP server that runs in the run's sandbox.
+	// MCPLocalServers always reads false: WARDYN_MCP_LOCAL_SERVERS is no longer
+	// read, and an MCP server that starts from a command runs only in a sandbox
+	// of its own (MCPOwnSandbox, LocalMCPServers).
 	MCPLocalServers bool `json:"mcp_local_servers"`
+	// MCPOwnSandbox is WARDYN_MCP_OWN_SANDBOX: MCP servers that start from a
+	// command, each in a sandbox of its own, are turned on for this deployment.
+	MCPOwnSandbox bool `json:"mcp_own_sandbox,omitempty"`
+	// LocalMCPServers is MCPOwnSandbox and the organisation's Local MCP servers
+	// setting, read now: a run may have such a server. Absent when either is off
+	// or when the site config could not be read, which the console reads as off.
+	LocalMCPServers bool `json:"local_mcp_servers,omitempty"`
 	// MacOSVMs is WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off, so the
 	// status of a deployment that leaves it off reads exactly as before.
 	MacOSVMs bool `json:"macos_vms,omitempty"`
@@ -188,12 +196,14 @@ type SetupFeatures struct {
 	PreviewMaxVisibility string `json:"preview_max_visibility,omitempty"`
 }
 
-func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
+func setupFeatures(multiAgentTasks, macWindow, localMCP bool) SetupFeatures {
+	ownSandbox := envEnabled(envMCPOwnSandbox)
 	return SetupFeatures{
 		ScheduledRuns:   envEnabled(envScheduledRuns),
 		KubectlCLI:      kubectlCLIOn(),
 		MultiAgentTasks: multiAgentTasks,
-		MCPLocalServers: envEnabled(envMCPLocalServers),
+		MCPOwnSandbox:   ownSandbox,
+		LocalMCPServers: ownSandbox && localMCP,
 		MacOSVMs:        envEnabled(envMacOSVMs),
 		MacWindow:       macWindow,
 		SupportSessions: envEnabled(envSupportSessions),
@@ -506,7 +516,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
-		Features:       siteFeatureFlags(setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed()), siteCfg, siteCfgOK),
+		Features:       siteFeatureFlags(setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed(), localMCPOnRead(siteCfg, siteCfgOK)), siteCfg, siteCfgOK),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's

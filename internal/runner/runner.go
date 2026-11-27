@@ -39,6 +39,8 @@ type Capabilities struct {
 	UserDrives      bool `json:"user_drives,omitempty"`
 	ManagedFiles    bool `json:"managed_files,omitempty"`    // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	ExtraContainers bool `json:"extra_containers,omitempty"` // fail-closed like UserDrives, AND-aggregated: runs SandboxSpec.Containers (extra_containers.go)
+	// MCPSandboxKinds are the machine kinds whose runs can have MCP sandboxes (MCPSandboxer). Fail closed: absent means none.
+	MCPSandboxKinds []types.MachineKind `json:"mcp_sandbox_kinds,omitempty"`
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
 	// `filesystem` (docker quota), `eviction` (k8s, never refuses the write),
 	// or `none`/empty. Aggregated as the WEAKEST across substrates.

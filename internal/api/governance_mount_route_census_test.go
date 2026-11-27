@@ -69,6 +69,10 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 	"GET /api/v1/me/machines":                    {"the caller's effective ceiling decides whether they may keep another machine (keptMachineKeepRefusal reads deny_kept_machines); the answer is their own machines, a count, a limit and a reason, never a spec", ""},
 	// The Walls view's routes.
 	"GET /api/v1/walls/topology": {"reads each unit's ceiling for its egress mode only (allowlist, allow-all, sealed or unknown); the boundary is served as its mode and restrictions as id and name, never a spec", ""},
+	"GET /api/v1/me/components": {"mine is the caller's own rows, served whole because the Settings editor sends each back through withStored; " +
+		"org rows go through orgComponentView, which carries no MCP sandbox policy, and a raw secret value is refused at save", ""},
+	"GET /api/v1/components": {"operator-only (requireOperator), so always read at the full tier, and the admin editor sends each row back whole; " +
+		"a raw secret value in an MCP sandbox overlay is refused at save", ""},
 }
 
 // specCensus is the parsed source the route census reads.
