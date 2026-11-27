@@ -29,8 +29,11 @@ import (
 )
 
 // outageDoor is a decision door that a test can take away: while down it reads a post, notes the ids it
-// carried, and closes the connection with no answer. Up, it answers every post 202 with the batch advertisement
-// and notes which ids landed.
+// carried, and aborts the post with no answer. Up, it answers every post 202 with the batch advertisement
+// and notes which ids landed. The door is served over TLS, so the proxy speaks HTTP/2 to it, and an HTTP/2
+// handler cannot hijack its connection: a down door that only tried to returned an empty 200, which the proxy
+// rightly reads as a control plane that takes no batches, and so it posted every record alone, nothing was
+// spooled and nothing replayed. http.ErrAbortHandler resets the stream (the connection on HTTP/1.1).
 type outageDoor struct {
 	mu      sync.Mutex
 	down    bool
@@ -72,12 +75,7 @@ func (o *outageDoor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		o.seen[rec.ID] = rec.Decision.Request.Host
 	}
 	if o.down {
-		if hj, ok := w.(http.Hijacker); ok {
-			if conn, _, err := hj.Hijack(); err == nil {
-				_ = conn.Close()
-			}
-		}
-		return
+		panic(http.ErrAbortHandler) // the deferred unlock runs; the server neither answers nor logs it
 	}
 	for _, rec := range batch.Records {
 		o.landed[rec.ID]++
