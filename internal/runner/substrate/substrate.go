@@ -60,6 +60,9 @@ type ClassSupport struct {
 	// AnyNodeClasses are the pinned classes whose RuntimeClass sets no scheduling, so their pods run on any
 	// node with the runtime (k8s, read at boot). OR-merged; absent on an older runner.
 	AnyNodeClasses []types.ConfinementClass
+	// MCPSandboxKinds are the machine kinds whose runs can have MCP sandboxes here (runner.MCPSandboxer).
+	// INTERSECTED across substrates, like UserDrives: absent means none.
+	MCPSandboxKinds []types.MachineKind
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate.

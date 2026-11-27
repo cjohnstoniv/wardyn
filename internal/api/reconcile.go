@@ -743,6 +743,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 				finalized++
 				continue
 			case runnerProbeAbsent:
+				s.startMCPSandboxWatcher(run.ID)
 				s.goBackground(func() { s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID) })
 				reattached++
 				continue
@@ -760,6 +761,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		}
 		// Still alive (or momentarily unreachable): attach a watcher so the run
 		// finalizes when the agent actually exits, not on a transient probe error.
+		s.startMCPSandboxWatcher(run.ID)
 		s.goBackground(func() { s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID) })
 		reattached++
 	}

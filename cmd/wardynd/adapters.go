@@ -180,6 +180,9 @@ func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, re
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return s.st.CountApprovalsForRun(ctx, runID)
 }
+func (s *approvalService) CountForMCPSandbox(ctx context.Context, runID uuid.UUID, key string) (int, error) {
+	return s.st.CountMCPSandboxApprovals(ctx, runID, key)
+}
 
 // TakeOver and HandBack are the OPTIONAL human_takeover surface the api handler type-asserts
 // (approvals_takeover.go); the api layer writes their audit rows.

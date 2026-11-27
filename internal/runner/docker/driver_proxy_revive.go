@@ -15,7 +15,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -345,6 +344,12 @@ func (d *Driver) startProxyWithMAC(ctx context.Context, image string, runID uuid
 		remove()
 		return "", "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
+	// The run's relay link, when its MCP sandboxes made one: so every proxy this starts, a replacement included,
+	// can reach them (joinRelayLink).
+	if err := d.joinRelayLink(ctx, runID, resp.ID); err != nil {
+		remove()
+		return "", "", err
+	}
 	// An image that predates the ready marker never prints it: wait for it only from an image that
 	// says it does, and watch such a proxy for an early exit as before.
 	marker := d.proxyPrintsReadyMarker(ctx, image)
@@ -422,43 +427,11 @@ func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string
 	return att, sum, nil
 }
 
-// listenOnRunNetwork returns cfgJSON with its listen address set to the
-// started proxy id's address on runID's per-run network, keeping the port.
-// The proxy also sits on the control-plane-facing network, which other
-// containers share; binding to the per-run address keeps its listener off
-// that network, so only the run's own agent can reach it. The address exists
-// only once the container has started, which is why this runs between the
-// start and the config write.
+// listenOnRunNetwork returns cfgJSON with its listeners bound to the started proxy id's own addresses
+// (bindProxyListeners). The addresses exist only once the container has started, which is why this runs
+// between the start and the config write.
 func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) ([]byte, error) {
-	res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("docker: inspect proxy for its listen address: %w", err)
-	}
-	var addr netip.Addr
-	if ns := res.Container.NetworkSettings; ns != nil {
-		if ep := ns.Networks[internalNetName(runID)]; ep != nil {
-			addr = ep.IPAddress
-		}
-	}
-	if !addr.IsValid() || addr.IsUnspecified() {
-		return nil, fmt.Errorf("docker: proxy has no IP on the per-run internal network %q to listen on", internalNetName(runID))
-	}
-	var data map[string]json.RawMessage
-	if err := json.Unmarshal(cfgJSON, &data); err != nil {
-		return nil, fmt.Errorf("docker: proxy config: %w", err)
-	}
-	var listen string
-	if err := json.Unmarshal(data["listen"], &listen); err != nil {
-		return nil, fmt.Errorf("docker: proxy config listen: %w", err)
-	}
-	_, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return nil, fmt.Errorf("docker: proxy config listen %q: %w", listen, err)
-	}
-	if data["listen"], err = json.Marshal(net.JoinHostPort(addr.Unmap().String(), port)); err != nil {
-		return nil, err
-	}
-	return json.Marshal(data)
+	return d.bindProxyListeners(ctx, runID, id, cfgJSON)
 }
 
 // proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as. It

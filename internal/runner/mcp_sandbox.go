@@ -57,10 +57,14 @@ type MCPSandboxSpec struct {
 	PlatformEnv map[string]string
 	// ProxyConfig is the MCP proxy's config, rendered and sealed by the control plane.
 	ProxyConfig []byte
-	// RelayTokenSHA256 is the hex SHA-256 of the relay token the agent's proxy sends.
+	// RelayTokenSHA256 is the hex SHA-256 of the relay token the agent's proxy sends. It must equal the
+	// proxy config's mcp_relay_inbound.token_sha256.
 	RelayTokenSHA256 string
 	Resources        Resources
 	Labels           map[string]string
+	// RelayRank is the server's 0-based rank among the run's local MCP servers, in ordinal order, fixed at
+	// dispatch. A substrate that pins relay addresses pins one per rank, so a re-create keeps its address.
+	RelayRank int
 	// OnWaiting, non-nil, reports why the sandbox is not up yet, such as an image pull (must not block).
 	// Call NotifyWaiting, never the field.
 	OnWaiting func(detail string) `json:"-"`
@@ -164,13 +168,23 @@ type MCPSandbox struct {
 	Live bool
 }
 
+var (
+	// ErrMCPSandboxNotCreatedHere: the start's process did not create the sandbox, or started it already.
+	// Kill the sandbox and create it again.
+	ErrMCPSandboxNotCreatedHere = errors.New("runner: this MCP sandbox was not created by this process, or was started already")
+	// ErrMCPSandboxHostReachable: the host cannot give an MCP sandbox's networks no address on the host, so
+	// the server's code could reach services on it. No operator setting admits one.
+	ErrMCPSandboxHostReachable = errors.New("runner: an MCP server's sandbox needs networks with no address on the host")
+)
+
 // MCPSandboxer is an OPTIONAL Runner capability: MCP sandboxes for the machine kinds Capabilities lists in
 // MCPSandboxKinds. Create and start are two calls, so the control plane can record the row between them.
 type MCPSandboxer interface {
 	// CreateMCPSandbox pulls the images, creates every object and copies the files in, and starts nothing.
 	// The result holds the pinned relay address.
 	CreateMCPSandbox(ctx context.Context, spec MCPSandboxSpec) (MCPSandbox, error)
-	// StartMCPSandbox starts the MCP proxy, waits for its ready marker, then starts the container.
+	// StartMCPSandbox starts the MCP proxy, waits for its ready marker, then starts the container. It is
+	// valid only in the process that created the sandbox, once; any other start is ErrMCPSandboxNotCreatedHere.
 	StartMCPSandbox(ctx context.Context, id MCPSandboxID) error
 	// KillRunMCPSandboxes kills the run's MCP objects found by listing, by the run's label and the MCP
 	// components only, never the relay link or an agent object. It is the end's fallback when the rows

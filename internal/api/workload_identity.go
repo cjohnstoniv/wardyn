@@ -42,14 +42,20 @@ var errNoWorkloadMint = errors.New("the identity provider cannot name a workload
 // identity goes through it, so a run keeps the ID its first mint gave it; a workspace step's helper run
 // (workspace_run_launch.go) mints the ad-hoc form directly, and is never a workload's.
 func (s *Server) mintRunIdentity(ctx context.Context, runID uuid.UUID, w identity.Workload, humanSub, sponsor string, operatorOwned bool) (identity.RunIdentity, error) {
+	return s.mintRunIdentityAs(ctx, runID, w, humanSub, sponsor, operatorOwned, internalAudience)
+}
+
+// mintRunIdentityAs is mintRunIdentity for the audience aud, under the same SPIFFE ID: an MCP sandbox's proxy
+// token is the run's identity for mcpSandboxAudience.
+func (s *Server) mintRunIdentityAs(ctx context.Context, runID uuid.UUID, w identity.Workload, humanSub, sponsor string, operatorOwned bool, aud string) (identity.RunIdentity, error) {
 	if w == (identity.Workload{}) {
-		return s.cfg.Identity.MintRunIdentity(ctx, runID, humanSub, sponsor, internalAudience, operatorOwned)
+		return s.cfg.Identity.MintRunIdentity(ctx, runID, humanSub, sponsor, aud, operatorOwned)
 	}
 	m, ok := s.cfg.Identity.(identity.WorkloadRunMinter)
 	if !ok {
 		return identity.RunIdentity{}, errNoWorkloadMint
 	}
-	return m.MintWorkloadRunIdentity(ctx, runID, w, humanSub, sponsor, internalAudience, operatorOwned)
+	return m.MintWorkloadRunIdentity(ctx, runID, w, humanSub, sponsor, aud, operatorOwned)
 }
 
 // runWorkloadOf is the workload a run's SPIFFE ID names, read back so a revive or a renewal mints the

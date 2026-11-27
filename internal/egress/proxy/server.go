@@ -54,6 +54,8 @@ type Server struct {
 	signinListen string
 	// vm is Config.VM: open the relay's listener (vmnetListen).
 	vm bool
+	// mcpRelay is an MCP sandbox proxy's relay listener (mcp_relay_inbound.go); nil for any other proxy.
+	mcpRelay *http.Server
 	// onListening, when set, runs once the main listener is bound (see OnListening).
 	onListening func()
 	// bound is the main listener's address, set just before onListening runs (see BoundAddr).
@@ -223,7 +225,9 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// own-subnet/control-plane exclusion needs both before any request is
 	// served. net.InterfaceAddrs() already sees the control-plane network at
 	// this point, since NetworkConnect precedes ContainerStart on the docker
-	// driver.
+	// driver. An MCP sandbox's proxy relies on the same order for its relay
+	// link: the docker runner connects that network to the created, unstarted
+	// container, so the relay subnet is in this snapshot too.
 	//
 	// A lookup failure for either is non-fatal but NOT free: the exclusion is
 	// a CLAMP on the lift, so an empty clamp would widen it instead of
@@ -390,7 +394,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: p.countedHandler(),
+		Handler: p.forwardHandler(cfg),
 		// SECURITY: the agent-facing listener is the untrusted side of the
 		// boundary. With ReadTimeout 0 there is NO header deadline unless this
 		// is set, so a partial-header connection would pin a goroutine
@@ -406,6 +410,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 	out := &Server{proxy: p, http: srv, sink: sink, runCert: runCert, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen, vm: cfg.VM}
 	out.watchShutdown()
+	out.mcpRelay = newMCPRelayInbound(p, cfg, srv)
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
@@ -470,7 +475,9 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 		go gate.watch(rctx, time.Second)
 		runTokenRenewerGated(rctx, ts, cfg.ControlPlaneURL, client, defaultRenewerTuning(), gate)
 	}()
-	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
+	if !cfg.mcpSandbox() { // an MCP sandbox's token cannot post activity, and its egress is not the agent's
+		go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
+	}
 }
 
 // ListenAndServe starts serving and blocks until the server stops.
@@ -500,6 +507,18 @@ func (s *Server) ListenAndServe() error {
 		go func() {
 			if err := s.http.Serve(vmnetListener{ln}); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				slog.Error("wardyn-proxy: the relay listener stopped", slog.Any("err", err))
+			}
+		}()
+	}
+	// An MCP sandbox proxy's relay listener has its own server and handler, never the forward one.
+	if s.mcpRelay != nil {
+		ln, err := s.listen(s.mcpRelay.Addr)
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := s.mcpRelay.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("wardyn-proxy: the MCP relay listener stopped", slog.Any("err", err))
 			}
 		}()
 	}

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -597,7 +598,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 			continue // best-effort per run
 		}
 		for _, ev := range events {
-			if ev.Action != "egress.deny" {
+			if ev.Action != "egress.deny" || audit.MCPSandboxOfData(ev.Data) != "" { // an MCP server's deny is not the agent's
 				continue
 			}
 			host := strings.ToLower(strings.TrimSpace(ev.Target))

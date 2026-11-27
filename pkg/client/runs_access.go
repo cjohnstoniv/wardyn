@@ -46,10 +46,15 @@ type AccessRow struct {
 
 // AccessMCP is an MCP server row's binding: the server key in
 // mcp__<server>__<tool>, its transport and the harnesses it is turned on for.
+// A server that starts from a command also names its sandbox's policy
+// (same, narrower or own), and HoldsRefused when that policy turns a host
+// rule that holds a request for a person into a deny.
 type AccessMCP struct {
-	ServerKey string   `json:"server_key"`
-	Transport string   `json:"transport"`
-	Harnesses []string `json:"harnesses"`
+	ServerKey    string   `json:"server_key"`
+	Transport    string   `json:"transport"`
+	Harnesses    []string `json:"harnesses"`
+	PolicyMode   string   `json:"policy_mode,omitempty"`
+	HoldsRefused bool     `json:"holds_refused,omitempty"`
 }
 
 // AccessHost is one destination as the policy spells it (a port is kept). Via

@@ -381,6 +381,9 @@ func (a pgApprovalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, r
 func (a pgApprovalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return a.CountApprovalsForRun(ctx, runID)
 }
+func (a pgApprovalService) CountForMCPSandbox(ctx context.Context, runID uuid.UUID, key string) (int, error) {
+	return a.CountMCPSandboxApprovals(ctx, runID, key)
+}
 
 // pgPathFixture is a Server over a throwaway, migrated Postgres with one
 // attended run holding a github_token grant.

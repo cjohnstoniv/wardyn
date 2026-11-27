@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -287,9 +289,10 @@ func TestRawEgressHostsNoneForStdioServer(t *testing.T) {
 	}
 }
 
-// TestDispatchMCP_StdioServerSkipped: dispatch never writes a server that starts from a command into the
-// agent's configuration: no broker entry, no token, nothing in Claude Code's file or Codex CLI's env.
-func TestDispatchMCP_StdioServerSkipped(t *testing.T) {
+// TestDispatchMCP_StdioServerOnItsRelay: a server that starts from a command reaches the agent's
+// configuration only as a broker entry with no URL and no credential, and its harness bindings, which its
+// relay target (createRunMCPSandboxes) completes; none of its own variables reaches the agent's env.
+func TestDispatchMCP_StdioServerOnItsRelay(t *testing.T) {
 	launch := &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "@example/mcp-files@1.4.2"}}
 	servers := []componentMCP{
 		{Ordinal: 0, Key: "files", Harnesses: []string{"claude-code", "codex-cli"}, Launch: launch, EnvNames: []string{"FILES_ROOT"}},
@@ -298,15 +301,18 @@ func TestDispatchMCP_StdioServerSkipped(t *testing.T) {
 	var injections []runner.InjectionGrant
 	env := map[string]string{"HTTPS_PROXY": "http://wardyn-proxy:3128"}
 	out := dispatchMCP(servers, withholding{}, &injections, "http://wardyn-proxy:3128", false, env)
-	if len(out.servers) != 1 || out.servers[0].Key != "linear" || len(out.bindings) != 2 ||
-		!slices.Equal(out.bindings[0].Servers, []string{"linear"}) || len(out.files) != 1 ||
-		strings.Contains(string(out.files[0].Content), "files") || strings.Contains(env[codexMCPEnv], "files") || len(env) != 2 {
-		t.Fatalf("out %+v env %v: the stdio server reached the agent's configuration", out, env)
+	if len(out.servers) != 2 || out.servers[0].Key != "files" || out.servers[0].URL != "" || out.servers[0].GrantID != nil ||
+		out.servers[0].Relay != nil || len(out.bindings) != 2 || !slices.Equal(out.bindings[0].Servers, []string{"files", "linear"}) {
+		t.Fatalf("out %+v: the stdio server's entry or bindings", out)
 	}
-	env = map[string]string{}
-	if out := dispatchMCP(servers[:1], withholding{}, &injections, "http://wardyn-proxy:3128", true, env); len(out.bindings) != 0 ||
-		len(out.servers) != 0 || len(out.files) != 0 || len(env) != 0 {
-		t.Fatalf("stdio only: %+v env %v", out, env)
+	if len(out.files) != 1 || !strings.Contains(string(out.files[0].Content), "/files") || !strings.Contains(env[codexMCPEnv], "/files") ||
+		strings.Contains(string(out.files[0].Content), "FILES_ROOT") || len(env) != 2 {
+		t.Fatalf("files %+v env %v: the stdio server's broker URL, and none of its variables", out.files, env)
+	}
+	// A withheld host drops a remote server, never one that has no host of its own.
+	w := withholding{deny: []string{"mcp.linear.test"}}
+	if out := dispatchMCP(servers, w, &injections, "http://wardyn-proxy:3128", true, map[string]string{}); len(out.servers) != 1 || out.servers[0].Key != "files" {
+		t.Fatalf("withheld: %+v", out.servers)
 	}
 }
 
@@ -485,7 +491,7 @@ func TestReviveMCPSandboxRefusal(t *testing.T) {
 		f, _ := newRebootFixture(t)
 		cs := f.withRunComponents(row)
 		cs.siteErr = errors.New("site config unreadable")
-		got := f.srv.reviveMCPSandboxRefusal(context.Background(), f.run, true, types.ActorHuman, "admin")
+		got := f.srv.reviveMCPSandboxRefusal(context.Background(), f.run, true, false, types.ActorHuman, "admin")
 		if got == nil || got.reason != reasonComponentDefinitionInvalid || got.msg != d6 {
 			t.Fatalf("refusal %+v, want the switch-off sentence", got)
 		}
@@ -535,6 +541,7 @@ func TestMCPSandboxSentencesMatchCanon(t *testing.T) {
 	for _, got := range []string{
 		mcpOwnSandboxOffSentence, mcpOwnSandboxUnsupportedSentence, mcpOwnSandboxMacSentence, mcpOwnSandboxLinuxVMSentence,
 		mcpSandboxLimitSentence, mcpReviveOffSentence, mcpReviveLegacySentence, mcpSaveOffSentence, mcpRunnerUnnamed,
+		mcpSandboxRunEndedSentence, mcpSandboxUnknownSentence,
 		"mcp.sandbox.policy.overlay.allowed_domains: " + mcpNarrowerWidensSentence,
 	} {
 		if !canon[got] {
@@ -566,4 +573,74 @@ func mcpCanonColumn(t *testing.T, doc, heading string, col int) []string {
 		t.Fatalf("%q: read %d rows; the table is not where the test looks", heading, len(out))
 	}
 	return out
+}
+
+// TestMCPSandboxGateNarrowerOverlay is the matrix's step 6: the fold, at preview, preflight and create alike, admits a
+// narrower overlay within "same" computed from the folded policy, and refuses one that names a host outside
+// it with the overlay's field path.
+func TestMCPSandboxGateNarrowerOverlay(t *testing.T) {
+	i := slices.IndexFunc(runFoldSteps, func(st runFoldStep) bool {
+		return strings.HasSuffix(runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name(), ".stepMCPSandbox")
+	})
+	if i < 0 || runFoldSteps[i].modes != foldAll {
+		t.Fatalf("stepMCPSandbox is not a fold step at every door")
+	}
+	s := &Server{}
+	s.cfg.Store, s.cfg.Runner = mcpSiteStore{site: localMCPSite("on")}, mcpKindsRunner{kinds: []types.MachineKind{types.MachineContainer}}
+	for _, tc := range []struct {
+		name  string
+		allow []string
+		want  string
+	}{
+		{"within same", []string{"api.files.test"}, ""},
+		{"a host outside same", []string{"api.files.test", "wide.test"},
+			"mcp.sandbox.policy.overlay.allowed_domains: Narrower than the run can only remove access. Edit files to remove the extra hosts."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comps := stdioComps(1)
+			comps.attached[0].snapshot.Definition.MCP.Sandbox = &types.ComponentMCPSandbox{Policy: types.ComponentMCPSandboxPolicy{
+				Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{AllowedDomains: &tc.allow}}}
+			rec := httptest.NewRecorder()
+			f := &runFold{w: rec, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
+				req:   &createRunRequest{MachineKind: string(types.MachineContainer)},
+				place: runPlacement{pooled: true, placement: types.PlacementRemote}, comps: comps,
+				spec: types.RunPolicySpec{AllowedDomains: []string{"a.test"}}}
+			cont := s.stepMCPSandbox(f, nil)
+			if tc.want == "" {
+				if !cont || rec.Code != http.StatusOK {
+					t.Fatalf("refused %d %s, want admitted", rec.Code, rec.Body.String())
+				}
+				return
+			}
+			var body errorBody
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if cont || rec.Code != http.StatusUnprocessableEntity || body.Reason != reasonComponentDefinitionInvalid || body.Error != tc.want {
+				t.Fatalf("fold = %v %d %q %q, want 422 %q %q", cont, rec.Code, body.Reason, body.Error, reasonComponentDefinitionInvalid, tc.want)
+			}
+		})
+	}
+}
+
+// TestMCPAdmissionRefusesUpstreamProxy: a site whose traffic goes through an upstream proxy, by URL or by
+// secret, refuses a server that starts from a command at admission, since its sandbox's proxy has no
+// upstream; a remote server is admitted.
+func TestMCPAdmissionRefusesUpstreamProxy(t *testing.T) {
+	want := "MCP servers that start from a command can't run here yet: this organisation sends traffic through its own proxy. Use a remote (HTTPS) MCP server, or remove files."
+	for _, site := range []types.SiteConfig{
+		{UpstreamProxyURL: "http://proxy.corp.test:3128"},
+		{UpstreamProxySecretRef: "corp-proxy"},
+	} {
+		site.Components = localMCPSite("on").Components
+		t.Setenv(envMCPOwnSandbox, "1")
+		refused := mcpAdmissionRefusal(site, stdioComps(1).attached[0], 0)
+		if refused == nil || refused.reason != reasonMCPOwnSandboxUnsupported || refused.refusal.status != http.StatusUnprocessableEntity ||
+			refused.refusal.body.Error != want {
+			t.Fatalf("site %+v: admission = %+v, want 422 %q %q", site, refused, reasonMCPOwnSandboxUnsupported, want)
+		}
+		remote := attachedComponent{snapshot: types.RunComponent{Name: "Remote", Definition: types.ComponentDefinition{
+			MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportHTTP, URL: "https://mcp.remote.test/mcp"}}}}
+		if refused := mcpAdmissionRefusal(site, remote, 0); refused != nil {
+			t.Fatalf("a remote server is refused: %+v", refused)
+		}
+	}
 }

@@ -88,6 +88,9 @@ func (c *trackedConn) CloseWrite() error {
 // started its own report. A narrowing's config holds the boot list and more, so the boot report is
 // never the newer one, and the narrowing socket may take an edit before the boot report starts.
 func (s *Server) StartBootReport(ctx context.Context, r LoadedReport) {
+	if s.mcpRelay != nil { // an MCP sandbox's proxy: its token cannot post the report (no readback)
+		return
+	}
 	s.live.reportMu.Lock()
 	defer s.live.reportMu.Unlock()
 	if s.live.reportCancel != nil {

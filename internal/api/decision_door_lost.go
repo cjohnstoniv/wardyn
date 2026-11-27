@@ -144,23 +144,23 @@ func (s *Server) noteExpiredDecisionPost(r *http.Request, exp *identity.ExpiredT
 		s.noteDecisionReportLost(r, exp.RunID, reportLostExpired)
 		return
 	}
-	if s.cfg.Store == nil || !s.claimDecisionRefusal(exp.RunID, expiredRunRead) {
+	if s.cfg.Store == nil || !s.claimDecisionRefusal(r.Context(), exp.RunID, expiredRunRead) {
 		return
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), exp.RunID)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
-			s.releaseDecisionRefusal(exp.RunID, expiredRunRead)
+			s.releaseDecisionRefusal(r.Context(), exp.RunID, expiredRunRead)
 		}
 		return
 	}
 	over, cerr := s.runIsOverNow(r.Context(), run)
 	if cerr != nil {
-		s.releaseDecisionRefusal(exp.RunID, expiredRunRead) // the next post reads the run and the clock again
+		s.releaseDecisionRefusal(r.Context(), exp.RunID, expiredRunRead) // the next post reads the run and the clock again
 		return
 	}
 	if !over && !s.noteDecisionReportLost(r, exp.RunID, reportLostExpired) {
-		s.releaseDecisionRefusal(exp.RunID, expiredRunRead)
+		s.releaseDecisionRefusal(r.Context(), exp.RunID, expiredRunRead)
 	}
 }
 
@@ -169,14 +169,14 @@ func (s *Server) noteExpiredDecisionPost(r *http.Request, exp *identity.ExpiredT
 // row was neither written nor spooled. One row fails a confined replay of the run; the rest would only repeat
 // it. It reports false only when the row was claimed here and neither written nor spooled.
 func (s *Server) noteDecisionReportLost(r *http.Request, runID uuid.UUID, reason string) bool {
-	if !s.claimDecisionRefusal(runID, runReportLostAction) {
+	if !s.claimDecisionRefusal(r.Context(), runID, runReportLostAction) {
 		return true
 	}
 	ev := s.auditEvent(&runID, types.ActorSystem, "wardynd", runReportLostAction, decisionsDoor, "failure",
 		mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = r.RemoteAddr
 	if !s.recordAuditDurably(r.Context(), ev) {
-		s.releaseDecisionRefusal(runID, runReportLostAction)
+		s.releaseDecisionRefusal(r.Context(), runID, runReportLostAction)
 		return false
 	}
 	return true

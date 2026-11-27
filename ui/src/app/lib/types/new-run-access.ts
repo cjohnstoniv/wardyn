@@ -29,6 +29,10 @@ export interface AccessMCP {
   server_key: string;
   transport: string;
   harnesses: string[];
+  // A server that starts from a command: its sandbox's policy, and whether
+  // that policy turns a host rule that holds a request into a deny.
+  policy_mode?: string;
+  holds_refused?: boolean;
 }
 
 export interface AccessRow {

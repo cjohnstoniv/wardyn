@@ -265,7 +265,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := s.reviveMCPSandboxRefusal(ctx, run, rebooted, actorType, actor); rerr != nil {
+	if rerr := s.reviveMCPSandboxRefusal(ctx, run, rebooted, len(edits) > 0, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
@@ -375,6 +375,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 	}
 	s.leaseEnded.Delete(run.ID)
+	s.lostCuts.Delete(run.ID) // only a revive that succeeded clears this replica's cut
 	if err := reviver.SetRunProxyRelease(ctx, run.ID, version.Version); err != nil {
 		// The row keeps the old release, so the proxy-window listing may name
 		// this run again: a second restart, never a missed one.
@@ -382,6 +383,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
+	// The run's MCP servers last, on a bound of their own: nothing of theirs changes the revive's answer.
+	mcpCtx, endMCP := reviveMCPContext(ctx, lockCtx)
+	s.reviveMCPSandboxes(mcpCtx, run, gen, rebooted, len(edits) > 0)
+	endMCP()
 	return reviveResult{RunID: run.ID, DeniedAdded: nonNilStrings(re.added), ProxyRelease: version.Version, AgentStarted: rebooted, generation: gen}, nil
 }
 

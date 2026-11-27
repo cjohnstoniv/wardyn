@@ -151,6 +151,9 @@ func writeCapReached(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, store.ErrApprovalRunCap):
 		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached,
 			"this run has raised too many approvals; no more will be accepted")
+	case errors.Is(err, store.ErrApprovalMCPSandboxCap):
+		writeErrorReason(w, http.StatusTooManyRequests, reasonMCPSandboxApprovalCap,
+			"this MCP server has asked about too many hosts; no more will be accepted")
 	case errors.Is(err, store.ErrAPITokenCap):
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAPITokenCapReached,
 			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))

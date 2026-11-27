@@ -944,7 +944,7 @@ func (s *Server) recordAuditDurably(ctx context.Context, ev types.AuditEvent) bo
 }
 
 // stampAuditEvent fills ev's id and time when unset and stamps what the request context says about
-// who acted: the relay, the delegation, the sponsor and the proxy peer. Every API-written row takes
+// who acted: the relay, the MCP sandbox, the delegation, the sponsor and the proxy peer. Every API-written row takes
 // it, the strict intent row (audit_strict.go) included.
 func (s *Server) stampAuditEvent(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
 	if ev.ID == uuid.Nil {
@@ -954,6 +954,7 @@ func (s *Server) stampAuditEvent(ctx context.Context, ev types.AuditEvent) types
 		ev.Time = s.cfg.Now().UTC()
 	}
 	ev.Data = audit.StampRelay(ctx, ev.Data)
+	ev.Data = audit.StampMCPSandbox(ctx, ev.Data) // an MCP proxy's row names its server (internal_mcp_auth.go)
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
 	ev.Data = audit.StampProxyPeer(ctx, ev.SourceIP, ev.Data)

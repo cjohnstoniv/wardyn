@@ -39,6 +39,12 @@ const (
 	componentProxy = "proxy"
 	// componentNetwork labels a run's internal network (createRunNetwork).
 	componentNetwork = "network"
+	// An MCP sandbox's container, its MCP proxy and its network, and the run's relay link: the one network the
+	// agent's proxy and every MCP proxy of the run share (mcp_sandbox.go).
+	componentMCP          = "mcp"
+	componentMCPProxy     = "mcp-proxy"
+	componentMCPNetwork   = "mcp-network"
+	componentRelayNetwork = "relay-network"
 )
 
 // Object names are deterministic per run, so teardown is selector-free and
@@ -65,6 +71,19 @@ func proxyContainerName(runID uuid.UUID) string { return "wardyn-proxy-" + runID
 // internalNetName is the per-run internal network joined by agent and proxy;
 // internal=true means no gateway, preserving L0.
 func internalNetName(runID uuid.UUID) string { return "wardyn-int-" + runID.String() }
+
+// An MCP sandbox's objects are named from its run and its server's ordinal, so a row with no ref can still be
+// killed; the relay link is one per run.
+func mcpNetName(runID uuid.UUID, ord int) string {
+	return fmt.Sprintf("wardyn-mcp-net-%s-%d", runID, ord)
+}
+func mcpProxyName(runID uuid.UUID, ord int) string {
+	return fmt.Sprintf("wardyn-mcp-proxy-%s-%d", runID, ord)
+}
+func mcpContainerName(runID uuid.UUID, ord int) string {
+	return fmt.Sprintf("wardyn-mcp-%s-%d", runID, ord)
+}
+func relayLinkName(runID uuid.UUID) string { return "wardyn-relay-" + runID.String() }
 
 // wardynLabels stamps every Wardyn-owned object for audit/teardown lookup by
 // run and component. extra applies first and the three reserved keys stamp

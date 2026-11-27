@@ -95,25 +95,35 @@ func (s *Server) mcpSaveProblem(ctx context.Context, def types.ComponentDefiniti
 }
 
 // mcpAdmissionRefusal is the admission door's step 2, on the site config the component gate already read
-// (a read error is answered before it).
+// (a read error is answered before it), then the site's upstream proxy: an MCP sandbox's proxy has none, so
+// its egress would go around the organisation's proxy.
 func mcpAdmissionRefusal(site types.SiteConfig, c attachedComponent, i int) *componentRefusal {
 	if !c.snapshot.Definition.LocalMCP() {
 		return nil
 	}
-	st := mcpGate(mcpAtSwitch, mcpGateFacts{stdio: 1, off: mcpOwnSandboxOff(site, nil)})
-	if st == nil {
+	reason, sentence := "", ""
+	if st := mcpGate(mcpAtSwitch, mcpGateFacts{stdio: 1, off: mcpOwnSandboxOff(site, nil)}); st != nil {
+		reason, sentence = st.reason, st.sentence
+	} else if site.UpstreamProxyURL != "" || site.UpstreamProxySecretRef != "" {
+		reason, sentence = reasonMCPOwnSandboxUnsupported, mcpUpstreamProxySentence
+	} else {
 		return nil
 	}
 	return &componentRefusal{
-		refusal: runError(http.StatusUnprocessableEntity, st.reason, mcpSandboxSentence(st.sentence, mcpSlug(c.snapshot.Name), "")),
-		reason:  st.reason, ordinal: i, source: c.source, id: c.snapshot.ComponentID,
+		refusal: runError(http.StatusUnprocessableEntity, reason, mcpSandboxSentence(sentence, mcpSlug(c.snapshot.Name), "")),
+		reason:  reason, ordinal: i, source: c.source, id: c.snapshot.ComponentID,
 	}
 }
 
 // stepMCPSandbox is the fold's part of the gate: the machine kind, the placement and the executor's kinds,
-// and the count. It runs after the components were admitted (step 2) and after the placement was decided.
+// the count, then a narrower overlay judged against "same" from the folded policy (mcpNarrowerRefusal). It
+// runs after the components were admitted (step 2) and after the placement was decided.
 func (s *Server) stepMCPSandbox(f *runFold, _ *foldRecorder) bool {
-	return !s.mcpSandboxRefusal(f.r.Context(), *f.req, f.place, f.comps).write(s, f.w, f.r)
+	refusal := s.mcpSandboxRefusal(f.r.Context(), *f.req, f.place, f.comps)
+	if refusal == nil {
+		refusal = mcpNarrowerRefusal(f.spec, f.comps)
+	}
+	return !refusal.write(s, f.w, f.r)
 }
 
 // mcpSandboxRefusal is stepMCPSandbox's answer. A local run is refused without a capability read; a remote

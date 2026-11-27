@@ -59,6 +59,9 @@ type Config struct {
 	ControlPlanePeerID string `json:"control_plane_peer_id,omitempty"`
 	// RunToken authenticates internal calls (Authorization: Bearer <token>).
 	RunToken string `json:"run_token"`
+	// ControlPlaneAudience is "" for a run's own proxy, or MCPSandboxAudience for an MCP sandbox's proxy,
+	// which then carries only the fields validateMCPSandboxConfig allows (mcp_sandbox_config.go).
+	ControlPlaneAudience string `json:"control_plane_audience,omitempty"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
 	Policy types.RunPolicySpec `json:"policy"`
 	// LiveDenies are hosts a live egress edit denied; set only by WithLiveDenies, checked before every allow.
@@ -410,6 +413,13 @@ type Config struct {
 	// MCPApproveEach is set exactly when a dispatched tool rule is approve_each; see
 	// MCPApproveEachConfig. An older proxy refuses the key, so the run does not start on it.
 	MCPApproveEach *MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
+	// MCPRelayInbound is an MCP sandbox proxy's relay listener (mcp_relay_inbound.go); required with, and
+	// only with, the MCP sandbox audience.
+	MCPRelayInbound *MCPRelayInboundConfig `json:"mcp_relay_inbound,omitempty"`
+	// RelayScrubValues is an MCP sandbox proxy's list of its server's own secret values, scrubbed from
+	// every answer its relay listener sends. It never joins the scan corpus, and the LLM scan switch
+	// does not touch it. Only an MCP sandbox's proxy carries it.
+	RelayScrubValues []string `json:"relay_scrub_values,omitempty"`
 	// DisableModelUsage turns off the per-call model-token meter, which is on by
 	// default with nothing in the config. Only an admin's opt-out sets it, so a
 	// default config still loads on an older proxy, which refuses this key.
@@ -429,7 +439,7 @@ type OutageConfig struct {
 	Strict     bool  `json:"strict,omitempty"`
 }
 
-// MCPServerConfig is one remote MCP server on the broker route.
+// MCPServerConfig is one MCP server on the broker route: remote (URL) or in its own sandbox (Relay).
 type MCPServerConfig struct {
 	// Key is the server's name in /wardyn/mcp/<token>/<key> and in its tools'
 	// names, mcp__<key>__<tool>.
@@ -442,6 +452,9 @@ type MCPServerConfig struct {
 	// Ordinal is the component's run_components ordinal (built-ins have no
 	// row), which a revive reads its row by.
 	Ordinal int `json:"ordinal"`
+	// Relay is set for a server in its own sandbox, reached on the run's relay link (mcp_relay.go); URL
+	// and GrantID are then empty.
+	Relay *MCPRelayTarget `json:"relay,omitempty"`
 }
 
 // MCPBinding is one harness's MCP token, as its digest, and the servers it may
@@ -723,7 +736,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateHardDeny(); err != nil {
 		return err
 	}
-	if err := c.validateMCP(); err != nil {
+	if err := cmp.Or(c.validateMCP(), c.validateMCPSandboxConfig()); err != nil {
 		return err
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM

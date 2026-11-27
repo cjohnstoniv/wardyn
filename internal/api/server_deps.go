@@ -45,8 +45,11 @@ type ApprovalService interface {
 	// CountForRun returns how many approvals a run has raised, in ANY state —
 	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
 	// the hosts it asks about, so without that cap the number of rows one run can
-	// create is bounded by nothing.
+	// create is bounded by nothing. Its MCP servers' holds are left out.
 	CountForRun(ctx context.Context, runID uuid.UUID) (int, error)
+	// CountForMCPSandbox returns how many egress holds the run's MCP server key has raised, in any state:
+	// that server's own cap (maxMCPHoldsPerServer), so one server's holds never fill the run's.
+	CountForMCPSandbox(ctx context.Context, runID uuid.UUID, key string) (int, error)
 }
 
 // MintBroker is the credential-mint surface the API depends on (internal/broker).

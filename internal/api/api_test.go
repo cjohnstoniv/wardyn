@@ -286,7 +286,22 @@ func (f *fakeApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, er
 	}
 	n := 0
 	for _, ap := range f.byID {
-		if ap.RunID == runID {
+		if ap.RunID == runID && !isMCPSandboxRow(ap) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeApprovals) CountForMCPSandbox(_ context.Context, runID uuid.UUID, key string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	n := 0
+	for _, ap := range f.byID {
+		if ap.RunID == runID && isMCPSandboxRow(ap) && mcpSandboxKeyOf(ap) == key {
 			n++
 		}
 	}

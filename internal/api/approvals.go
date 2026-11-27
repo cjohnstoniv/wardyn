@@ -356,6 +356,9 @@ func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap
 	if scope, isHost, ok = hostCallDecisionRule(w, ap, scope); !ok { // a host rule hold is decided for the run, or once (approvals_host_call.go)
 		return scope, false
 	}
+	if !mcpSandboxDecisionRule(w, ap, scope) { // an MCP server's hold is decided for the run at most (approvals_mcp_sandbox.go)
+		return scope, false
+	}
 	if !isADO && !isMCP && !isKube && !isHost && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return scope, false
 	}
@@ -626,7 +629,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// the attach/ssh/ui lanes already use: keep the request's VALUES (principal,
 	// trace ids, the ceiling memo) and drop only its cancellation.
 	wbCtx := context.WithoutCancel(r.Context())
-	if approve {
+	if approve && !isMCPSandboxRow(result) {
 		s.learnVerifyEgress(wbCtx, result, decidedByType, decidedBy)
 	}
 	// Outside the `if approve` above, which IS the approve-only guard: placing

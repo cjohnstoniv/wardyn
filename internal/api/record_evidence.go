@@ -138,10 +138,11 @@ func cleanVerdictMoved(ctx context.Context, ev store.RecordEvidence, res RecordT
 }
 
 // runEventSetAside reports whether events hold the note that an audit spool set one of the run's events
-// aside.
+// aside. The note of an MCP proxy's event carries its server key (audit.MCPSandboxOfData): that event was
+// the server's, not the agent's, and its note is left out.
 func runEventSetAside(events []types.AuditEvent) bool {
 	for _, ev := range events {
-		if ev.Action == auditSpoolQuarantineAction {
+		if ev.Action == auditSpoolQuarantineAction && audit.MCPSandboxOfData(ev.Data) == "" {
 			return true
 		}
 	}
@@ -170,13 +171,15 @@ func runSpoolWasFull(events []types.AuditEvent) bool {
 	return runHasDeny(events, func(rule string) bool { return rule == ruleSourceSpoolFull })
 }
 
-// runHasDeny reports whether events hold an egress deny whose rule source matches.
+// runHasDeny reports whether events hold an egress deny whose rule source matches. A row an MCP proxy's
+// request wrote (audit.MCPSandboxOfData) is the server's, not the agent's, and is left out.
 func runHasDeny(events []types.AuditEvent, match func(rule string) bool) bool {
 	for _, ev := range events {
 		var d struct {
 			RuleSource string `json:"rule_source"`
 		}
-		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && match(d.RuleSource) {
+		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && match(d.RuleSource) &&
+			audit.MCPSandboxOfData(ev.Data) == "" {
 			return true
 		}
 	}
@@ -186,9 +189,11 @@ func runHasDeny(events []types.AuditEvent, match func(rule string) bool) bool {
 // runDecisionPostRefused reports whether events hold internalAuth's refusal of a post to the decision door,
 // such as one the egress proxy sent after its run's tail grace (terminalGraceRoutes), or a post the door
 // could not take (runReportLostAction). What it posted is not on the trail, and it could have been a deny.
+// A refused post of an MCP proxy (audit.MCPSandboxOfData) is the server's, not the agent's, and is left out.
 func runDecisionPostRefused(events []types.AuditEvent) bool {
 	for _, ev := range events {
-		if (ev.Action == authz.AuditAction || ev.Action == runReportLostAction) && ev.Target == decisionsDoor {
+		if (ev.Action == authz.AuditAction || ev.Action == runReportLostAction) && ev.Target == decisionsDoor &&
+			audit.MCPSandboxOfData(ev.Data) == "" {
 			return true
 		}
 	}
@@ -212,19 +217,24 @@ func (s *Server) rejudgedForList(ctx context.Context, ws types.Workspace) types.
 // replay of that run is not judged clean on a trail that is missing it, whichever replica takes the verdict.
 // Drain calls it before quarantineLine moves the line, once the store has refused ev alone, and keeps the
 // line in the spool when the note cannot be written, as it does through an outage. The row names ev by
-// its id and action and carries nothing of its payload, which is what the store refused. The action is the
-// one thing of ev's the note holds, so a store that answers and refuses the note is asked once more without
-// it: a note is never refused for the reason its event was, and a line it is kept for is one the store
-// refused a row that holds nothing of the event. An event of no run needs no note, and one already noted
+// its id and action and carries nothing else of its payload, which is what the store refused, but the
+// server key an MCP proxy's event was stamped with. Those are the things of ev's the note holds, so a store
+// that answers and refuses the note is asked once more without them: a note is never refused for the reason
+// its event was, and a line it is kept for is one the store refused a row that holds nothing of the event.
+// The note asked again carries no server key, so it fails the run's confined replay even for an MCP proxy's
+// event. An event of no run needs no note, and one already noted
 // by this process needs no second. The caller holds a.mu.
 func (a *AuditSpool) noteRunEventSetAside(ctx context.Context, rec audit.Recorder, ev types.AuditEvent) error {
 	if ev.RunID == nil || (ev.ID != uuid.Nil && ev.ID == a.noted) {
 		return nil
 	}
+	data := map[string]string{"action": ev.Action}
+	if key := audit.MCPSandboxOfData(ev.Data); key != "" {
+		data["mcp_sandbox"] = key // the server's event, which leaves the agent's replay clean (runEventSetAside)
+	}
 	note := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), RunID: ev.RunID, ActorType: types.ActorSystem, Actor: "wardynd",
-		Action: auditSpoolQuarantineAction, Target: ev.ID.String(), Outcome: "success",
-		Data: mustJSON(map[string]string{"action": ev.Action}),
+		Action: auditSpoolQuarantineAction, Target: ev.ID.String(), Outcome: "success", Data: mustJSON(data),
 	}
 	err := rec.Record(ctx, note)
 	if err != nil && ctx.Err() == nil && !auditWriteTimedOut(err) {

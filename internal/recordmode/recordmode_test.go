@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -361,6 +362,38 @@ func TestCapture(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.check(t, Capture(tt.events, tt.confined, tt.kernel))
 		})
+	}
+}
+
+// mcpSandboxEgress is ev as an MCP server's proxy writes it: labelled with its server's key.
+func mcpSandboxEgress(ev types.AuditEvent, key string) types.AuditEvent {
+	var data map[string]any
+	_ = json.Unmarshal(ev.Data, &data)
+	data["mcp_sandbox"] = key
+	ev.Data, _ = json.Marshal(data)
+	return ev
+}
+
+// TestCaptureSkipsMCPSandboxEgress: an MCP server's allow, deny and pending rows are not the agent's, so the
+// capture observes none of them, raises no anomaly for its deny and leaves a confined replay clean; the
+// agent's own rows beside them are captured as before.
+func TestCaptureSkipsMCPSandboxEgress(t *testing.T) {
+	mcp := []types.AuditEvent{
+		mcpSandboxEgress(egressEvent(egress.Allow, "api.vendor.test", "GET", "policy"), "files"),
+		mcpSandboxEgress(egressEvent(egress.Deny, "evil.test", "GET", "policy:denied"), "files"),
+		mcpSandboxEgress(egressEvent(egress.Pending, "pkg.vendor.test", "GET", "approval:pending"), "files"),
+	}
+	agent := egressEvent(egress.Allow, "api.github.com", "GET", "policy")
+	obs := Capture(append(slices.Clone(mcp), agent), false, KernelWindow{})
+	if len(obs.Domains) != 1 || obs.Domains[0].Host != "api.github.com" || len(obs.Anomalies) != 0 {
+		t.Fatalf("open capture = %+v, want only the agent's api.github.com and no anomaly", obs)
+	}
+	if replay := Capture(mcp, true, KernelWindow{}); !CleanReplay(replay.Domains, false) {
+		t.Errorf("a confined replay with only an MCP server's deny and hold is not clean: %+v", replay.Domains)
+	}
+	agentDeny := egressEvent(egress.Deny, "evil.test", "GET", "policy:denied")
+	if obs := Capture(append(slices.Clone(mcp), agentDeny), false, KernelWindow{}); len(obs.Anomalies) == 0 || CleanReplay(obs.Domains, false) {
+		t.Errorf("control: the agent's own deny is not captured: %+v", obs)
 	}
 }
 

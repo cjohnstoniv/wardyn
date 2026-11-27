@@ -718,6 +718,7 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	s.mountRunReviveRoutes(r) // revive and the live egress edit, owner or super admin (run_egress_edit.go)
+	s.mountRunMCPRoutes(r)    // the run page's MCP servers: list, restart and stop (run_mcp_sandbox_routes.go)
 	// Desktop sign-ins (#2972): the run's creator only, off unless
 	// WARDYN_DESKTOP_SIGNINS=on (run_desktop_signin.go).
 	r.Post("/runs/{id}/desktop-signin", s.handleBeginDesktopSignin)
@@ -859,7 +860,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 // mountInternalRoutes is the internal sidecar surface: every route here is
 // authenticated by a run token (internalAuth), and the run is the token's.
 func (s *Server) mountInternalRoutes(r chi.Router) {
-	r.Use(s.internalAuth)
+	r.Use(s.mcpSandboxAuth, s.internalAuth)
 	r.Post("/internal/decisions", s.handlePostDecision)
 	// The proxy's "bytes moved" presence signal (#572), run from the token.
 	r.Post("/internal/activity", s.handleInternalActivity)
