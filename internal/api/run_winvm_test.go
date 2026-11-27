@@ -681,6 +681,7 @@ func TestWindowsRunInsertDoorsCensus(t *testing.T) {
 		"run_queue.go:answer":     "a launch that waits for a pool slot: the same fold and row; the promotion refolds",
 	}
 	container := map[string]string{
+		"assistant_run.go:assistantNewRun":        "an assistant session's run",
 		"harnesscred.go:launchHarnessLoginRun":    "a harness sign-in run",
 		"site_config_probe.go:runSiteConfigProbe": "a site config probe run",
 		"source_scan.go:launchSourceScanRun":      "a source scan run",

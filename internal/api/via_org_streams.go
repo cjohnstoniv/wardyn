@@ -66,8 +66,9 @@ type viaOrgRun struct {
 	// upstreamRefused holds each build refused for the site's upstream proxy host, by the setting it read.
 	upstreamRefused map[viaOrgUpstreamSetting]error
 	// grants holds the run's grants viaOrgGrant has read and checked as this run's via_org grants, by id, under
-	// viaOrgState.mu. Grant rows are insert-only (TestCredentialGrantsStayInsertOnly), so a row read once answers
-	// this state's later requests; a grant not held is read. The set goes with the state.
+	// viaOrgState.mu. Grant rows never change under a state (TestCredentialGrantsStayInsertOnly: only a move's commit
+	// records a delivery, and it moves the run off this state's runner), so a row read once answers this state's
+	// later requests; a grant not held is read. The set goes with the state.
 	grants map[uuid.UUID]types.CredentialGrant
 
 	smu       sync.Mutex

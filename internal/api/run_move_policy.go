@@ -401,6 +401,11 @@ var moveSpecFields = map[string]moveFieldClass{
 	"Desktop":                 moveFieldKeep,
 	"Recording":               moveFieldKeep,
 	"DataOut":                 moveFieldRefuse,
+	// The run keeps the outage terms recorded at its create; the destination's proxy reads them from its outage key.
+	"Outage": moveFieldKeep,
+	// Walls on folders from a person's computer are kept by the control plane's doors; like DataOut, a destination
+	// that would change them refuses.
+	"LocalFolders": moveFieldRefuse,
 }
 
 // moveNarrowing is what the destination's policy dst, with the owner's current denies, does to the run's policy
@@ -633,10 +638,19 @@ func (s *Server) moveDestinationPlan(ctx context.Context, destRun types.AgentRun
 		return placement.LocalPlan{}, types.RunPolicySpec{}, nil, err
 	}
 	p.RequireManagedDevice = requiresManagedDevice(sc)
+	// The run lands on a runner it has not run on, so the organisation's machine-kind denials judge it there as they
+	// judge a new run.
+	p.MachineKindDenials = machineKindDenialsOf(sc)
+	if err := s.denialSiteOf(ctx, sc, destRun, &p); err != nil {
+		return placement.LocalPlan{}, types.RunPolicySpec{}, nil, err
+	}
 	stripped, lref := placement.LocalEligibility(p)
 	if lref != nil {
 		layer := "local_placement"
-		if lref.Reason == placement.ReasonRunnerTrustRequired {
+		switch {
+		case lref.Field == "machine_kind":
+			layer = "machine_kind"
+		case lref.Reason == placement.ReasonRunnerTrustRequired:
 			layer = "managed_device"
 		}
 		return refused(layer, lref.Detail)

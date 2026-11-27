@@ -767,8 +767,9 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 	qualified := funcBodies(t, true)
 	for name, want := range map[string][]string{
 		"startFresh": {"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.sandboxExec", "localAttach.run"},
-		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced.
-		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleAttachForward", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp"},
+		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced. uiPreviewProbe is
+		// uiEnsureApp for a preview's session, its one caller, so it keeps uiEnsureApp's background decision.
+		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleAttachForward", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp", "Server.uiPreviewProbe"},
 		"execSFTPServer": {"Server.bridgeSSHSFTP", "Server.bridgeSSHSync", "Server.computerFolderPass"},
 	} {
 		var got []string

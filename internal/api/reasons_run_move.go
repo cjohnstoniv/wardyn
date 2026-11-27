@@ -46,7 +46,7 @@ const (
 	reasonMovePlainLink              = "move_plain_link"               // failure: a runner link is not TLS
 	reasonMoveRunEnded               = "move_run_ended"                // failure: the run was killed, ended or lost during the move
 	reasonMovePauseChanged           = "move_pause_changed"            // failure: a Resume took the run during the move
-	reasonMoveOrphaned               = "move_orphaned"                 // failure: the move's executor stopped answering
+	reasonMoveOrphaned               = "move_orphaned"                 // failure: the server running the move stopped answering
 	reasonMoveStopFailed             = "move_stop_failed"              // failure, and 503 for a run already paused: the run could not be stopped
 	reasonMoveCreateFailed           = "move_create_failed"            // failure: the destination's sandbox could not be created
 	reasonMoveExportFailed           = "move_export_failed"            // failure: the source's files could not be read

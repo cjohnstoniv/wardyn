@@ -375,7 +375,7 @@ var templateNestedCarried = map[string]string{
 	"CeilingOverlay": "allowed_domains denied_domains allow_all_egress refuse_ip_literals first_use_approval first_use_hold_seconds max_holds " +
 		"allowed_methods host_rules min_confinement_class eligible_grants auto_stop_after_sec workspace_mounts workspace_repos llm_inspection " +
 		"ui_apps resources tool_rules git_push_any_branch push_rules azure_devops_capabilities github_capabilities harness_inner_walls desktop " +
-		"recording data_out",
+		"outage recording data_out local_folders",
 	"ComponentMCPSandbox":       "policy",
 	"ComponentMCPSandboxPolicy": "mode overlay spec",
 }

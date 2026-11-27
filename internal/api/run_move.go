@@ -50,7 +50,7 @@ func (s *Server) handleMoveRun(w http.ResponseWriter, r *http.Request) {
 		To string `json:"to"`
 	}
 	if msg := decodeStrictMsg(w, r, &body); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
 	actorType, principal := actorFromRequest(r)
@@ -96,12 +96,12 @@ func (s *Server) handleRunPlacements(w http.ResponseWriter, r *http.Request) {
 	}
 	moves, err := ms.ListRunMoves(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "The run's moves could not be read.")
+		writeServerError(w, r, "The run's moves could not be read.", err)
 		return
 	}
 	placements, err := ms.ListRunPlacements(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "The run's placements could not be read.")
+		writeServerError(w, r, "The run's placements could not be read.", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runPlacementsAnswer{Moves: moves, Placements: placements})

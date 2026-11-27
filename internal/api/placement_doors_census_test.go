@@ -21,6 +21,7 @@ var localEligibilityDoors = map[string]string{
 	"runner_trust.go judgeAtTrust":                         "new run: judges the caller's plan, which carries them",
 	"run_placement_spec.go classifyLocalDispatch":          "new run: sets them after localResolvedPlan",
 	"run_placement_revive.go refreshLocalDeploymentConfig": "revive: none; a revive keeps its runner",
+	"run_move_policy.go moveDestinationPlan":               "move: sets them after localResolvedPlan; a move lands on a runner the run has not run on",
 }
 
 // localEligibilityCallsIn is each function that calls placement.LocalEligibility, as "file function".
@@ -60,7 +61,7 @@ func TestLocalEligibilityDoors_ClassifiedForMachineKindDenials(t *testing.T) {
 	}
 }
 
-// A fifth call site reds the census.
+// A planted call site reds the census.
 func TestLocalEligibilityDoorsCensusFlagsAPlantedTwin(t *testing.T) {
 	_, files := parsePackageSources(t, ".")
 	f, err := parser.ParseFile(token.NewFileSet(), "planted.go", `package api

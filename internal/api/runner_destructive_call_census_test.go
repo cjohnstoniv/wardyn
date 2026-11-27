@@ -105,6 +105,13 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/reconcile.go", "boundedTeardown", "teardown"}:        {1, guardChecked},
 	// The idle and max-age stop: the lock's loss is asked before the call, not during it.
 	{"cmd/wardynd/adapters.go", "lifecycleStopper.stop", "StopSandbox"}: {1, "unguarded: K16"},
+	// A move's removal of a sandbox it made that the run never ran on (a failed move's destination), and the move
+	// sweep's of a committed move's source once the run's row names another (moveRefLive): no revive takes either ref.
+	{"internal/api/run_move_exec.go", "Server.moveTeardownDestination", "KillSandbox"}: {1, guardNotReplaceable},
+	{"internal/api/run_move_exec.go", "Server.sweepRunMove", "KillSandbox"}:            {1, guardNotReplaceable},
+	// The end of a runner-held run whose strict outage allowance is spent, after its loss mark, and its stop where
+	// the runner cannot keep an ended sandbox: as the lost-run sweeps' own stops, the mark's lock can be lost after.
+	{"internal/api/run_outage_hold.go", "Server.endStrictRunnerRun", "StopSandbox"}: {1, "unguarded: K11"},
 
 	// The wrappers' callers. Each carries its wrapper's guard; a caller with a stronger guard of its own may name
 	// that instead.
@@ -123,6 +130,7 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_lease.go", "Server.endRun", "endSandbox"}:                                                     {1, "unguarded: K11"},
 	{"internal/api/run_lease.go", "Server.leaseRun", "endSandbox"}:                                                   {1, "unguarded: K11"},
 	{"internal/api/run_lost.go", "Server.stopLostSandbox", "endSandbox"}:                                             {1, "unguarded: K11"},
+	{"internal/api/run_outage_hold.go", "Server.endStrictRunnerRun", "endSandbox"}:                                   {1, "unguarded: K11"},
 	{"internal/api/run_agent_cut.go", "Server.copyBackCut", "cutAgent"}:                                              {1, guardNotReplaceable},
 	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "cutAgent"}:                                 {1, guardNotReplaceable},
 	{"internal/api/run_folder_quiesce.go", "Server.quiesceRunnerRun", "cutAgent"}:                                    {1, guardNotReplaceable},

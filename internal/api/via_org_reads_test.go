@@ -206,11 +206,24 @@ func TestViaOrgGrant_ReadsTheGrantsOncePerRunState(t *testing.T) {
 	reads(5, "the right runner's request after a mismatch")
 }
 
-// The via_org grants a run's state holds are only sound while credential_grants rows never change after their
-// insert: this walks the module's non-test code for a statement that would change or remove one.
+// credentialGrantsDeliveryWriters are the files that may change a credential_grants row, and only its delivery
+// column. A move's commit (store_run_moves.go) records each grant's delivery at the destination as it puts the run on
+// another runner: a via_org state belongs to one runner (viaOrgRunFor answers false for any other), the relay binding
+// refuses the old runner once the run row names the new one (refuseRelayBinding), and the watch drops a moved run's
+// state (viaOrgRunMoved, TestViaOrgRunState_PausedIsAway), so no state that read a row before the commit serves the
+// run after it.
+var credentialGrantsDeliveryWriters = map[string]bool{
+	"internal/store/store_run_moves.go": true,
+}
+
+// The via_org grants a run's state holds are only sound while credential_grants rows never change under that state:
+// this walks the module's non-test code for a statement that would change or remove one, outside a move's delivery
+// record (credentialGrantsDeliveryWriters).
 func TestCredentialGrantsStayInsertOnly(t *testing.T) {
 	root := filepath.Join("..", "..")
 	changes := regexp.MustCompile(`(?i)(update\s+credential_grants|delete\s+from\s+credential_grants)`)
+	delivery := regexp.MustCompile(`(?i)update\s+credential_grants\s+set\s+delivery\s*=\s*\$\d+\s+where\s+id\s*=`)
+	seen := map[string]bool{}
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -220,6 +233,14 @@ func TestCredentialGrantsStayInsertOnly(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			rel, _ := filepath.Rel(root, path)
+			if rel = filepath.ToSlash(rel); credentialGrantsDeliveryWriters[rel] {
+				seen[rel] = true
+				if n := len(delivery.FindAll(b, -1)); n == 0 || n != len(changes.FindAll(b, -1)) {
+					t.Errorf("%s changes credential_grants beyond one grant's delivery column", rel)
+				}
+				return nil
+			}
 			if m := changes.Find(b); m != nil {
 				t.Errorf("%s changes or removes credential_grants rows (%q): the grants a run's via_org state holds "+
 					"(viaOrgRun.grants) and brokeredForgeMintKind (internal_mint.go) rely on the table being insert-only", path, m)
@@ -228,6 +249,11 @@ func TestCredentialGrantsStayInsertOnly(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+	for rel := range credentialGrantsDeliveryWriters {
+		if !seen[rel] {
+			t.Errorf("credentialGrantsDeliveryWriters names %s, which is not in the module", rel)
 		}
 	}
 }

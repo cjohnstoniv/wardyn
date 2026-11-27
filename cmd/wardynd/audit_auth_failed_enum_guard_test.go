@@ -27,10 +27,11 @@ var (
 	authFailedCall          = regexp.MustCompile(`(?s)auditAuthFailed\(r,\s*([^),]+)\)`)
 	authFailedAsCall        = regexp.MustCompile(`(?s)auditAuthFailedAs\(r,\s*([^,)]+),\s*([^),]+)\)`)
 	withSessionRejectedCall = regexp.MustCompile(`withSessionRejected\([^,]+,\s*"([^"]+)"\)`)
-	// A CONST line of the shape `name = "value"` — how both the reasons and the
-	// *Actor names are declared. Scanned only inside a const declaration, so a
-	// local `reason = "..."` assignment in some handler cannot shadow one.
-	goStringConst = regexp.MustCompile(`^\s*(?:const\s+)?(\w+)\s*=\s*"([^"]*)"\s*$`)
+	// A CONST line of the shape `name = "value"`, with or without a trailing line
+	// comment — how both the reasons and the *Actor names are declared. Scanned
+	// only inside a const declaration, so a local `reason = "..."` assignment in
+	// some handler cannot shadow one.
+	goStringConst = regexp.MustCompile(`^\s*(?:const\s+)?(\w+)\s*=\s*"([^"]*)"\s*(?://.*)?$`)
 	// A CONST line of the shape `name = pkg.Ident` — the one-spelling alias G4
 	// prefers over a second string literal (authFailedUserTypeUnknown =
 	// oidc.DenialUserTypeUnknown). Resolved in a second pass once the aliased
