@@ -55,11 +55,29 @@ describe("ChecksStrip", () => {
     expect(screen.getByText(T.HELD_FOR(3))).toBeInTheDocument();
   });
 
-  it("says nothing about a hold for a run draft, which is never held", () => {
-    render(<ChecksStrip checks={answer({ review: { verdict: "narrows_held" } })} subject="" kind="run" />);
+  it("says nothing about a hold for a run draft, which is never held, and nothing about a ceiling the server did not state", () => {
+    // not_checked is what the server's run review always returns.
+    render(<ChecksStrip checks={answer({ review: { verdict: "not_checked" } })} subject="" kind="run" />);
     expect(screen.queryByText(/held for/)).toBeNull();
-    expect(screen.getByText(T.WITHIN_CEILING)).toBeInTheDocument();
+    expect(screen.queryByText(T.WITHIN_CEILING)).toBeNull();
+    expect(screen.getByText(T.VALID)).toBeInTheDocument();
     expect(screen.getByText(RAIL_CHECK.HINT)).toBeInTheDocument();
+  });
+
+  it("says nothing about a ceiling when the answer carries no review at all", () => {
+    render(<ChecksStrip checks={answer({ review: null })} subject="" kind="run" />);
+    expect(screen.queryByText(T.WITHIN_CEILING)).toBeNull();
+  });
+
+  it("says Within your ceiling only for a checked verdict that does not widen, and never while a host is left out", () => {
+    render(<ChecksStrip checks={answer({ review: { verdict: "narrows_held" } })} subject="" kind="run" />);
+    expect(screen.getByText(T.WITHIN_CEILING)).toBeInTheDocument();
+    cleanup();
+    render(<ChecksStrip checks={answer({ review: { verdict: "narrows_held" } })} subject="" kind="run" leftOut />);
+    expect(screen.queryByText(T.WITHIN_CEILING)).toBeNull();
+    cleanup();
+    render(<ChecksStrip checks={answer({ review: { verdict: "not_checked" } })} subject="" kind="run" leftOut />);
+    expect(screen.queryByText(T.WITHIN_CEILING)).toBeNull();
   });
 
   it("lists the errors by field and no verdict while the draft is invalid", () => {

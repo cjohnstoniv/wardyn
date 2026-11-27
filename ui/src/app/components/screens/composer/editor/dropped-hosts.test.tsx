@@ -17,13 +17,13 @@ afterEach(() => {
 });
 
 // The server's entry carries a machine code too; it is never shown.
-const ENTRY = { host: "artifactory.example.internal", unit: "Payments", code: "not_in_ceiling", admin_change_approvals: 2 };
+const ENTRY = { host: "artifactory.example.internal", unit: "Payments", code: "outside_ceiling", admin_change_approvals: 2 };
 
 describe("DroppedHosts", () => {
   it("says a left-out host in plain words and never shows the server's code", () => {
     render(<DroppedHosts items={[ENTRY]} />);
     expect(screen.getByText(T.LEFT_OUT("artifactory.example.internal", "Payments"))).toBeInTheDocument();
-    expect(screen.queryByText(/not_in_ceiling/)).toBeNull();
+    expect(screen.queryByText(/outside_ceiling/)).toBeNull();
   });
 
   it("opens the admin-only note with the count that admin's change would wait for, and sends nothing", async () => {

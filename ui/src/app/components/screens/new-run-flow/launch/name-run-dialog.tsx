@@ -190,7 +190,8 @@ function NameRunForm({ onOpenChange, onCreated, onScheduled, pending }: Pick<Nam
             void create.schedule({ name: title.trim(), every: repeat, time: start.choice.time, time_zone: start.choice.zone, request }, () => onScheduled?.());
             return;
           }
-          void create.launch(intentToWire(draft.intent, { title: title.trim(), description: description.trim(), start: start && startWire(start.choice) }).body);
+          const session = draft.origin.kind === "assistant" ? draft.origin.assistantSession : undefined;
+          void create.launch(intentToWire(draft.intent, { title: title.trim(), description: description.trim(), start: start && startWire(start.choice) }).body, session);
         }}
       >
         <DialogTitle>{NR_LAUNCH.TITLE}</DialogTitle>

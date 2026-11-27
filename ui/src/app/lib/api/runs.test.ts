@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runs } from "./runs";
+import { setExpectedPrincipal } from "./core";
 import { aheadByHours } from "../test-clock";
 
 // grantsFromRecords projects the GET /runs/{id}/grants ELIGIBILITY records into
@@ -263,9 +264,15 @@ describe("runs.createRunWire — the optional headers", () => {
 
   it("passes a header into the request and still names the person", async () => {
     const f = stub();
-    await runs.createRunWire({ title: "x" }, { "X-Wardyn-Assistant-Session": "s-1" });
+    setExpectedPrincipal("alice@example.com");
+    try {
+      await runs.createRunWire({ title: "x" }, { "X-Wardyn-Assistant-Session": "s-1" });
+    } finally {
+      setExpectedPrincipal("");
+    }
     const h = headersOf(f);
     expect(h.get("X-Wardyn-Assistant-Session")).toBe("s-1");
-    expect(h.get("Content-Type")).toBe("application/json");
+    // The person marking (asPerson) goes out with the draft, so another tab's cookie cannot submit it as someone else.
+    expect(h.get("X-Wardyn-Expected-Principal")).toBe(encodeURIComponent("alice@example.com"));
   });
 });

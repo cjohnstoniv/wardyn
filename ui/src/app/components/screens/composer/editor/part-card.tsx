@@ -15,7 +15,7 @@ import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
 import { CHANGES } from "../../../../lib/governance-copy";
 import { Button } from "../../../ui/button";
 import { Textarea } from "../../../ui/textarea";
-import { hostError } from "../../new-run-flow/checks/custom-component-form-model";
+import { hostError, hostListError } from "../../new-run-flow/checks/custom-component-form-model";
 import { FIELD_LABEL, SUMMARY } from "../../run-detail/policy-tab-copy";
 
 // The part names of a draft, in the Summary's words. A name this map lacks falls through to the Summary's field labels.
@@ -38,8 +38,10 @@ export function valueLines(value: unknown): string[] {
   return [String(value)];
 }
 
-// The sections whose value is a list of hosts, which Guided setup's host check judges entry by entry.
+// The sections whose value is a list of hosts, which Guided setup's host check judges entry by entry and for a host
+// listed twice; and the one whose rules each name a host (the same host may have several rules, so no twice check).
 const HOST_SECTIONS = new Set(["allowed_domains", "denied_domains"]);
+const RULE_SECTION = "host_rules";
 
 /**
  * Reads the text a person typed back into a part's value. A list of hosts must be a list of strings that each pass
@@ -54,9 +56,19 @@ export function parsePartText(section: string, text: string): { value: unknown }
   }
   if (HOST_SECTIONS.has(section)) {
     if (!Array.isArray(value) || value.some((h) => typeof h !== "string")) return { error: T.PART_EDIT_INVALID };
-    for (const h of value as string[]) {
-      const bad = hostError(h);
-      if (bad) return { error: bad };
+    const bad = hostListError(value as string[]);
+    if (bad) return { error: bad };
+  }
+  if (section === RULE_SECTION) {
+    const sets = Array.isArray(value) ? value : null;
+    if (!sets || sets.some((set) => !set || !Array.isArray((set as { rules?: unknown }).rules))) return { error: T.PART_EDIT_INVALID };
+    for (const set of sets as { rules: unknown[] }[]) {
+      for (const rule of set.rules) {
+        const host = (rule as { host?: unknown } | null)?.host;
+        if (typeof host !== "string") return { error: T.PART_EDIT_INVALID };
+        const bad = hostError(host);
+        if (bad) return { error: bad };
+      }
     }
   }
   return { value };
@@ -70,12 +82,14 @@ export interface PartCardProps {
   edited: boolean;
   /** The server's part says it came from a build file; never read from the assistant's text. */
   fromBuildFile: boolean;
+  /** A newer proposal says something other than what the person accepted or edited. */
+  changedSince?: boolean;
   onAccept: () => void;
   onDiscard: () => void;
   onEdit: (value: unknown) => void;
 }
 
-export function PartCard({ section, value, status, edited, fromBuildFile, onAccept, onDiscard, onEdit }: PartCardProps) {
+export function PartCard({ section, value, status, edited, fromBuildFile, changedSince, onAccept, onDiscard, onEdit }: PartCardProps) {
   const [editing, setEditing] = React.useState(false);
   const [text, setText] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -107,6 +121,7 @@ export function PartCard({ section, value, status, edited, fromBuildFile, onAcce
         <span className="label-eyebrow">{sectionLabel(section)}</span>
         <span className="flex flex-wrap items-center gap-1.5">
           {fromBuildFile && <Chip tone="neutral">{T.PART_FROM_BUILD_FILE}</Chip>}
+          {changedSince && <Chip tone="warning">{T.CHANGED_SINCE}</Chip>}
           <Chip tone={accepted ? (edited ? "primary" : "success") : "info"}>{!accepted ? T.PART_PROPOSED : edited ? T.PART_EDITED : T.PART_ACCEPTED}</Chip>
         </span>
       </div>

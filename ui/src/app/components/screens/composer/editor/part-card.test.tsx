@@ -8,7 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CHANGES } from "../../../../lib/governance-copy";
 import { ASSISTANT as T } from "../../../wardyn/copy/assistant";
-import { hostError } from "../../new-run-flow/checks/custom-component-form-model";
+import { hostError, hostListError } from "../../new-run-flow/checks/custom-component-form-model";
 import { SUMMARY } from "../../run-detail/policy-tab-copy";
 import { PartCard, parsePartText, valueLines, type PartCardProps } from "./part-card";
 
@@ -78,6 +78,24 @@ describe("parsePartText", () => {
     expect(hostError(bad)).not.toBeNull();
     expect(parsePartText("allowed_domains", JSON.stringify(["github.com", bad]))).toEqual({ error: hostError(bad) });
     expect(parsePartText("allowed_domains", '["github.com"]')).toEqual({ value: ["github.com"] });
+  });
+
+  it("refuses a host listed twice with Guided setup's own sentence, however long the list", () => {
+    const twice = hostListError(["github.com", "github.com"]);
+    expect(twice).toBeTruthy();
+    expect(parsePartText("allowed_domains", '["github.com","github.com"]')).toEqual({ error: twice });
+    expect(parsePartText("denied_domains", '["a.example","b.example","a.example"]')).toEqual({ error: hostListError(["a.example", "b.example", "a.example"]) });
+    const many = Array.from({ length: 60 }, (_, i) => `h${i}.example`);
+    expect(parsePartText("allowed_domains", JSON.stringify(many))).toEqual({ value: many });
+    expect(parsePartText("allowed_domains", JSON.stringify([...many, "h3.example"]))).toEqual({ error: hostListError([...many, "h3.example"]) });
+  });
+
+  it("judges the host of each rule of host_rules, which may name a host more than once", () => {
+    const bad = "https://x.example/path";
+    const rules = (...hosts: string[]) => JSON.stringify([{ rules: hosts.map((host) => ({ host, effect: "allow" })) }]);
+    expect(parsePartText("host_rules", rules("github.com", bad))).toEqual({ error: hostError(bad) });
+    expect(parsePartText("host_rules", rules("github.com", "github.com"))).toEqual({ value: JSON.parse(rules("github.com", "github.com")) });
+    expect(parsePartText("host_rules", '{"rules":1}')).toEqual({ error: T.PART_EDIT_INVALID });
   });
 
   it("wants a list of strings for a host list, and any JSON for another field", () => {

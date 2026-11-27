@@ -105,9 +105,9 @@ const FRAME: Partial<Record<NewRunScreenName, string>> = {
   launched: "mx-auto w-[min(580px,calc(100%-40px))] pt-[clamp(80px,13vh,140px)] pb-[110px]",
 };
 
-/** Where the guard sends a scratch or composer draft, or undefined when the screen may open. */
+/** Where the guard sends a scratch, composer or assistant draft, or undefined when the screen may open. */
 function guardTarget(draft: NewRunDraft, loc: NewRunLocation): NewRunLocation | undefined {
-  if (draft.origin.kind !== "scratch" && draft.origin.kind !== "composer") return undefined;
+  if (draft.origin.kind !== "scratch" && draft.origin.kind !== "composer" && draft.origin.kind !== "assistant") return undefined;
   const first = firstInvalidStep(draft.intent);
   if (!first) return undefined;
   const beyond = loc.screen === "review" || (loc.screen === "step" && NEW_RUN_STEPS.indexOf(loc.step) > NEW_RUN_STEPS.indexOf(first));

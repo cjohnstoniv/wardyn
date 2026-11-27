@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchSpy);
   fetchSpy.mockReset();
   confirm.mockReset().mockResolvedValue({ id: "s-1", state: "starting", preview_digest: "d2" } as never);
-  preview.mockReset().mockResolvedValue({ digest: "d-new" } as never);
+  preview.mockReset().mockResolvedValue({ digest: "d-new", sections: [{ label: "Your unit", text: "ceiling: github.com\nnew since you looked", untrusted: false }] } as never);
   vi.spyOn(workspaces, "listWorkspaces").mockResolvedValue(WORKSPACES);
 });
 afterEach(() => {
@@ -114,6 +114,9 @@ describe("RepoConfirm", () => {
     const { onSent } = show();
     await press();
     expect(await screen.findByText(T.PREVIEW_CHANGED)).toBeInTheDocument();
+    // The new preview's records are on screen before the person can send again.
+    expect(screen.getByText("Your unit")).toBeInTheDocument();
+    expect(screen.getByText(/new since you looked/)).toBeInTheDocument();
     expect(preview).toHaveBeenCalledWith("compose", { kind: "template" });
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(onSent).not.toHaveBeenCalled();

@@ -8,7 +8,7 @@
 // the confirmation lists their names and sizes, what was skipped and what was held back, and nothing is sent to the
 // provider until the person presses Send files.
 import * as React from "react";
-import { assistant, type AssistantPurpose, type AssistantSessionRequest, type AssistantTarget } from "../../../../lib/api/assistant";
+import { assistant, type AssistantPreview, type AssistantPurpose, type AssistantSessionRequest, type AssistantTarget } from "../../../../lib/api/assistant";
 import { HttpError } from "../../../../lib/api/core";
 import { getErrorMessage } from "../../../../lib/format";
 import { workspaces as workspacesApi } from "../../../../lib/api/workspaces";
@@ -145,7 +145,8 @@ export interface RepoConfirmProps {
 
 export function RepoConfirm({ sessionId, provider, files, previewDigest, purpose, target, onSent, onReturn }: RepoConfirmProps) {
   const [digest, setDigest] = React.useState(previewDigest);
-  const [stale, setStale] = React.useState(false);
+  // The records of the preview read again after a stale answer: shown before the person sends the new digest.
+  const [records, setRecords] = React.useState<AssistantPreview["sections"] | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -162,7 +163,7 @@ export function RepoConfirm({ sessionId, provider, files, previewDigest, purpose
         try {
           const fresh = await assistant.postPreview(purpose, target);
           setDigest(fresh.digest);
-          setStale(true);
+          setRecords(fresh.sections ?? []);
         } catch (again) {
           setError(getErrorMessage(again));
         }
@@ -179,7 +180,17 @@ export function RepoConfirm({ sessionId, provider, files, previewDigest, purpose
   return (
     <section data-testid="composer-repo-confirm" className="min-w-0 space-y-2.5">
       <h3 className="text-body font-medium">{T.SEND_FILES_TITLE(files.files.length, provider)}</h3>
-      {stale && <Notice tone="info">{T.PREVIEW_CHANGED}</Notice>}
+      {records && <Notice tone="info">{T.PREVIEW_CHANGED}</Notice>}
+      {records && (
+        <div data-testid="composer-repo-records" className="min-w-0 space-y-2">
+          {records.map((r, i) => (
+            <div key={`${r.label}-${i}`} className="min-w-0 rounded-lg border border-border p-2.5">
+              <span className="label-eyebrow">{r.label}</span>
+              <pre className="mono mt-1 whitespace-pre-wrap break-words text-meta">{r.text}</pre>
+            </div>
+          ))}
+        </div>
+      )}
       <ul className="space-y-0.5">
         {files.files.map((f) => (
           <li key={f.name} className="flex flex-wrap items-baseline justify-between gap-2 text-body">

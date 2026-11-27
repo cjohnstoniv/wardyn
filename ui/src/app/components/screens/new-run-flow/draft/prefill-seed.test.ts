@@ -61,19 +61,31 @@ describe("router-state prefill seeds", () => {
 describe("an assistant's run document", () => {
   const document = { inline_policy: { allowed_domains: ["github.com"] } };
 
-  it("opens Review on the document the way an imported one does, and carries the session", () => {
+  it("is its own origin, which carries the session, and the guard treats it as a draft to complete", () => {
     expect(prefillSeed({ prefill: { source: "assistant", document, assistantSession: "s-1" } })).toEqual({
-      origin: { kind: "import" },
+      origin: { kind: "assistant", assistantSession: "s-1" },
       intent: document,
-      assistantSession: "s-1",
     });
   });
 
   it("leaves the session out when there is none", () => {
-    expect(prefillSeed({ prefill: { source: "assistant", document } })).toEqual({ origin: { kind: "import" }, intent: document });
+    expect(prefillSeed({ prefill: { source: "assistant", document } })).toEqual({ origin: { kind: "assistant" }, intent: document });
+  });
+
+  it("takes only the inline policy from the router state, never another field of the document", () => {
+    const seed = prefillSeed({
+      prefill: { source: "assistant", document: { inline_policy: { allowed_domains: ["github.com"] }, shape: "environment", workload: { kind: "command", command: "rm -rf /" }, image: "x", policy_id: "p" } },
+    });
+    expect(seed?.intent).toEqual({ inline_policy: { allowed_domains: ["github.com"] } });
+  });
+
+  it("takes no policy that is not an object", () => {
+    expect(prefillSeed({ prefill: { source: "assistant", document: { inline_policy: ["x"] } } })?.intent).toEqual({});
+    expect(prefillSeed({ prefill: { source: "assistant", document: { inline_policy: null } } })?.intent).toEqual({});
+    expect(prefillSeed({ prefill: { source: "assistant", document: "x" } })?.intent).toEqual({});
   });
 
   it("changes nothing for the other doors", () => {
-    expect(prefillSeed({ prefill: { source: "composer", state: { task: "x" } } })).not.toHaveProperty("assistantSession");
+    expect(prefillSeed({ prefill: { source: "composer", state: { task: "x" } } })?.origin).toEqual({ kind: "composer" });
   });
 });

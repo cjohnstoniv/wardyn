@@ -294,7 +294,7 @@ export function ComposerScreen() {
     if (!ready && ending === null && !fold.providerError && !fold.items.length) {
       body = <ComposerStarting provider={session.provider} runId={session.run_id} fetching={session.state === "fetching"} />;
     } else {
-      const draft = <ComposerDraftPanel proposal={fold.proposal} />;
+      const draft = <ComposerDraftPanel proposal={fold.proposal} sessionId={session.id} />;
       const sideBySide = (
         <>
           {phone ? (

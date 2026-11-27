@@ -39,9 +39,11 @@ export interface ChecksStripProps {
   busy?: boolean;
   /** The server's sentence when the checks could not be read. */
   failed?: string | null;
+  /** The draft left a host or field out because the ceiling refused it. */
+  leftOut?: boolean;
 }
 
-export function ChecksStrip({ checks, subject, kind, busy, failed }: ChecksStripProps) {
+export function ChecksStrip({ checks, subject, kind, busy, failed, leftOut }: ChecksStripProps) {
   const review = checks?.review ?? undefined;
   const verdict = review?.verdict;
   const sentence = checksSentence(review, subject);
@@ -49,6 +51,9 @@ export function ChecksStrip({ checks, subject, kind, busy, failed }: ChecksStrip
   const fresh = risk ? risk.after.items.filter((a) => !(risk.before?.items ?? []).some((b) => sameItem(a, b))) : [];
   const errors = checks?.errors ?? [];
   const widens = verdict === "widens" ? (review?.widens ?? []) : [];
+  // Said only when the server's review checked the draft and found nothing that widens: a run's review is "not_checked"
+  // today, which claims nothing, and a left-out host is outside the ceiling by definition.
+  const within = checks?.valid === true && kind === "run" && verdict === "narrows_held" && !leftOut;
   return (
     <section data-testid="composer-checks" aria-busy={busy ? true : undefined} className="min-w-0 space-y-2 rounded-lg border border-border px-2.5 py-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -65,7 +70,7 @@ export function ChecksStrip({ checks, subject, kind, busy, failed }: ChecksStrip
           <div className="flex flex-wrap items-center gap-2">
             {checks.valid ? <Chip tone="success">{T.VALID}</Chip> : null}
             {checks.valid && review && (kind !== "run" || verdict === "widens") ? <VerdictChip review={review} /> : null}
-            {checks.valid && kind === "run" && verdict !== "widens" ? <Chip tone="success">{T.WITHIN_CEILING}</Chip> : null}
+            {within ? <Chip tone="success">{T.WITHIN_CEILING}</Chip> : null}
             {checks.valid && risk ? <RiskChip risk={risk} /> : null}
           </div>
           {errors.length > 0 && (

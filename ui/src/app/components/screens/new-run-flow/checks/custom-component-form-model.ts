@@ -124,6 +124,15 @@ export function hostError(entry: string): string | null {
   return entry.trim() === canon ? null : T.ERR.HOST_SPELLING(entry, canon);
 }
 
+/** The sentence for the first host of a list a person may not write, or one listed twice; null when the list is fine. */
+export function hostListError(hosts: readonly string[]): string | null {
+  for (let i = 0; i < hosts.length; i++) {
+    const e = hostError(hosts[i]) ?? (hosts.indexOf(hosts[i]) < i ? T.ERR.HOST_TWICE(hosts[i]) : null);
+    if (e) return e;
+  }
+  return null;
+}
+
 function deliveryTarget(s: SecretDraft, choice: string): string {
   if (s.mode === "env") return `env ${s.var.trim()}`;
   if (s.mode === "file") return `file ${s.file.trim()}`;
@@ -170,12 +179,9 @@ export function validateDraft(d: ComponentDraft, opts: { named: boolean; residen
   else if (runes(name) > MAX_NAME_RUNES || CONTROL_RE.test(name)) out.name = T.ERR.NAME_SHAPE(MAX_NAME_RUNES);
 
   const hosts = hostLines(d.hosts);
-  const hostErr = hosts.flatMap((h, i) => {
-    const e = hostError(h) ?? (hosts.indexOf(h) < i ? T.ERR.HOST_TWICE(h) : null);
-    return e ? [e] : [];
-  });
+  const hostErr = hostListError(hosts);
   if (hosts.length > MAX_HOSTS) out.hosts = T.ERR.HOSTS_COUNT(hosts.length, MAX_HOSTS);
-  else if (hostErr.length > 0) out.hosts = hostErr[0];
+  else if (hostErr) out.hosts = hostErr;
 
   if (d.secrets.length > MAX_SECRETS) out.secrets = T.ERR.SECRETS_COUNT(d.secrets.length, MAX_SECRETS);
   const choices = headerHostChoices(hosts);

@@ -40,6 +40,8 @@ export interface PartState {
   readonly status: "proposed" | "accepted";
   readonly edited: boolean;
   readonly fromBuildFile: boolean;
+  /** A newer proposal says something other than what the person accepted or edited; their value is kept. */
+  readonly changedSince?: boolean;
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -50,23 +52,24 @@ export function draftOf(parts: readonly PartState[]): Record<string, unknown> {
 }
 
 /**
- * Lays a new proposal over what the person has. A part they accepted stays accepted when the proposal still says what
- * it says; one the proposal now says differently, and any other proposed part, becomes the new proposal.
+ * Lays a new proposal over what the person has. A part they accepted or edited stays theirs, value and mark: a proposal
+ * that now says something else is flagged on the part (changedSince), never laid over their value. Any other proposed
+ * part becomes the new proposal. Merging the same proposal again, as a reopened sheet does, changes nothing.
  */
 export function mergeProposal(current: readonly PartState[], proposal: EditorProposal | null): PartState[] {
   if (!proposal) return [...current];
   const incoming = new Map(proposal.parts.map((p) => [p.section, p]));
+  const fresh = (next: EditorPart): PartState => ({ section: next.section, value: next.value, proposed: next.value, status: "proposed", edited: false, fromBuildFile: next.from_build_file === true });
   const kept = current.filter((p) => p.status === "accepted" || incoming.has(p.section));
   const merged = kept.map((p): PartState => {
     const next = incoming.get(p.section);
     if (!next) return p;
-    if (p.status === "accepted" && same(p.value, next.value)) return { ...p, proposed: next.value, edited: false, fromBuildFile: next.from_build_file === true };
-    return { section: p.section, value: next.value, proposed: next.value, status: "proposed", edited: false, fromBuildFile: next.from_build_file === true };
+    if (p.status !== "accepted") return fresh(next);
+    const moved = !same(next.value, p.proposed) && !same(next.value, p.value);
+    return { ...p, fromBuildFile: next.from_build_file === true, changedSince: moved || undefined };
   });
   for (const next of proposal.parts) {
-    if (!merged.some((p) => p.section === next.section)) {
-      merged.push({ section: next.section, value: next.value, proposed: next.value, status: "proposed", edited: false, fromBuildFile: next.from_build_file === true });
-    }
+    if (!merged.some((p) => p.section === next.section)) merged.push(fresh(next));
   }
   return merged;
 }
@@ -104,20 +107,31 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   const [parts, setParts] = React.useState<PartState[]>(() => mergeProposal((sessionId && kept.get(sessionId)) || [], proposal));
   const [checks, setChecks] = React.useState<AssistantChecks | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // The checks could not be read, and the session could not take an edit: each stays until its own next success.
   const [failed, setFailed] = React.useState<string | null>(null);
-  // Bumped by a change the person made: the checks run after it, never for a proposal that only arrived.
+  const [editFailed, setEditFailed] = React.useState<string | null>(null);
+  // Bumped by a change the person made or a new proposal: the checks run after it. `answered` is the change the last
+  // answer was for, and `editedAt` the change each edit was, so "Checked again" is only said once its check answered.
   const [changes, setChanges] = React.useState(0);
+  const [answered, setAnswered] = React.useState(0);
+  const [editedAt, setEditedAt] = React.useState<Record<string, number>>({});
+  const changed = React.useRef(0);
   const latest = React.useRef(parts);
   latest.current = parts;
+  const proposed = React.useRef("");
 
   React.useEffect(() => {
     setParts((cur) => mergeProposal(cur, proposal));
+    // A proposal that says something new asks again, so the strip is never the answer for an older draft.
+    const said = JSON.stringify(proposal);
+    if (proposal && said !== proposed.current) setChanges((changed.current += 1));
+    proposed.current = said;
   }, [proposal]);
   React.useEffect(() => {
     if (sessionId) kept.set(sessionId, parts);
   }, [sessionId, parts]);
 
-  const act = (section: string, change: (p: PartState) => PartState | null) => {
+  const act = (section: string, change: (p: PartState) => PartState | null, edit = false) => {
     const next = latest.current.flatMap((p) => {
       if (p.section !== section) return [p];
       const changed = change(p);
@@ -125,10 +139,15 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
     });
     latest.current = next;
     setParts(next);
-    setChanges((n) => n + 1);
+    const stamp = (changed.current += 1);
+    setChanges(stamp);
+    if (edit) setEditedAt((m) => ({ ...m, [section]: stamp }));
     if (sessionId) {
       const after = next.find((p) => p.section === section);
-      void assistant.postEdits(sessionId, { draft: draftOf(next), changed: [{ field: section, value: JSON.stringify(after ? after.value : null) }] }).catch((e: unknown) => setFailed(getErrorMessage(e)));
+      assistant
+        .postEdits(sessionId, { draft: draftOf(next), changed: [{ field: section, value: JSON.stringify(after ? after.value : null) }] })
+        .then(() => setEditFailed(null))
+        .catch((e: unknown) => setEditFailed(getErrorMessage(e)));
     }
   };
 
@@ -142,6 +161,7 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
       return;
     }
     const controller = new AbortController();
+    const stamp = changes;
     setBusy(true);
     const timer = setTimeout(() => {
       assistant
@@ -150,6 +170,7 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
           if (controller.signal.aborted) return;
           setChecks(c);
           setFailed(null);
+          setAnswered(stamp);
           setBusy(false);
         })
         .catch((e: unknown) => {
@@ -167,6 +188,7 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
   }, [changes]);
 
   const edited = parts.filter((p) => p.status === "accepted" && p.edited && !same(p.value, p.proposed));
+  const checkedAgain = edited.filter((p) => (editedAt[p.section] ?? Infinity) <= answered);
   const left = mergeDropped(proposal?.dropped ?? [], checks?.dropped);
 
   const review = () =>
@@ -184,9 +206,10 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
           status={p.status}
           edited={p.edited}
           fromBuildFile={p.fromBuildFile}
+          changedSince={p.changedSince === true}
           onAccept={() => act(p.section, (c) => ({ ...c, status: "accepted" }))}
           onDiscard={() => act(p.section, () => null)}
-          onEdit={(value) => act(p.section, (c) => ({ ...c, value, status: "accepted", edited: !same(value, c.proposed) }))}
+          onEdit={(value) => act(p.section, (c) => ({ ...c, value, status: "accepted", edited: !same(value, c.proposed) }), true)}
         />
       ))}
       <DroppedHosts items={left} />
@@ -211,14 +234,14 @@ export function RunEditor({ proposal, sessionId, target = { kind: "run" }, debou
               ))}
             </TableBody>
           </Table>
-          {edited.map((p) => (
+          {checkedAgain.map((p) => (
             <p key={p.section} role="status" className="text-meta text-muted-foreground">
               {T.YOU_CHANGED(sectionLabel(p.section))}
             </p>
           ))}
         </div>
       )}
-      {(accepted > 0 || checks || failed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={failed} />}
+      {(accepted > 0 || checks || failed || editFailed) && <ChecksStrip checks={checks} subject="" kind={target.kind} busy={busy} failed={editFailed ?? failed} leftOut={left.length > 0} />}
       {accepted > 0 && (
         <Button type="button" disabled={checks?.valid === false} onClick={review}>
           {NR_SHARED.REVIEW_RUN}

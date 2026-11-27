@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The two router-state doors into New Run: the Runs composer and the clone
-// fallback for a run with no launch intent. Both arrive as the older wizard's
-// `{ prefill }` state, read structurally here.
+// The router-state doors into New Run: the Runs composer, the clone fallback
+// for a run with no launch intent, and the assistant's draft. Each arrives as the
+// older wizard's `{ prefill }` state, read structurally here, and each door picks
+// the named fields it takes; router state is never used whole as an intent.
 
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { NewRunOrigin, RunIntent } from "./run-intent";
@@ -28,8 +29,8 @@ export interface RouterPrefill {
     source?: string;
     inlinePolicy?: boolean;
     state?: PrefillState;
-    /** A run document the assistant's draft made: the intent the document door parses. Review opens on it. */
-    document?: RunIntent;
+    /** The assistant's draft; only its `inline_policy` is taken. */
+    document?: Pick<RunIntent, "inline_policy">;
     /** The assistant session the draft came from; the launch names it so the run is marked as drafted with it. */
     assistantSession?: string;
   };
@@ -81,14 +82,19 @@ function cloneIntent(s: PrefillState): RunIntent {
   return { ...common, shape: "agent_task", experience: "interactive", ...(s.agent ? { startup: { kind: "harness", tool: s.agent, ...prompt } } : {}) };
 }
 
+/** The assistant's draft becomes an inline policy and nothing else; the steps choose the rest. */
+function assistantIntent(document: unknown): RunIntent {
+  const policy = (document as { inline_policy?: unknown } | null)?.inline_policy;
+  return policy && typeof policy === "object" && !Array.isArray(policy) ? { inline_policy: policy as RunIntent["inline_policy"] } : {};
+}
+
+const assistantOrigin = (session: unknown): NewRunOrigin => (typeof session === "string" && session ? { kind: "assistant", assistantSession: session } : { kind: "assistant" });
+
 /** The seed a router-state prefill makes, or undefined when the state holds none. */
-export function prefillSeed(state: unknown): { origin: NewRunOrigin; intent: RunIntent; assistantSession?: string } | undefined {
+export function prefillSeed(state: unknown): { origin: NewRunOrigin; intent: RunIntent } | undefined {
   const prefill = (state as RouterPrefill | null)?.prefill;
   if (!prefill) return undefined;
-  if (prefill.document) {
-    // A document the assistant drafted is a whole run document, so it opens Review the way an imported one does.
-    return { origin: { kind: "import" }, intent: prefill.document, ...(prefill.assistantSession ? { assistantSession: prefill.assistantSession } : {}) };
-  }
+  if (prefill.document) return { origin: assistantOrigin(prefill.assistantSession), intent: assistantIntent(prefill.document) };
   const s = prefill.state ?? {};
   return prefill.source === "composer"
     ? { origin: { kind: "composer" }, intent: composerIntent(s) }

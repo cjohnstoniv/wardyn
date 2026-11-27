@@ -19,5 +19,10 @@ describe("Composer components render no copy of their own", () => {
     "composer-trail.tsx",
     "composer-draft-panel.tsx",
     "composer-phone.tsx",
+    "editor/checks-strip.tsx",
+    "editor/dropped-hosts.tsx",
+    "editor/part-card.tsx",
+    "editor/repo-confirm.tsx",
+    "editor/run-editor.tsx",
   ]);
 });

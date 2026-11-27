@@ -104,6 +104,15 @@ describe("New Run route (U9)", () => {
     expect(text("state")).toBe("null");
   });
 
+  it("sends an assistant's hand-off with an incomplete draft to its first invalid step, never to Review", async () => {
+    show({ pathname: "/runs/new", state: { prefill: { source: "assistant", assistantSession: "s-1", document: { inline_policy: { allowed_domains: ["github.com"] } } } } });
+    expect(await screen.findByText("shape")).toBeInTheDocument();
+    expect(text("origin")).toBe("assistant");
+    expect(text("path")).toBe("/runs/new?step=shape");
+    expect(JSON.parse(text("intent") ?? "")).toEqual({ inline_policy: { allowed_domains: ["github.com"] } });
+    expect(text("state")).toBe("null");
+  });
+
   it("seeds a clone from the run page's prefill as origin clone, opens Review and drops the router state", async () => {
     const prefill = { inlinePolicy: false, state: { title: "Old", runType: "agent", mode: "batch", agent: "claude-code", task: "fix it", workspaces: [] } };
     show({ pathname: "/runs/new", state: { prefill } });

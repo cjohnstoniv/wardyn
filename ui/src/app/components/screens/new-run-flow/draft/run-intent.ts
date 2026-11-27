@@ -42,6 +42,12 @@ export type NewRunOrigin =
   | { kind: "import" }
   | { kind: "composer" }
   /**
+   * The assistant's draft, handed over by the composer: only its inline policy, to be completed on the steps like a
+   * scratch draft. assistantSession is the session it came from; the launch names it so the run is marked as drafted
+   * with it. It is never a whole run document and never an import (that door commits only after the server's read).
+   */
+  | { kind: "assistant"; assistantSession?: string }
+  /**
    * runId is absent while the older clone door's prefill does not carry it.
    * policyDropped: the source run's inline policy was not kept, so the clone
    * falls back to the default policy; Review states it.

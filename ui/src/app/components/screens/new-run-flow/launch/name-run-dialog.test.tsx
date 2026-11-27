@@ -19,7 +19,7 @@ import type { PreflightResult } from "../../../../lib/types/preflight";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { OperatorProvider } from "../../../wardyn/operator-context";
-import type { RunIntent } from "../draft/run-intent";
+import type { NewRunOrigin, RunIntent } from "../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../new-run-route";
 import { NameRunDialog, summaryLine } from "./name-run-dialog";
 
@@ -56,10 +56,11 @@ const create = vi.fn();
 const onCreated = vi.fn();
 const onOpenChange = vi.fn();
 
-function Seeded({ children }: { children: React.ReactNode }) {
+const SCRATCH: NewRunOrigin = { kind: "scratch" };
+function Seeded({ children, origin = { kind: "scratch" } }: { children: React.ReactNode; origin?: NewRunOrigin }) {
   const dispatch = useNewRunDispatch();
   const draft = useNewRunDraft();
-  React.useEffect(() => dispatch({ type: "seed", origin: { kind: "scratch" }, intent: INTENT }), [dispatch]);
+  React.useEffect(() => dispatch({ type: "seed", origin, intent: INTENT }), [dispatch, origin]);
   return draft.intent === INTENT ? <>{children}</> : null;
 }
 function Typed() {
@@ -67,12 +68,12 @@ function Typed() {
   return <p data-testid="typed">{JSON.stringify(launch)}</p>;
 }
 
-function open() {
+function open(origin: NewRunOrigin = SCRATCH) {
   render(
     <MemoryRouter>
       <OperatorProvider operator={false} principal="alice">
         <NewRunDraftProvider owner="alice">
-          <Seeded>
+          <Seeded origin={origin}>
             <NameRunDialog open onOpenChange={onOpenChange} onCreated={onCreated} />
             <Typed />
           </Seeded>
@@ -237,6 +238,33 @@ describe("Name this run: Launch", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "run-1", state: "PENDING" }));
     expect(create).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0][0]).toMatchObject({ mode_contract: "0.9", shape: "environment", title: "nightly", description: "for the team" });
+  });
+});
+
+describe("Name this run: an assistant's draft", () => {
+  const launchFrom = async (origin: NewRunOrigin) => {
+    open(origin);
+    const box = await dialog();
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "from the assistant");
+    await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+    await userEvent.click(launchButton());
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  };
+
+  it("names the assistant session on the create when the draft came from one", async () => {
+    await launchFrom({ kind: "assistant", assistantSession: "s-1" });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][1]).toEqual({ "X-Wardyn-Assistant-Session": "s-1" });
+  });
+
+  it("sends no assistant header for a draft that did not come from one", async () => {
+    await launchFrom({ kind: "scratch" });
+    expect(create.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("sends none for an assistant origin with no session", async () => {
+    await launchFrom({ kind: "assistant" });
+    expect(create.mock.calls[0]).toHaveLength(1);
   });
 });
 

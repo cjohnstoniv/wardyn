@@ -18,7 +18,7 @@ const HOSTS = { section: "allowed_domains", value: ["github.com", "api.github.co
 const CRED = { section: "eligible_grants", value: [{ kind: "git_pat", host: "github.com" }] };
 const PROPOSAL: EditorProposal = { parts: [HOSTS, CRED], dropped: [] };
 
-const CHECKS: AssistantChecks = { valid: true, errors: [], review: { verdict: "narrows_held" }, risk: null, approvals_needed: 0, dropped: [] };
+const CHECKS: AssistantChecks = { valid: true, errors: [], review: { verdict: "not_checked" }, risk: null, approvals_needed: 0, dropped: [] };
 const edits = vi.spyOn(assistant, "postEdits");
 const checks = vi.spyOn(assistant, "postChecks");
 
@@ -41,17 +41,26 @@ function Arrived() {
 // Each test has its own session: what the person accepted is kept per session.
 let next = 0;
 const SESSION = () => `s-run-${next}`;
+const tree = (props: Partial<React.ComponentProps<typeof RunEditor>>, session: string) => (
+  <MemoryRouter>
+    <Routes>
+      <Route path="/" element={<RunEditor proposal={PROPOSAL} sessionId={session} {...props} />} />
+      <Route path={NEW_RUN_PATH} element={<Arrived />} />
+    </Routes>
+  </MemoryRouter>
+);
 function editor(props: Partial<React.ComponentProps<typeof RunEditor>> = {}) {
-  return render(
-    <MemoryRouter>
-      <Routes>
-        <Route path="/" element={<RunEditor proposal={PROPOSAL} sessionId={SESSION()} {...props} />} />
-        <Route path={NEW_RUN_PATH} element={<Arrived />} />
-      </Routes>
-    </MemoryRouter>,
-  );
+  const session = SESSION();
+  const view = render(tree(props, session));
+  // A newer proposal, as the stream folds one in, on the same mounted editor.
+  return { ...view, propose: (proposal: EditorProposal) => view.rerender(tree({ ...props, proposal }, session)) };
 }
-const card = (section: string) => screen.getByText(section === "allowed_domains" ? SUMMARY.allowedHosts : "Credentials").closest("[data-testid=composer-part]") as HTMLElement;
+const edit = (section: string, json: string) => {
+  fireEvent.click(within(card(section), CHANGES.OP.update));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: json } });
+  fireEvent.click(screen.getByRole("button", { name: T.PART_EDIT_DONE }));
+};
+const card = (section: string) => document.querySelector(`[data-testid=composer-part][data-section=${section}]`) as HTMLElement;
 const within = (el: HTMLElement, name: string) => Array.from(el.querySelectorAll("button")).find((b) => b.textContent === name) as HTMLButtonElement;
 const accept = (section: string) => fireEvent.click(within(card(section), T.PART_ACCEPT));
 const settle = async (ms = 0) => {
@@ -101,9 +110,9 @@ describe("accepting, discarding and editing", () => {
     editor();
     accept("allowed_domains");
     expect(edits).toHaveBeenCalledWith(SESSION(), { draft: { allowed_domains: HOSTS.value }, changed: [{ field: "allowed_domains", value: JSON.stringify(HOSTS.value) }] });
-    await settle(399);
+    await settle(390);
     expect(checks).not.toHaveBeenCalled();
-    await settle(1);
+    await settle(10);
     expect(checks).toHaveBeenCalledWith({ target_kind: "run", draft: { allowed_domains: HOSTS.value } }, expect.anything());
     expect(screen.getByTestId("composer-checks")).toBeInTheDocument();
   });
@@ -121,16 +130,72 @@ describe("accepting, discarding and editing", () => {
   it("marks an edit as Edited by you, posts the field that changed and lists it in the diff", async () => {
     editor();
     accept("allowed_domains");
-    fireEvent.click(within(card("allowed_domains"), CHANGES.OP.update));
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: '["github.com"]' } });
-    fireEvent.click(screen.getByRole("button", { name: T.PART_EDIT_DONE }));
+    edit("allowed_domains", '["github.com"]');
     expect(screen.getByText(T.PART_EDITED)).toBeInTheDocument();
     expect(edits).toHaveBeenLastCalledWith(SESSION(), { draft: { allowed_domains: ["github.com"] }, changed: [{ field: "allowed_domains", value: '["github.com"]' }] });
     const diff = screen.getByTestId("composer-edit-diff");
     expect(diff).toHaveTextContent(T.CHANGED_SINCE);
     expect(diff).toHaveTextContent(CHANGES.DIFF_FIELD);
     expect(diff).toHaveTextContent("github.com, api.github.com");
+  });
+
+  it("says \"Checked again\" for a change only after the check for that change answers", async () => {
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    let answer: (c: AssistantChecks) => void = () => undefined;
+    checks.mockImplementationOnce(() => new Promise<AssistantChecks>((ok) => (answer = ok)));
+    edit("allowed_domains", '["github.com"]');
+    expect(screen.queryByText(T.YOU_CHANGED(SUMMARY.allowedHosts))).toBeNull();
+    // The check is out but has not answered.
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(T.YOU_CHANGED(SUMMARY.allowedHosts))).toBeNull();
+    await act(async () => answer(CHECKS));
     expect(screen.getByRole("status")).toHaveTextContent(T.YOU_CHANGED(SUMMARY.allowedHosts));
+  });
+
+  it("does not say \"Checked again\" when the check for the change failed", async () => {
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    checks.mockRejectedValue(new Error("Could not run the checks."));
+    edit("allowed_domains", '["github.com"]');
+    await settle(400);
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not run the checks.");
+    expect(screen.queryByText(T.YOU_CHANGED(SUMMARY.allowedHosts))).toBeNull();
+  });
+
+  it("keeps a failed post of an edit on screen when the next check succeeds", async () => {
+    edits.mockRejectedValue(new Error("The session could not take that edit."));
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("The session could not take that edit.");
+  });
+
+  it("drops an answer for a check a newer change replaced, and its failure too", async () => {
+    let first: { ok: (c: AssistantChecks) => void; no: (e: Error) => void } | undefined;
+    checks.mockImplementationOnce(() => new Promise<AssistantChecks>((ok, no) => (first = { ok, no })));
+    editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(first).toBeDefined();
+    accept("eligible_grants");
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      first?.ok({ ...CHECKS, valid: false, errors: [{ field: "allowed_domains", message: "STALE ANSWER" }] });
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/STALE ANSWER/)).toBeNull();
+    await act(async () => {
+      first?.no(new Error("STALE FAILURE"));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/STALE FAILURE/)).toBeNull();
+    expect(screen.getByTestId("composer-checks")).toHaveTextContent(T.VALID);
   });
 
   it("takes a discarded part out of the draft and tells the session", async () => {
@@ -148,7 +213,8 @@ describe("accepting, discarding and editing", () => {
     accept("allowed_domains");
     await settle(400);
     const strip = screen.getByTestId("composer-checks");
-    expect(strip).toHaveTextContent(T.WITHIN_CEILING);
+    expect(strip).toHaveTextContent(T.VALID);
+    expect(strip).not.toHaveTextContent(T.WITHIN_CEILING);
     expect(strip).not.toHaveTextContent("approve");
   });
 
@@ -162,12 +228,20 @@ describe("accepting, discarding and editing", () => {
 });
 
 describe("a new proposal", () => {
-  it("keeps an accepted part the assistant still proposes as it is, and offers a changed one afresh", () => {
-    const accepted: PartState = { section: "allowed_domains", value: ["a"], proposed: ["a"], status: "accepted", edited: true, fromBuildFile: false };
-    const same = mergeProposal([accepted], { parts: [{ section: "allowed_domains", value: ["a"] }], dropped: [] });
-    expect(same).toEqual([{ ...accepted, edited: false }]);
-    const changed = mergeProposal([accepted], { parts: [{ section: "allowed_domains", value: ["a", "b"] }], dropped: [] });
-    expect(changed).toEqual([{ section: "allowed_domains", value: ["a", "b"], proposed: ["a", "b"], status: "proposed", edited: false, fromBuildFile: false }]);
+  it("keeps an accepted or edited part the person's own, and flags a proposal that now says something else", () => {
+    const accepted: PartState = { section: "allowed_domains", value: ["a"], proposed: ["a"], status: "accepted", edited: false, fromBuildFile: false };
+    const edited: PartState = { section: "allowed_domains", value: ["a", "mine"], proposed: ["a"], status: "accepted", edited: true, fromBuildFile: false };
+    const again = { parts: [{ section: "allowed_domains", value: ["a"] }], dropped: [] };
+    expect(mergeProposal([accepted], again)).toEqual([accepted]);
+    expect(mergeProposal([edited], again)).toEqual([edited]);
+    const moved = { parts: [{ section: "allowed_domains", value: ["a", "b"] }], dropped: [] };
+    expect(mergeProposal([accepted], moved)).toEqual([{ ...accepted, changedSince: true }]);
+    expect(mergeProposal([edited], moved)).toEqual([{ ...edited, changedSince: true }]);
+  });
+
+  it("offers a part afresh only while it is still just proposed", () => {
+    const proposed: PartState = { section: "allowed_domains", value: ["a"], proposed: ["a"], status: "proposed", edited: false, fromBuildFile: false };
+    expect(mergeProposal([proposed], { parts: [{ section: "allowed_domains", value: ["a", "b"] }], dropped: [] })).toEqual([{ ...proposed, value: ["a", "b"], proposed: ["a", "b"] }]);
   });
 
   it("drops a proposed part the assistant no longer proposes, and keeps an accepted one", () => {
@@ -185,6 +259,54 @@ describe("a new proposal", () => {
     editor();
     expect(card("allowed_domains")).toHaveAttribute("data-status", "accepted");
   });
+
+  it("keeps an edited part, its value and Edited by you when the draft is closed and opened again", () => {
+    const first = editor();
+    accept("allowed_domains");
+    edit("allowed_domains", '["github.com"]');
+    first.unmount();
+    editor();
+    const part = card("allowed_domains");
+    expect(part).toHaveAttribute("data-status", "accepted");
+    expect(part).toHaveTextContent(T.PART_EDITED);
+    expect(part).toHaveTextContent("github.com");
+    expect(part).not.toHaveTextContent("api.github.com");
+    expect(part).not.toHaveTextContent(T.CHANGED_SINCE);
+  });
+
+  it("keeps an accepted part, with a Changed since chip, when a newer proposal says something else", () => {
+    const view = editor();
+    accept("allowed_domains");
+    view.propose({ parts: [{ section: "allowed_domains", value: ["github.com", "api.github.com", "uploads.github.com"] }, CRED], dropped: [] });
+    const part = card("allowed_domains");
+    expect(part).toHaveAttribute("data-status", "accepted");
+    expect(part).not.toHaveTextContent("uploads.github.com");
+    expect(part).toHaveTextContent(T.CHANGED_SINCE);
+  });
+
+  it("keeps the person's edit, with a Changed since chip, when a newer proposal says something else", () => {
+    const view = editor();
+    accept("allowed_domains");
+    edit("allowed_domains", '["github.com"]');
+    view.propose({ parts: [{ section: "allowed_domains", value: ["other.example"] }], dropped: [] });
+    const part = card("allowed_domains");
+    expect(part).toHaveAttribute("data-status", "accepted");
+    expect(part).toHaveTextContent(T.PART_EDITED);
+    expect(part).toHaveTextContent("github.com");
+    expect(part).not.toHaveTextContent("other.example");
+    expect(part).toHaveTextContent(T.CHANGED_SINCE);
+  });
+
+  it("asks the server's checks again for a new proposal, so the strip is never for an older draft", async () => {
+    const view = editor();
+    accept("allowed_domains");
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(1);
+    view.propose({ parts: [{ section: "allowed_domains", value: ["other.example"] }], dropped: [] });
+    await settle(400);
+    expect(checks).toHaveBeenCalledTimes(2);
+    expect(checks.mock.calls[1][0]).toEqual({ target_kind: "run", draft: { allowed_domains: HOSTS.value } });
+  });
 });
 
 describe("build-file parts and left-out hosts", () => {
@@ -197,6 +319,15 @@ describe("build-file parts and left-out hosts", () => {
   it("uses the checks' count for a left-out host when the proposal carried none", () => {
     const merged = mergeDropped([{ host: "x.example", unit: "Payments" }], [{ host: "x.example", unit: "Payments", code: "c", admin_change_approvals: 2 }]);
     expect(merged).toEqual([{ host: "x.example", unit: "Payments", admin_change_approvals: 2 }]);
+  });
+
+  it("never says the draft is within the ceiling while a host was left out, even for a verdict that would", async () => {
+    checks.mockResolvedValue({ ...CHECKS, review: { verdict: "narrows_held" } });
+    editor({ proposal: { parts: [HOSTS], dropped: [{ host: "x.example", unit: "Payments", admin_change_approvals: 2 }] } });
+    accept("allowed_domains");
+    await settle(400);
+    expect(screen.getByTestId("composer-checks")).toHaveTextContent(T.VALID);
+    expect(screen.getByTestId("composer-checks")).not.toHaveTextContent(T.WITHIN_CEILING);
   });
 
   it("lists a left-out host beside the parts", () => {

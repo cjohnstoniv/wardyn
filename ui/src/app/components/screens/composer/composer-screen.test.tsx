@@ -65,6 +65,8 @@ const create = vi.spyOn(assistant, "createSession");
 const message = vi.spyOn(assistant, "postMessage");
 const end = vi.spyOn(assistant, "endSession");
 const stream = vi.spyOn(assistant, "streamEvents");
+const edits = vi.spyOn(assistant, "postEdits");
+const checks = vi.spyOn(assistant, "postChecks");
 
 function show(path = "/compose?kind=run") {
   return render(
@@ -102,6 +104,8 @@ beforeEach(() => {
   create.mockReset().mockResolvedValue(SESSION);
   message.mockReset().mockResolvedValue({ seq: 1 });
   end.mockReset().mockResolvedValue(undefined);
+  edits.mockReset().mockResolvedValue({ seq: 1 });
+  checks.mockReset().mockResolvedValue({ valid: true, errors: [], review: { verdict: "not_checked" }, risk: null, approvals_needed: 0, dropped: [] });
   stream.mockReset().mockImplementation((_id, _after) => new FakeSource("stub") as unknown as EventSource);
 });
 afterEach(() => {
@@ -274,6 +278,14 @@ describe("the chat", () => {
     expect(within(panel).getByText("Barrier")).toBeInTheDocument();
   });
 
+  it("posts an accepted part to this session, so the draft is the session's own", async () => {
+    await ready();
+    await push(ev("proposal", { parts: [{ section: "allowed_domains", value: ["github.com"] }], dropped: [] }));
+    const panel = await screen.findByTestId("composer-draft-panel");
+    await userEvent.click(within(panel).getByRole("button", { name: T.PART_ACCEPT }));
+    expect(edits).toHaveBeenCalledWith(SESSION.id, { draft: { allowed_domains: ["github.com"] }, changed: [{ field: "allowed_domains", value: '["github.com"]' }] });
+  });
+
   it("shows the audit fields from the server's own events beside the trail", async () => {
     await ready();
     await push(
@@ -302,6 +314,23 @@ describe("at 390 px", () => {
     expect(within(sheet).getByTestId("composer-draft-panel")).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("button", { name: T.HIDE_DRAFT }));
     expect(screen.queryByTestId("composer-draft-sheet")).toBeNull();
+  });
+
+  it("posts an accepted part to this session from the draft sheet too", async () => {
+    phone(true);
+    // What the person accepted is kept per session, so this one is its own.
+    const own = { ...SESSION, id: "5b1d2f3a-0000-4000-8000-000000000002" };
+    create.mockResolvedValue(own);
+    await ready();
+    await push(ev("proposal", { parts: [{ section: "allowed_domains", value: ["github.com"] }], dropped: [] }));
+    await userEvent.click(await screen.findByRole("button", { name: T.SHOW_DRAFT }));
+    const sheet = screen.getByTestId("composer-draft-sheet");
+    await userEvent.click(within(sheet).getByRole("button", { name: T.PART_ACCEPT }));
+    expect(edits).toHaveBeenCalledWith(own.id, expect.objectContaining({ draft: { allowed_domains: ["github.com"] } }));
+    // Closing and opening the sheet keeps what was accepted.
+    await userEvent.click(within(sheet).getByRole("button", { name: T.HIDE_DRAFT }));
+    await userEvent.click(screen.getByRole("button", { name: T.SHOW_DRAFT }));
+    expect(within(screen.getByTestId("composer-draft-sheet")).getByTestId("composer-part")).toHaveAttribute("data-status", "accepted");
   });
 
   it("shows the side panel and no bar on a wide screen", async () => {
