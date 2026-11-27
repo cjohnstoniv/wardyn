@@ -713,7 +713,7 @@ func TestInternalMTLS_RealHandshake(t *testing.T) {
 
 // The window is a quarter of the leaf's lifetime, at least 15 s, at most 10 minutes, and never more than half.
 func TestPeerExpiryWindow(t *testing.T) {
-	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Now().UTC().Truncate(time.Second)
 	leaf := func(ttl time.Duration) *x509.Certificate {
 		return &x509.Certificate{NotBefore: at, NotAfter: at.Add(ttl)}
 	}
