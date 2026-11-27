@@ -315,8 +315,13 @@ printf '# Changelog\n\n## [Unreleased]\n\n## [0.10.4]\n\n- later patch line\n\n#
 commit patch4; git tag -a -m v0.10.4 v0.10.4
 git checkout -q -b train/two "$CIBASE"; git merge -q --no-ff -m "Merge tag v0.10.4" v0.10.4; TRAINTWO="$(git rev-parse HEAD)"
 # ... and a tag a published 0.11 candidate already contains, reached through a sub-train's merge
-git checkout -q -b train/rc "$CIBASE"; git merge -q --no-ff -m "Merge sub, as an earlier candidate did" sub; git tag v0.11.0-rc.1
+git checkout -q -b train/rc "$CIBASE"; git merge -q --no-ff -m "Merge sub, as an earlier candidate did" sub; git tag -a -m rc v0.11.0-rc.1
 printf 'later\n' >later2.txt; commit "after the candidate"; TRAINRC="$(git rev-parse HEAD)"
+# the same with a lightweight tag: not a published candidate, so the side-merged tag is refused
+git checkout -q -b train/rcl "$CIBASE"; git merge -q --no-ff -m "Merge sub, under a lightweight tag" sub; git tag v0.11.0-rc.2
+printf 'later\n' >later3.txt; commit "after the lightweight tag"; TRAINRCL="$(git rev-parse HEAD)"
+# the sub-train's tag merge drops a main line, then the train merges v0.10.4 on its first parent
+git checkout -q -b train/late "$CIBASE"; git merge -q --no-ff -m "Merge sub" sub; git merge -q --no-ff -m "Merge tag v0.10.4" v0.10.4; TRAINLATE="$(git rev-parse HEAD)"
 step() {  # step HEAD_REF PR_HEAD [BASE]: with the PR head checked out, as the runner has it (attributes read from the base)
   git checkout -q --detach "$2"
   HEAD_REF="$1" BASE_SHA="${3:-$CIBASE}" PR_HEAD="$2" GIT_ATTR_SOURCE="${3:-$CIBASE}" RUNNER_TEMP="$TMP/rt" bash -e "$STEP" >"$out" 2>&1
@@ -344,6 +349,10 @@ grep -q 'v0.10.3 is in train/outer but not through a first-parent tag merge' "$o
 want_step 0 "train route with v0.10.3 below the merged v0.10.4" train/two "$TRAINTWO"
 grep -q 'tag merge .* (v0.10.4)' "$out" && grep -q 'forward-port-check: PASS' "$out" || fail "ci step: v0.10.4 tag merge not checked: $(cat "$out")"
 want_step 0 "train route whose sub-train tag is inside a published v0.11 candidate" train/rc "$TRAINRC"
+want_step 1 "train route whose sub-train tag is under a lightweight v0.11 tag" train/rcl "$TRAINRCL"
+grep -q 'v0.10.3 is in train/rcl but not through' "$out" || fail "ci step: lightweight-tag case not refused: $(cat "$out")"
+want_step 1 "train route that merges a sub-train's v0.10.3, then v0.10.4 on the first parent" train/late "$TRAINLATE"
+grep -q 'v0.10.3 is in train/late but not through' "$out" || fail "ci step: late v0.10.4 hid the sub-train's v0.10.3: $(cat "$out")"
 want_step 0 "train route into a release/** base" train/rel "$TRAINREL" "$RELBASE"
 grep -q 'forward-port-check: PASS' "$out" || fail "ci step: release/** route printed no PASS: $(cat "$out")"
 cd "$TMP"

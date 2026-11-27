@@ -3410,7 +3410,7 @@ jobs:
               for M in $MERGES; do
                 T="$({ git tag --list 'v0.10.*' --points-at "$M^2" | grep -xE 'v0\.10\.[0-9]+' || true; } | head -1)"
                 [ -n "$T" ] || continue
-                n=$((n + 1)); V="${T#v}"; CHECKED="$CHECKED$T "; CHECKED2="$CHECKED2 $M^2"
+                n=$((n + 1)); V="${T#v}"; CHECKED="$CHECKED$T "; CHECKED2="$CHECKED2 $M"
                 [ "$n" -gt 1 ] || fpc
                 echo "tag merge $M (v$V) on $HEAD_REF"
                 PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$M^1")"
@@ -3423,14 +3423,16 @@ jobs:
                 bash "$RUNNER_TEMP/fpc.sh" --version "$V" --allow-dir "$ALLOW" "$PREV" "$M^1" "$M"
               done
               # A tag that reached the head any other way (a side branch, a sub-train) has no merge to
-              # check. Not counted: one below a checked tag merge's second parent (the patch line's
-              # earlier tags), or one already inside a published 0.11+ tag (an earlier rc's train).
+              # check. Not counted: one a checked tag merge brings in (below its second parent, not
+              # already in its first), or one already inside a published 0.11+ tag: an annotated
+              # v0.1[1-9].N or -rc.N tag merged into the head (an earlier rc's train).
               for T in $(git tag --merged "$PR_HEAD" --no-merged "$BASE_SHA" -l 'v0.10.*' | { grep -xE 'v0\.10\.[0-9]+' || true; }); do
                 case "$CHECKED" in *" $T "*) continue ;; esac
                 for P in $CHECKED2; do
-                  if git merge-base --is-ancestor "$T^{commit}" "$P"; then continue 2; fi
+                  if git merge-base --is-ancestor "$T^{commit}" "$P^2" && ! git merge-base --is-ancestor "$T^{commit}" "$P^1"; then continue 2; fi
                 done
-                [ -z "$(git tag --merged "$PR_HEAD" --contains "$T" -l 'v0.1[1-9].*')" ] || continue
+                PUB="$(git for-each-ref --format='%(objecttype) %(refname:short)' --merged "$PR_HEAD" --contains "$T" 'refs/tags/v0.1[1-9].*' | { grep -E '^tag v0\.1[1-9]\.[0-9]+(-rc\.[0-9]+)?$' || true; })"
+                [ -z "$PUB" ] || continue
                 echo "$T is in $HEAD_REF but not through a first-parent tag merge: merge it on the train's first parent" >&2; exit 1
               done
               [ "$n" -gt 0 ] || echo "no v0.10.* tag merge in $BASE_SHA..$PR_HEAD: nothing to check"
