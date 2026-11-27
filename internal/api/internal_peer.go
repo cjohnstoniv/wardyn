@@ -38,20 +38,24 @@ func (s *Server) refuseUnverifiedPeer(w http.ResponseWriter, r *http.Request, cl
 	}
 	now := s.cfg.Now()
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		s.auditAuthFailedAs(r, internalAuthActor, reasonInternalPeerRequired)
 		return s.denyPeer(w, r, http.StatusUnauthorized, reasonInternalPeerRequired, "this listener requires the run's certificate")
 	}
 	id, _, err := x509svid.Verify(r.TLS.PeerCertificates, m.Bundles, x509svid.WithTime(now))
 	if err != nil {
 		// The connection's leaf is judged on every request, so a fresh dial is the only way past this.
 		w.Header().Set("Connection", "close")
+		s.auditAuthFailedAs(r, internalAuthActor, reasonInternalPeerInvalid)
 		return s.denyPeer(w, r, http.StatusUnauthorized, reasonInternalPeerInvalid, "the run's certificate did not verify")
 	}
 	if _, err := identity.RunIDFromSPIFFEID(id.String(), m.TrustDomain); err != nil {
 		s.warnPeer(r, "api: internal peer certificate is not a run's", id.String(), claims)
+		s.auditAuthFailedAs(r, internalAuthActor, reasonInternalPeerNotARun)
 		return s.denyPeer(w, r, http.StatusForbidden, reasonInternalPeerNotARun, "the certificate is not a run's")
 	}
 	if id.String() != claims.SPIFFEID {
 		s.warnPeer(r, "api: internal peer certificate is another run's", id.String(), claims)
+		s.auditAuthFailedAs(r, internalAuthActor, reasonInternalPeerMismatch)
 		return s.denyPeer(w, r, http.StatusForbidden, reasonInternalPeerMismatch, "the certificate is another run's")
 	}
 	if peerNearExpiry(r.TLS.PeerCertificates[0], now) {
@@ -71,9 +75,9 @@ func (s *Server) proxyPeerID(run types.AgentRun) string {
 	return run.SPIFFEID
 }
 
-// denyPeer audits and writes one refusal of refuseUnverifiedPeer.
+// denyPeer writes one refusal of refuseUnverifiedPeer. Each caller audits it first, with its reason
+// constant written out, so the auth-failed reason census can read every reason.
 func (s *Server) denyPeer(w http.ResponseWriter, r *http.Request, status int, reason, msg string) bool {
-	s.auditAuthFailedAs(r, internalAuthActor, reason)
 	writeErrorReason(w, status, reason, msg)
 	return true
 }
