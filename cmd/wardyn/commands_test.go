@@ -2800,6 +2800,48 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 	}
 }
 
+// A full first page of refused output reads must not end the search: the cause
+// sits on page two, and runFailureReason has to follow the truncation flag.
+func TestRunFailureReason_PagesPastAFullPageOfRefusedReads(t *testing.T) {
+	runID := uuid.New()
+	const pageSize = 1000
+	all := make([]types.AuditEvent, 0, pageSize+1)
+	for i := 0; i < pageSize; i++ {
+		all = append(all, types.AuditEvent{Action: "run.output.refuse", Outcome: "failure", Data: json.RawMessage(`{"reason":"output read refused"}`)})
+	}
+	all = append(all, types.AuditEvent{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runs/"+runID.String():
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunFailed})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/audit":
+			off := 0
+			if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && n > 0 {
+				off = n
+			}
+			end := off + pageSize
+			if end > len(all) {
+				end = len(all)
+			}
+			if end < len(all) {
+				w.Header().Set("X-Wardyn-Truncated", "true")
+			}
+			_ = json.NewEncoder(w).Encode(all[off:end])
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed})
+	if want := "run.dispatch: pull ghcr.io/x/agent-oracle:latest: not found"; got != want {
+		t.Errorf("runFailureReason = %q, want %q — the cause sat on page two behind a full page of refused reads", got, want)
+	}
+}
+
 // TestUnknownSubcommandUnderEveryGroupIsAnError: `wardyn secret ste`
 // printed help on STDOUT and exited 0, so a mistyped subcommand reported
 // SUCCESS to a script, a CI step, or a pasted instruction. Wardyn sells the exit

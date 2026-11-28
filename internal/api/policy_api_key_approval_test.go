@@ -84,6 +84,20 @@ func TestAPIKeyApprovalHeldGrantLeftAloneUntilChanged(t *testing.T) {
 	}
 }
 
+// One stored copy of a grant covers one submitted copy: a second copy is an added grant.
+func TestAPIKeyApprovalHeldGrantCoversOneCopy(t *testing.T) {
+	held := gatedAPIKey(t, true)
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{held}, []types.GrantSpec{held}); err != nil {
+		t.Errorf("one copy against one stored copy: err = %v, want accepted", err)
+	}
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{held, held}, []types.GrantSpec{held}); err == nil {
+		t.Error("two copies against one stored copy: want the refusal, got nil")
+	}
+	if err := authoredAPIKeyApprovalRefusal([]types.GrantSpec{held, held}, []types.GrantSpec{held, held}); err != nil {
+		t.Errorf("two copies against two stored copies: err = %v, want accepted", err)
+	}
+}
+
 // A launch never refuses a gated api_key grant. A default policy and a member's
 // ceiling saved before the rule hold one; a policy_overlay that adds or changes
 // the grant still launches, and the key is left out of the run (the grant is

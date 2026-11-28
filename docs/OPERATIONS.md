@@ -3253,10 +3253,11 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 ### Docker host: run networks
 
-- Docker sandboxes need Docker Engine 28.0.0 or later. Each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
-- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`.
-- A network keeps the shape it was created with. A run started before the upgrade is refused a restart or a revive; start a new run instead.
-- A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs.
+- Docker sandboxes need Docker Engine 28.0.0 or later. By default each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
+- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`. It is off by default.
+- On Engine 28 or later Wardyn requests an isolated network with IPv6 off. It checks the network after creation and again on restart or proxy replacement. By default an incompatible network is refused. With the override enabled, Wardyn warns and can use it.
+- A network keeps the shape it was created with. With the setting off, a run started before the upgrade is refused a restart or a revive; start a new run instead.
+- A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs by default. With the override on, Wardyn warns instead.
 
 ### Docker host: one subnet per run
 
