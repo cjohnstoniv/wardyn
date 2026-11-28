@@ -177,7 +177,7 @@ func (s *miscCovOutStore) RefreshRunOutputClaim(ctx context.Context, id uuid.UUI
 	return s.memRunOutputs.RefreshRunOutputClaim(ctx, id)
 }
 
-func (s *miscCovOutStore) MarkRunOutputIncomplete(ctx context.Context, id uuid.UUID) (bool, error) {
+func (s *miscCovOutStore) MarkRunOutputIncomplete(ctx context.Context, id uuid.UUID, rev time.Time) (bool, error) {
 	s.mu.Lock()
 	s.markCalls++
 	fail := s.markFails > 0
@@ -192,7 +192,7 @@ func (s *miscCovOutStore) MarkRunOutputIncomplete(ctx context.Context, id uuid.U
 	if markErr != nil {
 		return false, markErr
 	}
-	return s.memRunOutputs.MarkRunOutputIncomplete(ctx, id)
+	return s.memRunOutputs.MarkRunOutputIncomplete(ctx, id, rev)
 }
 
 func (s *miscCovOutStore) EraseRunOutputs(ctx context.Context, ids []uuid.UUID) error {

@@ -59,15 +59,18 @@ type RunOutputStore interface {
 	// SaveFinalRunOutput writes the run's final row (output, flags and
 	// mask_scope as given), replacing a pending or stdout capture-gap row, or an
 	// incomplete stdout row when this one is a complete stdout capture of the
-	// same mask scope. The database stamps captured_at.
+	// same mask scope. The database stamps captured_at, later than the replaced
+	// row's, so each write's stamp names it.
 	SaveFinalRunOutput(ctx context.Context, o RunOutput) error
 	// SaveGapRunOutput writes a capture-gap row with no bytes, only over a
 	// pending row or none: a final row already committed is never overwritten.
 	// It reports whether it wrote.
 	SaveGapRunOutput(ctx context.Context, runID uuid.UUID) (bool, error)
-	// MarkRunOutputIncomplete sets incomplete on runID's final row, reporting
-	// whether a final row was there to mark.
-	MarkRunOutputIncomplete(ctx context.Context, runID uuid.UUID) (bool, error)
+	// MarkRunOutputIncomplete sets incomplete on runID's final row if it is still
+	// the one written with captured_at (the capture's revision, which
+	// SaveFinalRunOutput reports), reporting whether it marked. A row a later
+	// write replaced is left as it is.
+	MarkRunOutputIncomplete(ctx context.Context, runID uuid.UUID, capturedAt time.Time) (bool, error)
 	// GetRunOutput returns runID's row, pending or final. found is false when
 	// there is none.
 	GetRunOutput(ctx context.Context, runID uuid.UUID) (o RunOutput, found bool, err error)
@@ -167,22 +170,30 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 		case err != nil:
 			return err
 		}
-		tag, err := tx.Exec(ctx, `
+		row := tx.QueryRow(ctx, `
 			INSERT INTO run_outputs (run_id, output, truncated, incomplete, capture_gap, source, mask_scope, captured_at, claimed_at)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), now(), now())
 			ON CONFLICT (run_id) DO UPDATE SET
 				output = EXCLUDED.output, truncated = EXCLUDED.truncated, incomplete = EXCLUDED.incomplete,
 				capture_gap = EXCLUDED.capture_gap, source = EXCLUDED.source, mask_scope = EXCLUDED.mask_scope,
-				captured_at = EXCLUDED.captured_at, claimed_at = EXCLUDED.claimed_at
+				captured_at = GREATEST(EXCLUDED.captured_at, run_outputs.captured_at + interval '1 microsecond'), claimed_at = EXCLUDED.claimed_at
 			WHERE run_outputs.captured_at IS NULL
 			   OR (run_outputs.capture_gap AND run_outputs.source = 'stdout')
-			   OR (run_outputs.source='stdout' AND run_outputs.incomplete AND NOT run_outputs.capture_gap AND EXCLUDED.source='stdout' AND NOT EXCLUDED.incomplete AND NOT EXCLUDED.capture_gap AND EXCLUDED.mask_scope IS NOT DISTINCT FROM run_outputs.mask_scope)`,
+			   OR (run_outputs.source='stdout' AND run_outputs.incomplete AND NOT run_outputs.capture_gap AND EXCLUDED.source='stdout' AND NOT EXCLUDED.incomplete AND NOT EXCLUDED.capture_gap AND EXCLUDED.mask_scope IS NOT DISTINCT FROM run_outputs.mask_scope)
+			RETURNING captured_at`,
 			o.RunID, body, o.Truncated, o.Incomplete, o.CaptureGap, o.Source, o.MaskScope)
-		if err != nil || tag.RowsAffected() == 0 {
+		var capturedAt time.Time
+		switch err := row.Scan(&capturedAt); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return nil
+		case err != nil:
 			return err
 		}
+		if rep, ok := ctx.Value(replacedIncompleteKey{}).(*ReplacedIncomplete); ok {
+			rep.CapturedAt = capturedAt
+		}
 		// The live chunks (0129) were the tail's stand-in until this row: they go in the transaction that writes it.
-		if _, err = tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, o.RunID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, o.RunID); err != nil {
 			return err
 		}
 		if rep, ok := ctx.Value(replacedIncompleteKey{}).(*ReplacedIncomplete); ok && partial {
@@ -193,9 +204,11 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 }
 
 // ReplacedIncomplete is set by SaveFinalRunOutput when its write replaced an incomplete stdout row an earlier
-// finaliser of the run wrote.
+// finaliser of the run wrote. CapturedAt is the stamp of the row it wrote (zero when it wrote none): the revision a
+// later MarkRunOutputIncomplete for this capture names.
 type ReplacedIncomplete struct {
-	Replaced bool
+	Replaced   bool
+	CapturedAt time.Time
 }
 
 type replacedIncompleteKey struct{}
@@ -230,10 +243,10 @@ func (s PG) SaveGapRunOutput(ctx context.Context, runID uuid.UUID) (bool, error)
 }
 
 // MarkRunOutputIncomplete — see RunOutputStore.
-func (s PG) MarkRunOutputIncomplete(ctx context.Context, runID uuid.UUID) (bool, error) {
+func (s PG) MarkRunOutputIncomplete(ctx context.Context, runID uuid.UUID, capturedAt time.Time) (bool, error) {
 	marked := false
 	err := s.runOutputTx(ctx, runID, false, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE run_outputs SET incomplete = true WHERE run_id = $1 AND captured_at IS NOT NULL`, runID)
+		tag, err := tx.Exec(ctx, `UPDATE run_outputs SET incomplete = true WHERE run_id = $1 AND captured_at = $2`, runID, capturedAt)
 		marked = err == nil && tag.RowsAffected() == 1
 		return err
 	})

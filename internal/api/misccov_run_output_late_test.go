@@ -71,14 +71,14 @@ func TestMiscCovMarkLateIncomplete(t *testing.T) {
 		f, _ := miscCovOutFixture(t, func(c *Config) { c.RunOutputPersistOff = true })
 		now := time.Now()
 		f.mem.rows[f.run.ID] = store.RunOutput{RunID: f.run.ID, CapturedAt: &now}
-		f.srv.markLateIncomplete(t.Context(), f.run.ID)
+		f.srv.markLateIncomplete(t.Context(), f.run.ID, time.Time{})
 		if row, _ := f.mem.row(f.run.ID); row.Incomplete || len(miscCovFinalizeData(t, f)) != 0 {
 			t.Errorf("with persistence off a committed row was marked (%+v) or audited", row)
 		}
 	})
 	t.Run("a run with no final row is not audited", func(t *testing.T) {
 		f, _ := miscCovOutFixture(t)
-		f.srv.markLateIncomplete(t.Context(), f.run.ID)
+		f.srv.markLateIncomplete(t.Context(), f.run.ID, time.Time{})
 		if len(miscCovFinalizeData(t, f)) != 0 {
 			t.Error("a row that was never marked was audited")
 		}
@@ -87,7 +87,7 @@ func TestMiscCovMarkLateIncomplete(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		f.open(t)
 		cs.markErr = store.ErrRunOutputErased
-		f.srv.markLateIncomplete(t.Context(), f.run.ID)
+		f.srv.markLateIncomplete(t.Context(), f.run.ID, time.Time{})
 		if f.srv.tailFor(f.run.ID) != nil || len(miscCovFinalizeData(t, f)) != 0 {
 			t.Error("the tail was not fenced, or an erased run was audited")
 		}
@@ -96,7 +96,7 @@ func TestMiscCovMarkLateIncomplete(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		cs.markErr = errors.New("mark refused")
 		logs := miscCovCaptureLogs(t)
-		f.srv.markLateIncomplete(t.Context(), f.run.ID)
+		f.srv.markLateIncomplete(t.Context(), f.run.ID, time.Time{})
 		if _, ok := logs.find("could not mark a run's output row incomplete"); !ok || len(miscCovFinalizeData(t, f)) != 0 {
 			t.Error("the failure was not logged, or a mark that failed was audited")
 		}

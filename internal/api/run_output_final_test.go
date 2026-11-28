@@ -101,7 +101,7 @@ func (m *memRunOutputs) SaveGapRunOutput(_ context.Context, id uuid.UUID) (bool,
 	return true, nil
 }
 
-func (m *memRunOutputs) MarkRunOutputIncomplete(_ context.Context, id uuid.UUID) (bool, error) {
+func (m *memRunOutputs) MarkRunOutputIncomplete(_ context.Context, id uuid.UUID, _ time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.erased[id] {

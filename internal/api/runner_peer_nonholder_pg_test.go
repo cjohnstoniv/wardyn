@@ -51,6 +51,32 @@ func TestPeerAdopterCompleteRowReplacesLauncherPartial_PG(t *testing.T) {
 	if n := replacedAudits(t, l, run.ID); n != 1 {
 		t.Fatalf("%d run.output.finalize rows with replaced_incomplete, want B's one: %s", n, auditDump(l.rec.snapshot(), run.ID))
 	}
+
+	// A's late mark, for the row B replaced, lands after the replacement: it is dropped, and B's row stays complete.
+	revA, revB := tailRevision(ta), tailRevision(tb)
+	if revA.IsZero() || revB.IsZero() || revA.Equal(revB) {
+		t.Fatalf("capture revisions A=%v B=%v, want two distinct stamps", revA, revB)
+	}
+	if !a.srv.markLateIncomplete(t.Context(), run.ID, revA) {
+		t.Fatal("A's superseded mark was not settled")
+	}
+	if row, _, err := st.GetRunOutput(t.Context(), run.ID); err != nil || row.Incomplete {
+		t.Fatalf("after A's superseded mark: incomplete=%v err=%v, want B's row complete", row.Incomplete, err)
+	}
+	// A byte B's own capture drops after its commit still marks B's row.
+	if !b.srv.markLateIncomplete(t.Context(), run.ID, revB) {
+		t.Fatal("B's own late mark was not settled")
+	}
+	if row, _, err := st.GetRunOutput(t.Context(), run.ID); err != nil || !row.Incomplete || string(row.Output) != "part\nand the rest\n" {
+		t.Fatalf("after B's own late mark: %q incomplete=%v err=%v, want B's bytes marked incomplete", row.Output, row.Incomplete, err)
+	}
+}
+
+// tailRevision is the captured_at of the row e committed.
+func tailRevision(e *execOutputTail) time.Time {
+	e.fmu.Lock()
+	defer e.fmu.Unlock()
+	return e.revision
 }
 
 // replacedAudits counts the run's run.output.finalize rows that report a replaced incomplete row, each checked for

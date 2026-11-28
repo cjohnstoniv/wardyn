@@ -509,7 +509,7 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 	switch {
 	case err == nil:
 		e.fmu.Lock()
-		e.committed = true
+		e.committed, e.revision = true, rep.CapturedAt
 		lateSince := e.late && !wrote
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
@@ -518,8 +518,8 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 		}
 		if lateSince {
 			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
-			id := row.RunID
-			s.goBackground(func() { s.markLateIncompleteOwed(id) })
+			id, rev := row.RunID, rep.CapturedAt
+			s.goBackground(func() { s.markLateIncompleteOwed(id, rev) })
 		}
 		return persistDone
 	case errors.Is(err, store.ErrRunOutputErased):
@@ -596,7 +596,7 @@ func (s *Server) EraseRunOutputs(ctx context.Context, runIDs []uuid.UUID) error 
 // never blocks on Postgres.
 func (s *Server) lateRunOutput(runID uuid.UUID, e *execOutputTail) {
 	e.fmu.Lock()
-	committed, fenced := e.committed, e.fenced
+	committed, fenced, rev := e.committed, e.fenced, e.revision
 	if !committed && !fenced {
 		e.late = true
 	}
@@ -604,7 +604,7 @@ func (s *Server) lateRunOutput(runID uuid.UUID, e *execOutputTail) {
 	if !committed || fenced {
 		return
 	}
-	s.goBackground(func() { s.markLateIncompleteOwed(runID) })
+	s.goBackground(func() { s.markLateIncompleteOwed(runID, rev) })
 }
 
 // lateMarkAttemptWait bounds one try of the incomplete mark a committed row owes.
@@ -614,12 +614,13 @@ const lateMarkAttemptWait = 10 * time.Second
 // commit. Each try runs on the daemon's context, bounded by lateMarkAttemptWait, with the final write's
 // backoff (outputRetryBase doubling to runOutputRetryMax) between tries, until the mark lands or the output is erased: one failed write must not leave a
 // capture that lost bytes labelled complete, and nothing else re-reads a committed row for this. Only the
-// daemon's shutdown ends it early. Run it on a tracked goroutine.
-func (s *Server) markLateIncompleteOwed(runID uuid.UUID) {
+// daemon's shutdown ends it early. rev is the committed row's captured_at: only that row takes the mark. Run it on a
+// tracked goroutine.
+func (s *Server) markLateIncompleteOwed(runID uuid.UUID, rev time.Time) {
 	base := s.cfg.BaseCtx
 	for backoff := s.outputRetryBase(); ; backoff = min(backoff*2, runOutputRetryMax) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(base), lateMarkAttemptWait)
-		settled := s.markLateIncomplete(ctx, runID)
+		settled := s.markLateIncomplete(ctx, runID, rev)
 		cancel()
 		if settled {
 			return
@@ -632,15 +633,16 @@ func (s *Server) markLateIncompleteOwed(runID uuid.UUID) {
 	}
 }
 
-// markLateIncomplete flips the committed row to incomplete and audits it. It reports whether the mark is
-// settled: written, nothing committed to mark, no store, or the output erased (the tail is fenced). false
-// is a failed write, which markLateIncompleteOwed tries again.
-func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) bool {
+// markLateIncomplete flips the committed row written at rev to incomplete and audits it. It reports whether the
+// mark is settled: written, no row of that revision to mark (a later capture replaced it, and its own bytes are
+// whole), no store, or the output erased (the tail is fenced). false is a failed write, which
+// markLateIncompleteOwed tries again.
+func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID, rev time.Time) bool {
 	st := s.runOutputStore()
 	if st == nil {
 		return true
 	}
-	marked, err := st.MarkRunOutputIncomplete(ctx, runID)
+	marked, err := st.MarkRunOutputIncomplete(ctx, runID, rev)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
 		s.fenceRunOutput(runID)
@@ -650,6 +652,9 @@ func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) bool {
 		return false
 	case marked:
 		s.auditOutputFinalize(ctx, runID, map[string]any{"incomplete": true, "late_write": true})
+	default:
+		slog.DebugContext(ctx, "wardynd: a late incomplete mark found its capture's row replaced, dropped",
+			slog.String("run_id", runID.String()))
 	}
 	return true
 }

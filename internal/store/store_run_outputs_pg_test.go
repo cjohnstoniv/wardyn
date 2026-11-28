@@ -34,7 +34,7 @@ func TestPG_RunOutputs(t *testing.T) {
 	if err != nil || !found || got.CapturedAt != nil || got.Source != "stdout" {
 		t.Fatalf("pending row = %+v found=%v err=%v, want a pending stdout row", got, found, err)
 	}
-	if marked, _ := pg.MarkRunOutputIncomplete(ctx, run); marked {
+	if marked, _ := pg.MarkRunOutputIncomplete(ctx, run, time.Time{}); marked {
 		t.Error("a pending row took the incomplete mark")
 	}
 
@@ -49,7 +49,7 @@ func TestPG_RunOutputs(t *testing.T) {
 	if wrote, err := pg.SaveGapRunOutput(ctx, run); err != nil || wrote {
 		t.Fatalf("a gap over a final row: wrote=%v err=%v, want it refused", wrote, err)
 	}
-	if marked, err := pg.MarkRunOutputIncomplete(ctx, run); err != nil || !marked {
+	if marked, err := pg.MarkRunOutputIncomplete(ctx, run, *got.CapturedAt); err != nil || !marked {
 		t.Fatalf("incomplete mark on the final row: %v %v", marked, err)
 	}
 	if got, _, _ = pg.GetRunOutput(ctx, run); !got.Incomplete || string(got.Output) != "a\x00b \xff" {
@@ -85,7 +85,7 @@ func TestPG_RunOutputs(t *testing.T) {
 		"refresh":  func() error { return pg.RefreshRunOutputClaim(ctx, run) },
 		"final":    func() error { return pg.SaveFinalRunOutput(ctx, final) },
 		"gap":      func() error { _, err := pg.SaveGapRunOutput(ctx, run); return err },
-		"mark":     func() error { _, err := pg.MarkRunOutputIncomplete(ctx, run); return err },
+		"mark":     func() error { _, err := pg.MarkRunOutputIncomplete(ctx, run, time.Time{}); return err },
 		"read":     func() error { _, _, err := pg.GetRunOutput(ctx, run); return err },
 		"re-erase": func() error { return pg.EraseRunOutputs(ctx, []uuid.UUID{run}) },
 	} {

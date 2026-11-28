@@ -110,7 +110,7 @@ type execOutputTail struct {
 	drainErr  bool          // a copy ended in an error
 	drainWake chan struct{} // closed and replaced whenever drains changes
 
-	fmu      sync.Mutex    // guards started, finished, incomplete, committed, late, fenced, recovered and gapReason
+	fmu      sync.Mutex    // guards started, finished, incomplete, committed, revision, late, fenced, recovered and gapReason
 	started  bool          // a finisher has taken the once-guard
 	done     chan struct{} // closed when that finisher returns
 	finished bool          // the tail is sealed: barrier closed, holdback flushed
@@ -120,8 +120,9 @@ type execOutputTail struct {
 	// committed: the final row is in Postgres, so a byte dropped now marks it
 	// incomplete rather than reaching the row as it is written.
 	committed bool
-	late      bool // a byte was dropped after the seal
-	fenced    bool // the run's output was erased: this tail is zeroed and dropped
+	revision  time.Time // committed: the captured_at of the row it wrote, the one row a late mark may flip
+	late      bool      // a byte was dropped after the seal
+	fenced    bool      // the run's output was erased: this tail is zeroed and dropped
 	// recovered: the bytes were read back from the substrate by a process that
 	// did not capture them live (run_output_recover.go). gapReason, when set,
 	// says the recovery found nothing it may keep, so the finisher writes a
