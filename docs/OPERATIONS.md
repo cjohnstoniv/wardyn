@@ -387,11 +387,14 @@ Compose recipe.
 # that installation's containers and volumes only.
 export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
-# Every backup attempt writes into a new directory of its own. A retry starts
-# again here with a new one, never in an old one. The restore reads one such
-# directory, and only once step 7 has marked it COMPLETE.
-B="$NS-backup-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir "$B" || echo "STOP: $B already exists: set B again"
+# Run steps 0-7 as one script (save them as backup.sh, then bash backup.sh), not
+# line by line: set -e stops it at the first failed command, so nothing after a
+# failure runs. If it stops after step 0, start wardynd again once you know why.
+set -eu
+# Each attempt writes into a new directory of its own: mktemp -d creates it, or
+# fails. A retry is a new run of the script, so a new directory, never an old
+# one. The restore reads one such directory, and only once it is COMPLETE.
+B=$(mktemp -d "$NS-backup-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
 
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
@@ -418,7 +421,7 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
 #      vols=$(docker volume ls -q) &&
 #        { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || true; } > "$B/drives.list.tmp" &&
 #        mv "$B/drives.list.tmp" "$B/drives.list" ||
-#        echo "STOP: the drive volumes could not be listed"
+#        { echo "STOP: the drive volumes could not be listed"; exit 1; }
 #      # On a host with two installations, edit $B/drives.list here (below).
 #      while IFS= read -r v <&3; do
 #        docker run --rm -v "$v":/from -v "$PWD/$B":/to alpine \
@@ -426,7 +429,7 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
 #        docker volume inspect --format \
 #          '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
 #          "$v" > "$B/$v.labels.tmp" ||
-#        { echo "STOP: $v is not backed up with its labels"; break; }
+#        { echo "STOP: $v is not backed up with its labels"; exit 1; }
 #        n=$(docker volume inspect --format '{{len .Labels}}' "$v")
 #        if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] &&
 #          grep -q '^wardyn.drive=.' "$B/$v.labels.tmp" &&
@@ -437,8 +440,8 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
 #          echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
 #        fi
 #      done 3< "$B/drives.list"
-#    A STOP line means this attempt is incomplete: fix the cause and start
-#    again from the top, in a new directory. drives.list names every drive volume the backup must
+#    A STOP line ends the script, and the attempt stays incomplete: fix the
+#    cause and run the script again, which makes a new directory. drives.list names every drive volume the backup must
 #    hold, and the restore works from it. Keep each .labels file with its
 #    tarball. It is the volume's
 #    ownership record and lists every label it had, one per line, so a record
@@ -450,8 +453,9 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
 #    the drive label existed, or restored by hand without it, is backed up
 #    too. Such a volume prints UNRESOLVED: its archive is kept, but nothing
 #    in it says whose it is. The backup is not complete until you have
-#    worked out each one's drive and person from the drive list and the
-#    allocations, and written that down beside it.
+#    worked out each one's drive and owner from the drive list and the
+#    allocations, and written that down beside it. The owner is a person, or,
+#    for a t- (group) or p- (portal) home, the allocation sharing that folder.
 #    Drive volumes carry no installation label: on a host with two
 #    installations, keep only the volumes whose wardyn.drive id this
 #    installation's GET /api/v1/drives lists: remove the others from
@@ -468,9 +472,10 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
 # 6. Once both the database and fallback copies are complete:
 docker compose -f deploy/compose/docker-compose.yaml start wardynd
 
-# 7. Only when no step printed STOP and every UNRESOLVED volume is written up
-#    beside it, mark the attempt complete. The restore refuses any other.
-touch "$B/COMPLETE"
+# 7. Reaching this line means every step above succeeded. Mark the attempt
+#    COMPLETE, the only kind the restore accepts, yourself, and only once step
+#    5's copy is in "$B" and every UNRESOLVED volume is written up beside it.
+echo "Steps 0-6 succeeded. When that is done: touch $B/COMPLETE"
 ```
 
 ### Restore them
@@ -487,10 +492,12 @@ dump loads.
 # that installation's containers and volumes only.
 export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
-# The backup to restore: ONE directory that backup step 7 marked COMPLETE.
-# Every file below comes from it.
+# Run steps 0-7 as one script too (restore.sh): set -e stops it at the first
+# failed command. The backup to restore is ONE directory marked COMPLETE, and
+# every file below comes from it: nothing runs before that is checked.
+set -eu
 B=<backup directory>
-[ -f "$B/COMPLETE" ] || echo "STOP: $B is not a complete backup"
+[ -f "$B/COMPLETE" ] || { echo "STOP: $B is not a complete backup"; exit 1; }
 
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
@@ -540,19 +547,20 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
 #    into it. The recorded wardyn.subject is what lets the runner refuse the
 #    volume to anyone but its owner: put it back exactly as recorded, and never
 #    work out a value from whoever holds the drive and home now.
-#      [ -f "$B/drives.list" ] || echo "STOP: $B has no drives.list: see below"
+#      [ -f "$B/drives.list" ] || { echo "STOP: $B has no drives.list: see below"; exit 1; }
+#      h=
 #      while IFS= read -r v <&3; do
 #        f="$v.tar.gz"; l="$B/$v.labels"
-#        [ -f "$B/$f" ] || { echo "STOP: $f is missing"; break; }
-#        id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null)
+#        [ -f "$B/$f" ] || { echo "STOP: $f is missing"; exit 1; }
+#        id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null || true)
 #        [ ! -e "$B/$v.unresolved" ] && grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
 #          printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
-#          { echo "HOLD: $f has no usable label record: see below"; continue; }
+#          { echo "HOLD: $f has no usable label record: see below"; h=1; continue; }
 #        docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
 #          psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
-#          grep -qx 1 || { echo "STOP: the restored database has no drive $id"; break; }
+#          grep -qx 1 || { echo "STOP: the restored database has no drive $id"; exit 1; }
 #        if docker volume inspect "$v" >/dev/null 2>&1; then
-#          echo "SKIP: $v already exists: see below"; continue
+#          echo "SKIP: $v already exists: see below"; h=1; continue
 #        fi
 #        set --
 #        while IFS= read -r x; do [ -n "$x" ] && set -- "$@" --label "$x"; done < "$l"
@@ -563,8 +571,9 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
 #          cmp -s - "$l" &&
 #        docker run --rm -v "$v":/to -v "$PWD/$B":/from alpine \
 #          sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
-#          { echo "STOP: $v is not restored"; break; }
+#          { echo "STOP: $v is not restored"; exit 1; }
 #      done 3< "$B/drives.list"
+#      [ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run 5b-7"; exit 1; }
 #    Every file comes from the one directory step 3's dump came from: files
 #    from two backup attempts must never both go into a volume. The loop restores
 #    exactly the volumes drives.list names and stops on any missing
@@ -573,8 +582,8 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
 #    recorded drive against the restored database, not the API, because
 #    wardynd is not running yet. It creates each volume new, checks that the
 #    volume is local, option-free and carries exactly the recorded labels, and
-#    checks that the volume is empty before writing any file. Do not start
-#    step 6 while any STOP, SKIP or HOLD line is unresolved.
+#    checks that the volume is empty before writing any file. Any STOP, SKIP
+#    or HOLD line stops the script before step 6.
 #    SKIP: a volume of that name already exists. Creating it again would
 #    not change its labels, and it may hold someone's files. If this loop
 #    restored it on an earlier pass, that is expected. Otherwise inspect it,
@@ -588,6 +597,10 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
 #    with an admin and the person whose files it holds before the files go
 #    anywhere. Then let that person's next run create the volume (the runner
 #    stamps their wardyn.subject), and while no run uses it, untar into it.
+#    That route is for a person's own home only. A t- (group) or p- (portal)
+#    home is a shared folder with no wardyn.subject: keep its files in staging,
+#    confirm the drive and the allocation it belongs to, let a run through that
+#    allocation create the folder, and while no run uses it, untar into it.
 #    host_path drives need nothing here — you restore that share yourself.
 
 # 5b. Restore the matching audit-fallback directory and sidecars before
