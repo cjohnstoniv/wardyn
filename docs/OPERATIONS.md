@@ -406,7 +406,7 @@ echo "$REC" > "$B/recording-store"
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 
 # 1. Postgres, through this project's postgres service
-(cd "$B" && docker compose -f "$OLDPWD/deploy/compose/docker-compose.yaml" exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql")
+(cd "$B" && docker compose -f "$OLDPWD/deploy/compose/docker-compose.yaml" exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql" < /dev/null)
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
@@ -461,11 +461,12 @@ done 3< "$B/drives.found"
 while IFS= read -r v <&3; do
   h=$(docker volume inspect --format '{{json (index .Labels "wardyn.home")}}' "$v") ||
     { echo "STOP: $v could not be inspected"; exit 1; }
-  printf "HELD: %s (home %s) is not shown to be this installation's. Is it? Type yes, or no if it is another installation's: " "$v" "$h"
+  printf "HELD: %s (home %s) is not shown to be this installation's. Is it? Type yes, no if it is another installation's, or retired if its drive was deleted here: " "$v" "$h"
   read -r a || a=
   case "$a" in
     yes) echo "$v" >> "$B/drives.list.tmp" ;;
     no) echo "$v" >> "$B/drives.elsewhere" ;;
+    retired) echo "$v" >> "$B/drives.retired" ;;
     *) echo "STOP: $v is not settled: find which installation it belongs to, then run again"; exit 1 ;;
   esac
 done 3< "$B/drives.held"
@@ -487,6 +488,13 @@ while IFS= read -r v <&3; do
     echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
   fi
 done 3< "$B/drives.list"
+if [ -f "$B/drives.retired" ]; then
+  mkdir -p "$B/retired"
+  while IFS= read -r v <&3; do
+    docker run --rm -v "$v":/from -v "$B/retired":/to alpine \
+      tar czf "/to/$v.tar.gz" -C /from . || { echo "STOP: retired $v is not backed up"; exit 1; }
+  done 3< "$B/drives.retired"
+fi
 #    A STOP line ends the script, and the attempt stays incomplete: fix the
 #    cause and run the script again, which makes a new directory. drives.list names every drive volume the backup must
 #    hold, and the restore works from it. Keep each .labels file with its
@@ -508,8 +516,9 @@ done 3< "$B/drives.list"
 #    label is not exactly one of this installation's drive ids (another
 #    installation's, a drive deleted here, one with no label or a malformed
 #    one) is HELD, and the script asks about each before anything is copied.
-#    A drive deleted here has nothing to restore into, and its volume stops
-#    the restore: answer no for it.
+#    A drive deleted here has nothing to restore into: answer retired, and
+#    its volume is archived under retired/, which the restore leaves alone.
+#    Keep or discard it under your own retention rules.
 #    When another installation runs from a copy of this database, or you
 #    cannot tell, every drive volume is held, its label included. Answer from
 #    the volume names this installation itself reports, noted before you run
