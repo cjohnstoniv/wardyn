@@ -114,7 +114,7 @@ docker volume create \
 - with every label value taken from the record the backup kept beside the volume (backup step 4 in [Operations](../OPERATIONS.md)), then check the volume is new and empty, then copy the data in.
 - `wardyn.drive` carries the **drive row's id** (the `id` on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit row), not the volume's name — the id is what groups every person's object under the drive that allocated them.
 - Get it wrong and Wardyn **refuses** the volume rather than adopting it: a label naming a *different* drive is how two drives whose home names collided would otherwise hand one member the other's storage.
-- A volume restored with **no** `wardyn.drive` label at all still mounts (that is the fall-back this path is for, and every volume created before the label carried an id has none).
+- Wardyn still mounts a volume with **no** `wardyn.drive` label at all (every volume created before the label carried an id has none), but that is compatibility for old volumes, not a way to restore one.
 - It just no longer answers `docker volume ls --filter label=wardyn.drive=<drive id>`.
 
 - Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was allocated to — never their sign-in claim, because `docker volume inspect` echoes labels to anyone who can reach the daemon.

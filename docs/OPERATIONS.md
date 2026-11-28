@@ -409,11 +409,12 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
 # 4. User drives — one object per person, and step 1's dump does NOT contain
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
-#      d=$(date +%F)
+#      d=$(date +%F); rm -f "drives-$d.list"
 #      vols=$(docker volume ls -q) &&
 #        { printf '%s\n' "$vols" | grep '^wardyn-drive-' || true; } > "drives-$d.list.tmp" &&
 #        mv "drives-$d.list.tmp" "drives-$d.list" ||
 #        echo "STOP: the drive volumes could not be listed"
+#      # On a host with two installations, edit drives-$d.list here (below).
 #      while IFS= read -r v <&3; do
 #        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
 #          tar czf "/to/$v-$d.tar.gz" -C /from . &&
