@@ -90,7 +90,7 @@ func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner
 	// keepRebootedRun's busy check is the load-bearing guard; this only
 	// narrows the window it has to cover.
 	if wl, ok := s.cfg.Store.(store.RunWatcherLeaser); ok {
-		if err := wl.HeartbeatRunWatcher(ctx, run.ID, watcherOwner); err != nil {
+		if err := wl.HeartbeatRunWatcher(ctx, run.ID, s.leaseOwner()); err != nil {
 			slog.WarnContext(ctx, "wardynd: heartbeating a revived run's watcher lease before starting its agent failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}

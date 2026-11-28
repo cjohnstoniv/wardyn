@@ -46,6 +46,14 @@ var watcherOwner = func() string {
 	return host + "/" + uuid.NewString()
 }()
 
+// leaseOwner is this server's name in agent_runs.watcher_owner: watcherOwner, unless a test gave the server its own.
+func (s *Server) leaseOwner() string {
+	if s.owner != "" {
+		return s.owner
+	}
+	return watcherOwner
+}
+
 // ImageBuildSweeper is an OPTIONAL capability an ImageBuilder may additionally
 // implement: a boot-time sweep that force-removes build containers orphaned
 // by a crashed or restarted wardynd process. It is a separate interface
@@ -685,7 +693,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	runs, err := leaser.ClaimStaleRunWatchers(ctx, watcherOwner, watcherLeaseStaleAfter, s.heldRunnerSessions())
+	runs, err := leaser.ClaimStaleRunWatchers(ctx, s.leaseOwner(), watcherLeaseStaleAfter, s.heldRunnerSessions())
 	if err != nil {
 		return err
 	}
@@ -841,7 +849,7 @@ func (s *Server) stampRunWatcherLease(ctx context.Context, runID uuid.UUID) {
 	if !ok {
 		return
 	}
-	if err := leaser.HeartbeatRunWatcher(ctx, runID, watcherOwner); err != nil {
+	if err := leaser.HeartbeatRunWatcher(ctx, runID, s.leaseOwner()); err != nil {
 		slog.WarnContext(ctx, "wardynd: run watcher heartbeat",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}

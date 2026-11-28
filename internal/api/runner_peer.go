@@ -28,6 +28,7 @@ import (
 type runnerPeering struct {
 	cfg   remote.PeerConfig
 	self  string
+	owner func() string // the Server's leaseOwner
 	st    store.RunnerHolderStore
 	trans *remote.PeerTransport
 	view  *remote.HolderView
@@ -42,7 +43,7 @@ func (s *Server) runnerPeering() *runnerPeering {
 		if s.cfg.RunnerPeer == nil || !ok {
 			return
 		}
-		p := &runnerPeering{cfg: *s.cfg.RunnerPeer, self: s.replicaName(), st: st}
+		p := &runnerPeering{cfg: *s.cfg.RunnerPeer, self: s.replicaName(), owner: s.leaseOwner, st: st}
 		p.trans = remote.NewPeerTransport(p.cfg, p.self, func(ctx context.Context, runnerID uuid.UUID) (remote.PeerRoute, bool, error) {
 			r, ok, err := st.RunnerSessionHolder(ctx, runnerID)
 			return remote.PeerRoute{ReplicaID: r.ReplicaID, PeerURL: r.PeerURL, SessionID: r.SessionID}, ok, err
@@ -81,7 +82,7 @@ func (p *runnerPeering) Drop(ctx context.Context, runnerID, sessionID uuid.UUID)
 // against this replica's id and address, so a run's watcher lease names a peer address.
 func (p *runnerPeering) Refresh(ctx context.Context) {
 	if p.view.Refresh(ctx) == nil {
-		_ = p.st.TouchRunnerPeerReplica(ctx, watcherOwner, p.self, p.cfg.URL)
+		_ = p.st.TouchRunnerPeerReplica(ctx, p.owner(), p.self, p.cfg.URL)
 	}
 }
 
@@ -115,7 +116,7 @@ func (p *runnerPeering) outputLease(runnerID uuid.UUID, link *remote.Link) func(
 		if err != nil {
 			return false, false, err
 		}
-		if r.WatcherOwner == watcherOwner || !r.LeaseFresh {
+		if r.WatcherOwner == p.owner() || !r.LeaseFresh {
 			return true, true, nil
 		}
 		holder := ""

@@ -136,6 +136,9 @@ type Server struct {
 	// replica is this server's identity when no LiveBus names one (replicaName).
 	replica     string
 	replicaOnce sync.Once
+	// owner, when set, is this server's name in agent_runs.watcher_owner in place of the process's (leaseOwner).
+	// Only a test sets it, so two Servers in one test process lease as two processes.
+	owner string
 	// peering is the runner peer client and the peer door's refusal counts (runner_peer.go).
 	peering         peerState
 	leaseKeeperOnce sync.Once       // starts attachLeaseKeeper (attach_lease.go)
