@@ -62,6 +62,9 @@ var runnerContextCensus = map[runnerContextSite]runnerContextRow{
 	{"k8s/sandbox.go", "Driver.CreateSandbox", "Background"}:                  {1, ctxCreate},
 	{"k8s/warm_loop.go", "Driver.startWarmPools", "Background"}:               {1, ctxOwnLoop},
 	{"offline/retirement.go", "Manager.ReleaseSettledOutput", "Background"}:   {1, ctxBoot},
+	{"remote/output.go", "Substrate.sinkLoop", "Background"}:                  {1, ctxOwnLoop},
+	{"remote/peer.go", "PeerTransport.open", "WithoutCancel"}:                 {1, ctxOwnLoop},
+	{"remote/peer.go", "PeerTransport.openOutput", "WithoutCancel"}:           {1, ctxOwnLoop},
 	{"remote/streams.go", "Substrate.ExecStream", "Background"}:               {1, ctxCallerBound},
 	{"runnerio/server.go", "Server.life", "Background"}:                       {1, ctxOwnLoop},
 }
