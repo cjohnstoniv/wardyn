@@ -1010,3 +1010,48 @@ func TestLaunchPlacedFromNonHolderReplica_PG(t *testing.T) {
 		t.Fatalf("launch to last assertion took %v, want under 90s: the dispatch-time lease would be stale", d)
 	}
 }
+
+// R16b: a run launched on B keeps its output at B while its runner moves from A to C: C forwards the re-open to B,
+// which it reads from RunOutputLauncher, and B's dispatch-time lease is the one read.
+func TestThreeReplicasOutputFollowsRunnerMove_PG(t *testing.T) {
+	f := newPeerFixture(t)
+	f.waitHolder(t, f.session(t))
+	b, c := f.nonHolder(t), f.nonHolder(t)
+	holdOutput(t, f.fake)
+	peerWithin(t, 6*time.Second, "B and C read the runner online", func() bool { return b.RunnerOnline(f.rn.ID) && c.RunnerOnline(f.rn.ID) })
+
+	start := time.Now()
+	run, stop := launchVia(t, b, f.runnerProcess)
+	stop() // dispatch returned
+	part1 := "agent output of " + run.SandboxRef + "\n"
+	peerWithin(t, 10*time.Second, "part 1 is read through B", func() bool { return outputVia(t, b, run).Output == part1 })
+
+	// The runner's link to A ends and it connects to C.
+	moved := time.Now()
+	f.disconnect()
+	f.disconnect = f.connectTo(t, c)
+	peerWithin(t, 5*time.Second-time.Since(moved), "the runner's holder row names C", func() bool {
+		r, ok, err := f.st.RunnerSessionHolder(f.ctx, f.rn.ID)
+		return err == nil && ok && r.ReplicaID == c.replicaName()
+	})
+	launcherFresh(t, f.st, f.ctx, run.ID, b, "where C reads the launcher")
+	part2 := "part 2 after the move " + uuid.NewString() + "\n"
+	if _, err := io.WriteString(heldOutput(t, f.fake, run.ID), part2); err != nil {
+		t.Fatal(err)
+	}
+	peerWithin(t, 10*time.Second, "part 2 reaches B's sink through C", func() bool {
+		text, ok := tailText(b, run.ID)
+		return ok && strings.HasSuffix(text, part2)
+	})
+	if _, ok := tailText(c, run.ID); ok || servable(f.ctx, c, f.rn.ID, run.ID) {
+		t.Fatal("C holds a tail or a sink for a run B launched")
+	}
+	peerWithin(t, 10*time.Second, "the stored output through B is part 1 then part 2", func() bool {
+		o := outputVia(t, b, run)
+		return o.Output == part1+part2 && !o.CaptureGap && !o.Incomplete
+	})
+	launcherFresh(t, f.st, f.ctx, run.ID, b, "at the end")
+	if d := time.Since(start); d >= 90*time.Second {
+		t.Fatalf("launch to last assertion took %v, want under 90s", d)
+	}
+}
