@@ -722,3 +722,620 @@ func TestLinkOnlineReadsHolderView(t *testing.T) {
 		t.Fatal("a row gone stale still reads online")
 	}
 }
+
+// shorten sets *v to d for the test.
+func shorten(t *testing.T, v *time.Duration, d time.Duration) {
+	t.Helper()
+	old := *v
+	*v = d
+	t.Cleanup(func() { *v = old })
+}
+
+// waitUntil polls cond every 10 ms until it holds or 5 s pass.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting: %s", what)
+		}
+	}
+}
+
+func resetCode(err error) uint32 {
+	if re := (*runnerwire.ResetError)(nil); errors.As(err, &re) {
+		return re.Code
+	}
+	return 0
+}
+
+// endBuf is a sink writer that records its bytes and how its drain ended.
+type endBuf struct {
+	mu  sync.Mutex
+	b   bytes.Buffer
+	end chan error
+}
+
+func newEndBuf() *endBuf { return &endBuf{end: make(chan error, 1)} }
+
+func (e *endBuf) Write(p []byte) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.b.Write(p)
+}
+func (e *endBuf) BeginDrain()        {}
+func (e *endBuf) EndDrain(err error) { e.end <- err }
+func (e *endBuf) String() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.b.String()
+}
+
+// launcherSession is a launcher's transport: a real runnerwire session to a fake runner that answers
+// recover_output with recover, whose OPENs reach the Substrate, with the output ACKs recorded and HeldHere and
+// Online set by the test.
+type launcherSession struct {
+	org, run     *runnerwire.Peer
+	h            Handler
+	held, online atomic.Bool
+	ack          atomic.Int64
+	recovers     atomic.Int32
+	recover      func(ctx context.Context, p *runnerwire.Peer, id uint32, a runnerwire.RecoverOutputArgs) (any, error)
+}
+
+func (l *launcherSession) Online() bool         { return l.online.Load() }
+func (l *launcherSession) HeldHere() bool       { return l.held.Load() }
+func (l *launcherSession) SetHandler(h Handler) { l.h = h }
+func (l *launcherSession) TakeStream(id uint32) (*runnerwire.Stream, error) {
+	return l.org.TakeStream(id)
+}
+func (l *launcherSession) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
+	if method == runnerwire.MethodOutputAck {
+		l.ack.Store(args.(runnerwire.OutputAckArgs).Offset)
+		return nil
+	}
+	return l.org.Call(ctx, method, args, result, opts...)
+}
+
+func newLauncher(ctx context.Context, opts Options, recover func(ctx context.Context, p *runnerwire.Peer, id uint32, a runnerwire.RecoverOutputArgs) (any, error)) (*Substrate, *launcherSession) {
+	ls := &launcherSession{recover: recover}
+	ls.online.Store(true)
+	s := New(uuid.NewString(), ls, opts)
+	o, r := runnerwire.Loopback()
+	ls.org = runnerwire.NewPeer(o, runnerwire.PeerConfig{Org: true, OnOpen: ls.h.HandleOpen})
+	ls.run = runnerwire.NewPeer(r, runnerwire.PeerConfig{OnCall: func(ctx context.Context, id uint32, method string, raw json.RawMessage) (any, error) {
+		if method != runnerwire.MethodRecoverOutput || ls.recover == nil {
+			return nil, errors.New("unexpected method")
+		}
+		ls.recovers.Add(1)
+		var a runnerwire.RecoverOutputArgs
+		_ = json.Unmarshal(raw, &a)
+		return ls.recover(ctx, ls.run, id, a)
+	}})
+	go func() { _ = ls.org.Run(ctx) }()
+	go func() { _ = ls.run.Run(ctx) }()
+	return s, ls
+}
+
+// addSink registers run's sink on s, with a ref when ref is set, holding prefix already.
+func addSink(t *testing.T, s *Substrate, run uuid.UUID, ref string, w *endBuf, prefix string) *outputSink {
+	t.Helper()
+	sink := &outputSink{writer: w}
+	if prefix != "" {
+		if _, err := sink.accept(0, []byte(prefix)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.mu.Lock()
+	s.outputs[run] = sink
+	s.mu.Unlock()
+	if ref != "" {
+		s.setSinkRef(sink, ref)
+	}
+	return sink
+}
+
+func (s *Substrate) sinkFor(run uuid.UUID) *outputSink {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outputs[run]
+}
+
+func (sink *outputSink) state() (offset int64, attached int) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.offset, len(sink.attached)
+}
+
+// forwardRig is a holder Substrate whose Link holds a fake runner's session, with its output opens forwarded to
+// launcher Substrates by replica id behind a fake door that refuses as the real one does.
+type forwardRig struct {
+	holder *Substrate
+	link   *Link
+	runner *runnerwire.Peer
+	run    uuid.UUID
+	dials  atomic.Int32
+
+	mu        sync.Mutex
+	at        OutputLauncher
+	atErr     error
+	launchers map[string]*Substrate
+	refuse    string
+	door      func(ctx context.Context, d runnerwire.Conn) // replaces the launcher's door when set
+}
+
+func newForwardRig(t *testing.T, ctx context.Context) *forwardRig {
+	t.Helper()
+	r := &forwardRig{run: uuid.New(), launchers: map[string]*Substrate{}}
+	runnerID, sess := uuid.New(), uuid.New()
+	view := NewHolderView("a", func(context.Context) (map[uuid.UUID]PeerRoute, error) {
+		return map[uuid.UUID]PeerRoute{runnerID: {ReplicaID: "a", PeerURL: "https://a", SessionID: sess}}, nil
+	})
+	if err := view.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pt := NewPeerTransport(PeerConfig{Key: make([]byte, 32)}, "a", nil)
+	pt.dial = func(ctx context.Context, route PeerRoute, h http.Header) (runnerwire.Conn, error) {
+		r.dials.Add(1)
+		if h.Get(HeaderPeerMethod) != PeerMethodOutput || h.Get(HeaderPeerTarget) == "" {
+			t.Errorf("forwarded open dialled method %q target %q", h.Get(HeaderPeerMethod), h.Get(HeaderPeerTarget))
+		}
+		r.mu.Lock()
+		l, refuse, door := r.launchers[route.ReplicaID], r.refuse, r.door
+		r.mu.Unlock()
+		c, d := runnerwire.Loopback()
+		if door != nil {
+			go door(ctx, d)
+			return c, nil
+		}
+		if refuse == "" && (l == nil || !l.ServableOutput(ctx, r.run)) {
+			refuse = "no_sink"
+		}
+		if refuse != "" {
+			return nil, &peerRefusedError{class: refuse}
+		}
+		go func() { _ = l.ServeOutputDoor(context.WithoutCancel(ctx), d, r.run, nil) }()
+		return c, nil
+	}
+	r.link = &Link{}
+	r.link.UsePeer(runnerID, view, pt)
+	r.holder = New(runnerID.String(), r.link, Options{RunOutputLauncher: func(context.Context, uuid.UUID) (OutputLauncher, error) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.at, r.atErr
+	}})
+	r.connect(ctx)
+	return r
+}
+
+// connect attaches a new runner session to the holder, replacing any before it.
+func (r *forwardRig) connect(ctx context.Context) {
+	o, rc := runnerwire.Loopback()
+	p := runnerwire.NewPeer(rc, runnerwire.PeerConfig{OnCall: func(context.Context, uint32, string, json.RawMessage) (any, error) {
+		return nil, nil
+	}})
+	go func() { _ = p.Run(ctx) }()
+	r.link.Attach(ctx, o)
+	r.runner = p
+}
+
+func (r *forwardRig) set(at OutputLauncher) {
+	r.mu.Lock()
+	r.at = at
+	r.mu.Unlock()
+}
+
+func (r *forwardRig) open(ctx context.Context, offset int64) (*runnerwire.Stream, error) {
+	return r.runner.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Target: r.run.String(), Offset: offset})
+}
+
+// openRetry retries a capacity answer every 20 ms, as the runner does, until another answer or 5 s; it answers the
+// last result and how many capacity answers came before it.
+func (r *forwardRig) openRetry(ctx context.Context, offset int64) (*runnerwire.Stream, int, error) {
+	n := 0
+	for deadline := time.Now().Add(5 * time.Second); ; n++ {
+		st, err := r.open(ctx, offset)
+		if resetCode(err) != runnerwire.ResetCapacity || time.Now().After(deadline) {
+			return st, n, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (r *forwardRig) forward() outputForward {
+	r.holder.mu.Lock()
+	defer r.holder.mu.Unlock()
+	if f := r.holder.forwards[r.run]; f != nil {
+		return *f
+	}
+	return outputForward{}
+}
+
+func writeAll(t *testing.T, st *runnerwire.Stream, s string) {
+	t.Helper()
+	if _, err := st.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// R23 (remote): a runner's output open at the holder reaches the launcher's sink, the target read on every attempt.
+func TestPeerOutputOpenForwardedToLauncher(t *testing.T) {
+	ctx := t.Context()
+	shorten(t, &forwardReadyFor, 300*time.Millisecond)
+	shorten(t, &forwardRefusedFor, 300*time.Millisecond)
+	r := newForwardRig(t, ctx)
+	b, bs := newLauncher(ctx, Options{}, nil)
+	w := newEndBuf()
+	sink := addSink(t, b, r.run, "", w, "")
+	r.launchers["b"] = b
+	r.set(OutputLauncher{State: LauncherFresh, ReplicaID: "b", PeerURL: "https://b"})
+
+	// The first open is answered capacity at once; a retry at the same offset is accepted.
+	if _, err := r.open(ctx, 0); resetCode(err) != runnerwire.ResetCapacity {
+		t.Fatalf("first open: %v, want a capacity reset", err)
+	}
+	st, _, err := r.openRetry(ctx, 0)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	writeAll(t, st, "hello")
+	waitUntil(t, "the bytes reach the launcher's sink and are ACKed", func() bool { return w.String() == "hello" && bs.ack.Load() == 5 })
+
+	// A new connection on the same holder reaches the same sink, at the acknowledged offset.
+	r.connect(ctx)
+	st, _, err = r.openRetry(ctx, 5)
+	if err != nil {
+		t.Fatalf("open on the new connection: %v", err)
+	}
+	writeAll(t, st, " world")
+	waitUntil(t, "the new connection's bytes follow", func() bool { return w.String() == "hello world" && bs.ack.Load() == 11 })
+
+	// The launcher's capacity answer reaches the runner as capacity.
+	r.connect(ctx)
+	sink.mu.Lock()
+	sink.pending = true
+	sink.mu.Unlock()
+	if _, n, err := r.openRetry(ctx, 11); err == nil || n < 2 {
+		t.Fatalf("while the launcher's sink is pending: %v after %d capacity answers, want capacity until 5 s", err, n)
+	}
+	sink.mu.Lock()
+	sink.pending = false
+	sink.mu.Unlock()
+
+	// A ready forward that no retry takes is reset after forwardReadyFor.
+	r.connect(ctx)
+	if _, err := r.open(ctx, 11); resetCode(err) != runnerwire.ResetCapacity {
+		t.Fatalf("open: %v, want a capacity reset", err)
+	}
+	waitUntil(t, "the launcher accepts the forwarded open", func() bool { _, n := sink.state(); return n == 1 })
+	waitUntil(t, "the untaken stream is reset", func() bool { _, n := sink.state(); return n == 0 })
+
+	// A lease moved to another launcher between two attempts is followed.
+	c, _ := newLauncher(ctx, Options{}, nil)
+	wc := newEndBuf()
+	addSink(t, c, r.run, "", wc, "hello world")
+	r.mu.Lock()
+	r.launchers["c"] = c
+	r.mu.Unlock()
+	r.set(OutputLauncher{State: LauncherFresh, ReplicaID: "c", PeerURL: "https://c"})
+	r.connect(ctx)
+	st, _, err = r.openRetry(ctx, 11)
+	if err != nil {
+		t.Fatalf("open after the move: %v", err)
+	}
+	writeAll(t, st, "!")
+	waitUntil(t, "the moved lease's sink takes the bytes", func() bool { return wc.String() == "hello world!" })
+	if w.String() != "hello world" {
+		t.Fatalf("the old launcher's sink = %q, want it unchanged", w.String())
+	}
+
+	// The launcher's no_sink makes the next retry refused, and a refusal answers at once while it lasts.
+	r.mu.Lock()
+	r.refuse = "no_sink"
+	r.mu.Unlock()
+	r.connect(ctx)
+	if _, _, err := r.openRetry(ctx, 12); resetCode(err) != runnerwire.ResetRefused {
+		t.Fatalf("after no_sink: %v, want a refused reset", err)
+	}
+	dials := r.dials.Load()
+	if _, err := r.open(ctx, 12); resetCode(err) != runnerwire.ResetRefused || r.dials.Load() != dials {
+		t.Fatalf("within the refusal: %v with %d new dials, want refused with none", err, r.dials.Load()-dials)
+	}
+	// Any other class records nothing: the next retry starts a new attempt.
+	time.Sleep(forwardRefusedFor)
+	r.mu.Lock()
+	r.refuse = "not_live_session"
+	r.mu.Unlock()
+	if _, n, err := r.openRetry(ctx, 12); err == nil || n < 2 || r.dials.Load() < dials+2 {
+		t.Fatalf("after not_live_session: %v after %d capacity answers, want capacity and a new attempt per retry", err, n)
+	}
+
+	// The launcher's door takes one OPEN of the token's run: a call first, or an OPEN for another run, is
+	// wrong_method, closes the WebSocket, and reaches no sink.
+	for name, first := range map[string]func(ctx context.Context, p *runnerwire.Peer) error{
+		"a call": func(ctx context.Context, p *runnerwire.Peer) error {
+			return p.Call(ctx, runnerwire.MethodStatus, nil, nil)
+		},
+		"another run": func(ctx context.Context, p *runnerwire.Peer) error {
+			_, err := p.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Target: uuid.NewString()})
+			return err
+		},
+		"another kind": func(ctx context.Context, p *runnerwire.Peer) error {
+			_, err := p.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay, Target: r.run.String()})
+			return err
+		},
+	} {
+		var classes []string
+		var cmu sync.Mutex
+		h, d := runnerwire.Loopback()
+		ended := make(chan error, 1)
+		go func() {
+			ended <- b.ServeOutputDoor(ctx, d, r.run, func(c string) { cmu.Lock(); classes = append(classes, c); cmu.Unlock() })
+		}()
+		hp := runnerwire.NewPeer(h, runnerwire.PeerConfig{})
+		go func() { _ = hp.Run(ctx) }()
+		before := w.String()
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := first(cctx, hp); err == nil {
+			t.Errorf("%s: the door served it", name)
+		}
+		cancel()
+		select {
+		case <-ended:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the door did not close", name)
+		}
+		cmu.Lock()
+		if len(classes) != 1 || classes[0] != "wrong_method" || w.String() != before {
+			t.Errorf("%s: classes %v, sink %q; want one wrong_method and no byte", name, classes, w.String())
+		}
+		cmu.Unlock()
+	}
+}
+
+// R23b: HandleOpen never waits on a forward attempt, so the session's read loop keeps serving.
+func TestPeerOutputOpenNeverBlocksReadLoop(t *testing.T) {
+	ctx := t.Context()
+	shorten(t, &forwardAttemptTimeout, 500*time.Millisecond)
+	r := newForwardRig(t, ctx)
+	r.set(OutputLauncher{State: LauncherFresh, ReplicaID: "b", PeerURL: "https://b"})
+	r.door = func(context.Context, runnerwire.Conn) {} // accepts the WebSocket and never answers the OPEN
+	for i := range 5 {
+		start := time.Now()
+		if _, err := r.open(ctx, 0); resetCode(err) != runnerwire.ResetCapacity {
+			t.Fatalf("open %d: %v, want a capacity reset", i, err)
+		}
+		if d := time.Since(start); d > 100*time.Millisecond {
+			t.Fatalf("open %d took %v while the attempt hangs", i, d)
+		}
+		// A call on the same session is answered while the attempt hangs.
+		cctx, cancel := context.WithTimeout(ctx, time.Second)
+		err := r.link.Call(cctx, runnerwire.MethodOutputAck, runnerwire.OutputAckArgs{RunID: r.run, Offset: 1}, nil)
+		cancel()
+		if err != nil {
+			t.Fatalf("a call while the attempt hangs: %v", err)
+		}
+	}
+	if n := r.dials.Load(); n != 1 {
+		t.Fatalf("%d attempts while one hangs, want 1", n)
+	}
+	waitUntil(t, "the attempt ends at its deadline", func() bool { return !r.forward().attempting })
+	if _, err := r.open(ctx, 0); resetCode(err) != runnerwire.ResetCapacity {
+		t.Fatalf("open after the deadline: %v", err)
+	}
+	waitUntil(t, "the next retry starts a new attempt", func() bool { return r.dials.Load() == 2 })
+}
+
+// R23d: an open whose launcher reads LauncherWait is answered capacity until forwardWaitCeiling, then refused.
+func TestPeerOutputWaitCeilingRefuses(t *testing.T) {
+	ctx := t.Context()
+	shorten(t, &forwardWaitCeiling, 400*time.Millisecond)
+	shorten(t, &forwardRefusedFor, 200*time.Millisecond)
+	r := newForwardRig(t, ctx)
+	r.set(OutputLauncher{State: LauncherWait})
+	start := time.Now()
+	_, n, err := r.openRetry(ctx, 0)
+	if resetCode(err) != runnerwire.ResetRefused || n < 2 || time.Since(start) < forwardWaitCeiling {
+		t.Fatalf("waiting: %v after %d capacity answers in %v, want capacity until the ceiling, then refused", err, n, time.Since(start))
+	}
+	if f := r.forward(); f.refusedAt.IsZero() || !f.waitSince.IsZero() {
+		t.Fatalf("after the ceiling: refusal %v, wait clock %v; want a refusal and no clock", f.refusedAt, f.waitSince)
+	}
+
+	// A LauncherFresh read before the ceiling clears the clock.
+	time.Sleep(forwardRefusedFor)
+	if _, err := r.open(ctx, 0); resetCode(err) != runnerwire.ResetCapacity {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the wait clock starts", func() bool { return !r.forward().waitSince.IsZero() })
+	r.set(OutputLauncher{State: LauncherFresh, ReplicaID: "b", PeerURL: "https://b"}) // no sink at b: no_sink
+	waitUntil(t, "a fresh read clears the clock", func() bool {
+		_, _ = r.open(ctx, 0)
+		return r.forward().waitSince.IsZero() && !r.forward().attempting
+	})
+
+	// A lost run is refused at its first read.
+	time.Sleep(forwardRefusedFor)
+	r.set(OutputLauncher{State: LauncherNone})
+	dials := r.dials.Load()
+	if _, n, err := r.openRetry(ctx, 0); resetCode(err) != runnerwire.ResetRefused || n < 1 || n > 3 || r.dials.Load() != dials {
+		t.Fatalf("a lost run: %v after %d capacity answers, %d dials; want refused at the first read", err, n, r.dials.Load()-dials)
+	}
+	// LauncherFresh naming this replica is a refusal too, with no dial.
+	time.Sleep(forwardRefusedFor)
+	r.set(OutputLauncher{State: LauncherFresh, ReplicaID: "a", PeerURL: "https://a"})
+	if _, n, err := r.openRetry(ctx, 0); resetCode(err) != runnerwire.ResetRefused || n < 1 || n > 3 || r.dials.Load() != dials {
+		t.Fatalf("a launcher naming this replica: %v after %d capacity answers, %d dials", err, n, r.dials.Load()-dials)
+	}
+}
+
+// recoverWith answers recover_output with a stream from start that carries data, then ends.
+func recoverWith(start int64, data string) func(ctx context.Context, p *runnerwire.Peer, id uint32, a runnerwire.RecoverOutputArgs) (any, error) {
+	return func(ctx context.Context, p *runnerwire.Peer, id uint32, a runnerwire.RecoverOutputArgs) (any, error) {
+		if !a.Gap {
+			return nil, errors.New("recover_output without Gap")
+		}
+		st, err := p.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Call: id})
+		if err != nil {
+			return nil, err
+		}
+		go func() { _, _ = st.Write([]byte(data)); _ = st.CloseWrite() }()
+		return runnerwire.RecoverResult{Stream: st.ID(), Gap: start}, nil
+	}
+}
+
+// R23c: a launcher's sink with nothing attached while its runner reads online elsewhere is recovered into itself.
+func TestPeerOutputResumesStalledSink(t *testing.T) {
+	ctx := t.Context()
+	shorten(t, &outputStallAfter, 200*time.Millisecond)
+	keepAll := func(context.Context, uuid.UUID) (bool, bool, error) { return true, true, nil }
+	opts := Options{OutputLease: keepAll, OutputSinkCheck: 20 * time.Millisecond}
+
+	// The runner stopped sending: the recovery from 0 fills the same sink, each byte once.
+	s, ls := newLauncher(ctx, opts, recoverWith(0, "hello world"))
+	run, w := uuid.New(), newEndBuf()
+	addSink(t, s, run, "runner:x/a", w, "hello")
+	select {
+	case err := <-w.end:
+		if err != nil || w.String() != "hello world" || ls.recovers.Load() != 1 {
+			t.Fatalf("recovered sink: %q, end %v, %d recoveries; want every byte once and one recovery", w.String(), err, ls.recovers.Load())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stalled sink was never recovered")
+	}
+
+	// A recovery start past the sink's offset ends it unrecoverable.
+	s, _ = newLauncher(ctx, opts, recoverWith(9, "ld"))
+	run, w = uuid.New(), newEndBuf()
+	addSink(t, s, run, "runner:x/b", w, "hello")
+	select {
+	case err := <-w.end:
+		if !errors.Is(err, runner.ErrOutputUnrecoverable) {
+			t.Fatalf("a start past the offset ended the sink with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a start past the offset did not end the sink")
+	}
+
+	// A sink whose session the launcher holds is never checked for a stall.
+	s, ls = newLauncher(ctx, opts, recoverWith(0, "hello"))
+	ls.held.Store(true)
+	addSink(t, s, uuid.New(), "runner:x/c", newEndBuf(), "hello")
+	time.Sleep(3 * outputStallAfter)
+	if n := ls.recovers.Load(); n != 0 {
+		t.Fatalf("a held session's sink was recovered %d times", n)
+	}
+
+	// The count does not run while the runner reads offline: a return starts no recovery for the stall time.
+	s, ls = newLauncher(ctx, opts, recoverWith(0, "hello"))
+	ls.online.Store(false)
+	addSink(t, s, uuid.New(), "runner:x/d", newEndBuf(), "hello")
+	time.Sleep(2 * outputStallAfter)
+	ls.online.Store(true)
+	back := time.Now()
+	waitUntil(t, "the sink is recovered after the runner returns", func() bool { return ls.recovers.Load() == 1 })
+	if d := time.Since(back); d < outputStallAfter {
+		t.Fatalf("recovered %v after the runner returned, want at least %v", d, outputStallAfter)
+	}
+
+	// A recover call that hangs past two checks starts no second one, and the sink keeps its own offset.
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	s, ls = newLauncher(ctx, opts, func(ctx context.Context, _ *runnerwire.Peer, _ uint32, _ runnerwire.RecoverOutputArgs) (any, error) {
+		select {
+		case <-hang:
+		case <-ctx.Done():
+		}
+		return nil, errors.New("hung")
+	})
+	sink := addSink(t, s, uuid.New(), "runner:x/e", newEndBuf(), "hello")
+	waitUntil(t, "the recovery starts", func() bool { return ls.recovers.Load() == 1 })
+	time.Sleep(10 * opts.OutputSinkCheck)
+	if n := ls.recovers.Load(); n != 1 {
+		t.Fatalf("%d recoveries while one hangs, want 1", n)
+	}
+	if off, _ := sink.state(); off != 5 {
+		t.Fatalf("the stalled sink's offset is %d, want its own 5", off)
+	}
+}
+
+// R23e (remote): a launcher's sink yields to a fresh lease held elsewhere, and serves only while no other process
+// holds the lease fresh.
+func TestPeerOutputSinkYieldsToFreshLease(t *testing.T) {
+	ctx := t.Context()
+	shorten(t, &outputStallAfter, 200*time.Millisecond)
+	var mu sync.Mutex
+	keep, sole, readErr := true, true, error(nil)
+	lease := func(context.Context, uuid.UUID) (bool, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return keep, sole, readErr
+	}
+	setLease := func(k, so bool, err error) { mu.Lock(); keep, sole, readErr = k, so, err; mu.Unlock() }
+	var yielded atomic.Int32
+	var w *endBuf
+	opts := Options{OutputLease: lease, OutputSinkCheck: 20 * time.Millisecond, OutputYielded: func(uuid.UUID) {
+		yielded.Add(1)
+		if len(w.end) != 0 {
+			panic("the sink was finished before OutputYielded returned")
+		}
+	}}
+	s, ls := newLauncher(ctx, opts, nil)
+	run := uuid.New()
+	w = newEndBuf()
+	addSink(t, s, run, "runner:x/a", w, "")
+	st, err := ls.run.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Target: run.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAll(t, st, "part")
+	waitUntil(t, "the bytes land", func() bool { return w.String() == "part" })
+
+	// keep true, or a failed read, keeps the sink.
+	setLease(true, true, errors.New("database down"))
+	time.Sleep(5 * opts.OutputSinkCheck)
+	if s.sinkFor(run) == nil || yielded.Load() != 0 {
+		t.Fatal("a failed read dropped the sink")
+	}
+	if s.ServableOutput(ctx, run) {
+		t.Fatal("the door served a forwarded open on a failed read")
+	}
+
+	// keep false: the next check drops the sink, resets the attached stream, yields once, then finishes the sink.
+	setLease(false, false, nil)
+	select {
+	case err := <-w.end:
+		if !errors.Is(err, errOutputYielded) || yielded.Load() != 1 {
+			t.Fatalf("yield: end %v after %d OutputYielded calls; want errOutputYielded after one", err, yielded.Load())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sink did not yield")
+	}
+	<-st.Done()
+	if resetCode(st.Err()) != runnerwire.ResetRefused || s.sinkFor(run) != nil {
+		t.Fatalf("after the yield: stream %v, sink kept %v; want a refused reset and no sink", st.Err(), s.sinkFor(run) != nil)
+	}
+	if s.ServableOutput(ctx, run) {
+		t.Fatal("the door serves a yielded run")
+	}
+	time.Sleep(5 * opts.OutputSinkCheck)
+	if yielded.Load() != 1 {
+		t.Fatalf("OutputYielded ran %d times", yielded.Load())
+	}
+
+	// sole false (another process's fresh lease, off the holder): no stall recovery and no_sink at the door; once
+	// sole reads true, it recovers. A stale lease (keep and sole true) keeps the sink and its recovery.
+	setLease(true, false, nil)
+	s, ls = newLauncher(ctx, opts, recoverWith(0, "x"))
+	run = uuid.New()
+	w = newEndBuf()
+	addSink(t, s, run, "runner:x/b", w, "")
+	time.Sleep(3 * outputStallAfter)
+	if ls.recovers.Load() != 0 || s.ServableOutput(ctx, run) {
+		t.Fatalf("sole false: %d recoveries, door serves %v; want none and no_sink", ls.recovers.Load(), s.ServableOutput(ctx, run))
+	}
+	setLease(true, true, nil)
+	waitUntil(t, "the sink recovers once sole reads true", func() bool { return ls.recovers.Load() == 1 })
+	if !s.ServableOutput(ctx, run) && s.sinkFor(run) != nil {
+		t.Fatal("sole true: the door refuses a kept sink")
+	}
+}

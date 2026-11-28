@@ -237,6 +237,9 @@ func (pt *PeerTransport) dialWebSocket(ctx context.Context, route PeerRoute, h h
 		_ = resp.Body.Close()
 	}
 	if err != nil {
+		if resp != nil && resp.Header.Get(HeaderPeerRefused) != "" {
+			return nil, &peerRefusedError{class: resp.Header.Get(HeaderPeerRefused)}
+		}
 		return nil, err
 	}
 	return runnerwire.NewWebSocket(c), nil
@@ -268,6 +271,33 @@ func (pt *PeerTransport) open(ctx context.Context, runnerID uuid.UUID, route Pee
 		return nil, errOffline
 	}
 	p := runnerwire.NewPeer(conn, runnerwire.PeerConfig{Org: true})
+	go func() { _ = p.Run(context.WithoutCancel(ctx)) }()
+	return p, nil
+}
+
+// peerRefusedError is a door's refusal whose answer named its class (Wardyn-Peer-Refused).
+type peerRefusedError struct{ class string }
+
+func (e *peerRefusedError) Error() string { return "runner peer door refused the request: " + e.class }
+
+// openOutput dials the launcher's door (route) for one output open of run, forwarded from this replica's session
+// route.SessionID of runnerID, and runs the holder's end of a runnerwire peer over it. That end is not the org
+// end, so its OPEN carries the runner's parity, which the launcher's door expects. A refusal whose class the door
+// named is a *peerRefusedError; any other failure is errOffline. The peer ends when the caller closes it or the
+// door does.
+func (pt *PeerTransport) openOutput(ctx context.Context, runnerID uuid.UUID, route PeerRoute, run uuid.UUID) (*runnerwire.Peer, error) {
+	tok := PeerToken{From: pt.self, To: route.ReplicaID, Runner: runnerID, Session: route.SessionID, Method: PeerMethodOutput,
+		Exp: pt.now().Add(peerTokenLife).Unix(), Target: run}
+	h := http.Header{}
+	tok.SetHeaders(h, pt.cfg.Key)
+	conn, err := pt.dial(ctx, route, h)
+	if err != nil {
+		if re := (*peerRefusedError)(nil); errors.As(err, &re) {
+			return nil, re
+		}
+		return nil, errOffline
+	}
+	p := runnerwire.NewPeer(conn, runnerwire.PeerConfig{Org: false})
 	go func() { _ = p.Run(context.WithoutCancel(ctx)) }()
 	return p, nil
 }

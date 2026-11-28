@@ -90,6 +90,19 @@ type Options struct {
 	// MacOSVMDisks, when set, takes the macOS VM disk reports a runner's stop, kill, end and sweep replies
 	// carry. They are the runner's word; an older runner sends none.
 	MacOSVMDisks func(ctx context.Context, reports []runner.MacOSVMDisk)
+	// RunOutputLauncher, under high availability, reads where a run's output is kept: the replica whose process
+	// holds the run's watcher lease. With it set, an output open with no sink here is forwarded there
+	// (forwardOpen). Nil refuses such an open.
+	RunOutputLauncher func(ctx context.Context, run uuid.UUID) (OutputLauncher, error)
+	// OutputLease, under high availability, is the rule a sink is kept by: keep is whether this process may
+	// keep serving run's sink, sole whether no other process holds the run's watcher lease fresh. The sink check
+	// (checkSinks) and ServableOutput read it. Nil keeps every sink and runs no check.
+	OutputLease func(ctx context.Context, run uuid.UUID) (keep, sole bool, err error)
+	// OutputYielded runs once after a sink yields (OutputLease answered keep false) and before the sink is
+	// finished, so the caller frees the run's tail first.
+	OutputYielded func(run uuid.UUID)
+	// OutputSinkCheck is the sink check's period; zero is outputSinkCheck.
+	OutputSinkCheck time.Duration
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -106,7 +119,9 @@ type Substrate struct {
 	caps     *runnerwire.Caps
 	peerCaps peerCapsRead // the holder's answer to caps, while another replica holds the session
 	outputs  map[uuid.UUID]*outputSink
-	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	forwards map[uuid.UUID]*outputForward // sink-less output opens on their way to the run's launcher
+	checking bool                         // the sink check loop is running
+	resident map[uuid.UUID]leafHashes     // SHA-256 of what DeliverResident delivered; never the value
 	// vmKinds is the machine kind of each VM sandbox this substrate created, so a desktop or a pause is
 	// gated by that kind's caps; a ref missing from it (created before a restart) is gated by either.
 	vmKinds                    map[string]types.MachineKind
@@ -115,7 +130,8 @@ type Substrate struct {
 
 // New builds the substrate of runnerID over t.
 func New(runnerID string, t Transport, opts Options) *Substrate {
-	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{},
+	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{},
+		forwards: map[uuid.UUID]*outputForward{}, resident: map[uuid.UUID]leafHashes{},
 		vmKinds: map[string]types.MachineKind{}}
 	t.SetHandler(s)
 	return s
@@ -333,6 +349,12 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 		s.mu.Lock()
 		s.vmKinds[res.Sandbox.Ref] = spec.MachineKind
 		s.mu.Unlock()
+	}
+	if spec.ExecOutput != nil {
+		s.mu.Lock()
+		sink := s.outputs[spec.RunID] // registered here or by an earlier try of this create
+		s.mu.Unlock()
+		s.setSinkRef(sink, res.Sandbox.Ref)
 	}
 	return res.Sandbox, nil
 }
@@ -784,6 +806,7 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 	if res.Gap > 0 {
 		gapper.OutputGap(res.Gap)
 	}
+	s.setSinkRef(adopted, ref)
 	if adopted != nil {
 		// ACK what w accepts, as receiveOutput does, and let the runner's next OPEN resume into w.
 		adopted.mu.Lock()
