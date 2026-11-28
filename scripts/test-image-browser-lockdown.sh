@@ -14,8 +14,9 @@
 #   I-3   wardyn-signin browser opens no port, refuses a port flag, and ignores CHROMIUM_FLAGS and CHROME_FLAGS;
 #   I-3b  cdp --agent --session drives a page under the policy (I-3bc: and without it);
 #   I-4   the sign-in gate passes with the policy installed;
-#   I-5   records which policy keys leave the pipe and page sessions working (never fails; I-5c is
+#   I-5   records which policy keys leave the pipe and page sessions working (I-5c is
 #         DeveloperToolsAvailability 2, which the baseline leaves out because it refuses page sessions);
+#         only RemoteDebuggingAllowed false fails: CDP must be refused, within I5_REFUSE_SECS;
 #   I-6   the agent cannot mask the policy directory in a user namespace of its own.
 # MEASURE lines are the measurements.
 #
@@ -243,8 +244,36 @@ measure() {
 	echo "MEASURE $label pipe=$pipe session=$session port=$port"
 	i5port=$port
 }
+# measure_refused C POLICY LABEL: under POLICY the pipe must refuse CDP. The browser keeps the pipe and does not answer,
+# so start_browser's 100 tries of the 30 s cdpCallTimeout would wait some 50 minutes: here one deadline bounds the whole
+# measure. It passes on a refusal: cdp --agent exits non-zero saying the browser did not answer, sent a CDP error, or
+# ended the pipe. It fails when cdp --agent gets an answer, or when the deadline passes with no such word.
+I5_REFUSE_SECS=${I5_REFUSE_SECS:-40}
+measure_refused() {
+	local c=$1 policy=$2 label=$3 port=none out rc left why="" end=$((SECONDS + I5_REFUSE_SECS))
+	run_c "$c"
+	install_policy "$c" "$policy"
+	docker exec -d -u 1000:1000 "$c" wardyn-signin browser --headless
+	while left=$((end - SECONDS)); ((left > 0)); do
+		rc=0
+		out=$(timeout "$left" docker exec -i -u 1000:1000 "$c" wardyn-signin cdp --agent Browser.getVersion 2>&1) || rc=$?
+		case $rc:$out in
+		0:*) fail "$label CDP answered with RemoteDebuggingAllowed false: $out" ;;
+		124:*) break ;;
+		*"did not answer within"*) why=no-answer ;;
+		*'"code":'*) why=cdp-error ;;
+		*EOF* | *"file already closed"* | *"broken pipe"*) why=pipe-ended ;;
+		esac
+		[ -n "$why" ] && break
+		sleep 0.2 # the browser is not up yet: try again inside the deadline
+	done
+	[ -n "$why" ] || fail "$label no CDP refusal within ${I5_REFUSE_SECS}s with RemoteDebuggingAllowed false (last: rc=${rc:-none} ${out:-})"
+	if port_opens "$c"; then port=listening; fi
+	echo "MEASURE $label pipe=refused why=$why session=refused port=$port"
+	pass "$label RemoteDebuggingAllowed false refuses CDP on the pipe ($why)"
+}
 measure "$P-i5c" '{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"]}' I-5c
-measure "$P-i5" '{"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
+measure_refused "$P-i5" '{"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
 measure "$P-i5b" '{"ExtensionInstallBlocklist":["*"]}' I-5b
 [ "$i5port" = listening ] || fail "I-5b control: an agent's Chromium opened no port with neither key set, so I-5's port= proves nothing"
 
