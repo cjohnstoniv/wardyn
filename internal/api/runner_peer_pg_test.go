@@ -237,10 +237,10 @@ type peerFixture struct {
 	ts *httptest.Server
 }
 
-func newPeerFixture(t *testing.T) *peerFixture {
+func newPeerFixture(t *testing.T, shape ...func(*Config)) *peerFixture {
 	t.Helper()
 	pc := newPeerConfig()
-	f := newRunnerLeaseFixture(t, peerShape(pc))
+	f := newRunnerLeaseFixture(t, append([]func(*Config){peerShape(pc)}, shape...)...)
 	ts := serveDoor(t, f.srv, pc)
 	return &peerFixture{runnerLeaseFixture: f, pc: pc, ts: ts}
 }
