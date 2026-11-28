@@ -656,7 +656,7 @@ case "$a" in
 esac
 docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 #    A new database first runs a setup server that listens on no TCP port, so
-#    wait, at most a minute, for the real one before loading into it.
+#    wait for the real one, up to 60 attempts a second apart, before loading.
 i=0
 until docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
   pg_isready -h 127.0.0.1 -U wardyn -d wardyn >/dev/null 2>&1; do
@@ -707,10 +707,13 @@ usable() {
 }
 #    docker volume create also succeeds on a volume that already exists, and
 #    a drive volume carries no installation label, so nothing on the volume
-#    shows which installation made it. While this loop runs, no other Wardyn
-#    installation may run on this Docker host (stop it, or restore on a host
-#    of its own); the volumes are listed once, and any failure to list stops.
-ask "No other Wardyn installation runs on this Docker host while this loop runs"
+#    shows which installation or restore made it. Until this loop finishes,
+#    only this restore may create, remove or replace a wardyn-drive-* or
+#    wardyn-portal-* volume on this Docker daemon: no Wardyn server runs on it,
+#    and no other restore or manual recovery runs either, even with every
+#    server stopped. A Docker daemon of this restore's own meets that too. The
+#    volumes are listed once, and any failure to list stops.
+ask "Until this loop finishes, only this restore creates, removes or replaces drive volumes on this Docker daemon: no Wardyn server, other restore or manual recovery runs"
 vols=$(docker volume ls -q) || { echo "STOP: the volumes on this host could not be listed"; exit 1; }
 h=
 while IFS= read -r v <&3; do

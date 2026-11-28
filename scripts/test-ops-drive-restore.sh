@@ -160,7 +160,8 @@ out="$(cd "$T" && mkdir -p there && printf '%s\n\n' "$good" >there/wardyn-drive-
   bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" || true
 [[ "$out" == *"SKIP: wardyn-drive-a already exists"* ]] || fail "an existing volume was not skipped: $out"
 ! grep -q '^volume create\|^run ' "$T/there/docker.log" || fail "an existing volume was created or written"
-[[ "$out" == *"ASKED: No other Wardyn installation runs"* ]] || fail "the loop did not ask that no other installation runs: $out"
+[[ "$out" == *"ASKED: Until this loop finishes, only this restore creates, removes or replaces drive volumes"* &&
+  "$out" == *"other restore or manual recovery"* ]] || fail "the loop did not ask that only this restore changes drive volumes: $out"
 rm -rf "$T/nolist"
 out="$(cd "$T" && mkdir -p nolist && printf '%s\n\n' "$good" >nolist/wardyn-drive-a.labels && : >nolist/wardyn-drive-a.tar.gz &&
   echo wardyn-drive-a >nolist/drives.list && B="$T/nolist" DB_IDS="$ID" VOLS_FAIL=1 \
