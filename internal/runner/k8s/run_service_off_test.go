@@ -7,7 +7,9 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +143,54 @@ func TestRunServiceOff_KeepRefusesToBoot(t *testing.T) {
 	t.Setenv("WARDYN_K8S_RUN_SERVICE", "off")
 	if !buildConfig(substrate.Deps{}).RunServiceOff {
 		t.Error("buildConfig did not read WARDYN_K8S_RUN_SERVICE=off")
+	}
+}
+
+// With the switch off the agent starts after its proxy is Ready, so no proxy wait is added; a run's own value is kept
+// either way, and with the switch on a run without one gets the whole start budget.
+func TestRunServiceOff_ProxyWaitEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		off      bool
+		override bool
+	}{
+		{"off without an override", true, false},
+		{"off with an override", true, true},
+		{"on without an override", false, false},
+		{"on with an override", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs, spec, _ := serverRun(t, Config{RunServiceOff: tc.off}, readyAt7)
+			spec.Interactive = true
+			if tc.override {
+				spec.Env[proxyWaitSecsEnv] = "42"
+			}
+			if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			got, set := envValue(agentPod(t, cs, spec.RunID), proxyWaitSecsEnv)
+			budget := strconv.Itoa(int((d.cfg.StartTimeout+d.cfg.CapacityWait)/time.Second) + 1)
+			switch {
+			case tc.override && got != "42":
+				t.Errorf("%s = %q (set %v), want the run's own 42", proxyWaitSecsEnv, got, set)
+			case !tc.override && tc.off && set:
+				t.Errorf("%s = %q, want it absent with the switch off", proxyWaitSecsEnv, got)
+			case !tc.override && !tc.off && got != budget:
+				t.Errorf("%s = %q (set %v), want the start budget %s", proxyWaitSecsEnv, got, set, budget)
+			}
+		})
+	}
+}
+
+// The constructor every path shares refuses keep with the switch off before it calls the API, so NewSubstrate, which
+// skips the registry's checks, refuses with the same message.
+func TestRunServiceOff_ConstructorRefusesKeepBeforeAnyCall(t *testing.T) {
+	cs := fake.NewClientset()
+	cfg := Config{AgentSandbox: true, AgentSandboxKeep: true, RunServiceOff: true, Namespaces: []string{testNamespace}, ProxyImage: "p"}
+	if _, err := newWithClient(context.Background(), cs, testRestConfig(), cfg); !errors.Is(err, errKeepNeedsRunService) {
+		t.Fatalf("newWithClient = %v, want errKeepNeedsRunService", err)
+	}
+	if got := cs.Actions(); len(got) != 0 {
+		t.Errorf("the refusal came after %d API call(s): %v", len(got), got)
 	}
 }

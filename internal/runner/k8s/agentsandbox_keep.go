@@ -45,10 +45,14 @@ func checkAgentSandboxKeep(cfg Config) error {
 		return errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_AGENT_SANDBOX on")
 	}
 	if cfg.AgentSandboxKeep && cfg.RunServiceOff {
-		return errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_RUN_SERVICE on, since a kept run reaches its proxy through its own Service")
+		return errKeepNeedsRunService
 	}
 	return nil
 }
+
+// errKeepNeedsRunService refuses keep with the run's Service off. newWithClient refuses it too, before any API call, so
+// a driver built without the registry (NewSubstrate) cannot serve keep with no Service to own its agent.
+var errKeepNeedsRunService = errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_RUN_SERVICE on, since a kept run reaches its proxy through its own Service")
 
 func (d *Driver) keepOn() bool { return d.cfg.AgentSandbox && d.cfg.AgentSandboxKeep }
 

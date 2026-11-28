@@ -378,6 +378,9 @@ func newClientset(restCfg *rest.Config) (*kubernetes.Clientset, error) {
 // synthetic rest.Config — only its Host field matters, for the canary's
 // dial target).
 func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.Config, cfg Config) (*Driver, error) {
+	if cfg.AgentSandboxKeep && cfg.RunServiceOff {
+		return nil, errKeepNeedsRunService
+	}
 	cfg.withDefaults()
 	if cfg.ProxyImage == "" {
 		return nil, errProxyImageUnset
