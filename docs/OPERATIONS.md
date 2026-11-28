@@ -429,8 +429,9 @@ ask "WARDYN_AGE_KEY from deploy/compose/.env is in your secret manager"
 vols=$(docker volume ls -q) &&
   { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.found" ||
   { echo "STOP: the drive volumes could not be listed"; exit 1; }
-#    Only this installation's drives are copied: its postgres still runs, and
-#    names its own drive ids, which each volume's wardyn.drive label must match.
+#    A volume is copied when its wardyn.drive label is one of this
+#    installation's drive ids, read from its postgres, which still runs, or
+#    when you answer yes for it below.
 ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT id FROM user_drives") || { echo "STOP: this installation's drives could not be read"; exit 1; }
 #    A volume is this installation's only when its label is, as a whole, one
@@ -486,8 +487,9 @@ done 3< "$B/drives.list"
 #    UNRESOLVED too.
 #    drives.found is every volume named wardyn-drive-* or wardyn-portal-* (a
 #    portal's folder on a team drive), so a home created before
-#    the drive label existed, or restored by hand without it, is backed up
-#    too. Such a volume prints UNRESOLVED: its archive is kept, but nothing
+#    the drive label existed, or restored by hand without it, is asked about
+#    too, and backed up when you answer yes. Such a volume prints UNRESOLVED:
+#    its archive is kept, but nothing
 #    in it says whose it is. The backup is not complete until you have
 #    worked out each one's drive and owner from the drive list and the
 #    allocations, and written that down beside it. The owner is a person, or,
