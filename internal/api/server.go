@@ -138,11 +138,10 @@ type Config struct {
 	// RunnerOutputSinkCheck is the period of a runner output sink's lease and stall check under high
 	// availability (remote.Options.OutputSinkCheck). Zero is the package's 10 s; tests shorten it.
 	RunnerOutputSinkCheck time.Duration
-	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
-	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
-	//
-	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
-	// answers offline for a runner attached to another; the upgrade is a shared presence read.
+	// RunnerOnline reports whether a claimed runner is online. Nil defaults to Server.RunnerOnline: a live
+	// session admitted to READY on this replica's hub or, under high availability, on the replica the
+	// holder view names. Work only the session's holder does reads runnerHeldHere, this replica's hub
+	// alone, and never this hook.
 	RunnerOnline func(id uuid.UUID) bool
 	// AttachLocal (WARDYN_ATTACH_LOCAL, on by default) allows a person's CLI on their own runner's
 	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
