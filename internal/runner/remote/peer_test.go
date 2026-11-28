@@ -96,8 +96,9 @@ func TestPeerNeverForwardsTwice(t *testing.T) {
 // dial opens a fresh WebSocket, served by servePin on the holder's pin as it stood when the rig was made.
 type peerRig struct {
 	holder, caller *Link
-	runner         *runnerwire.Peer
-	calls          atomic.Int32 // calls that reached a runner session
+	runnerMu       sync.Mutex
+	runner         *runnerwire.Peer // the latest session's runner end, under runnerMu
+	calls          atomic.Int32     // calls that reached a runner session
 	dials          atomic.Int32
 	doors          chan error // one per WebSocket the holder served, when it ended
 	serve          runnerwire.CallHandler
@@ -105,6 +106,22 @@ type peerRig struct {
 	mu     sync.Mutex
 	execs  map[uint32]int // the runner's exec table: its exec stream id -> exit status, kept until exec_close
 	closes atomic.Int32   // exec_close calls that found their exec
+}
+
+// rigSessionKey carries, in a call the rig's runner serves, the runner end of the session the call arrived on.
+type rigSessionKey struct{}
+
+// sessionPeer is the runner end of the session serving the call in ctx.
+func sessionPeer(ctx context.Context) *runnerwire.Peer {
+	p, _ := ctx.Value(rigSessionKey{}).(*runnerwire.Peer)
+	return p
+}
+
+// runnerPeer is the latest session's runner end.
+func (r *peerRig) runnerPeer() *runnerwire.Peer {
+	r.runnerMu.Lock()
+	defer r.runnerMu.Unlock()
+	return r.runner
 }
 
 // Exit codes the rig's runner treats as a fault: it resets the exec or the stderr stream before it answers.
@@ -120,7 +137,7 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 		r.calls.Add(1)
 		switch method {
 		case runnerwire.MethodAttach:
-			st, err := r.runner.Open(ctx, runnerwire.Open{Kind: runnerwire.KindPTY, Call: id})
+			st, err := sessionPeer(ctx).Open(ctx, runnerwire.Open{Kind: runnerwire.KindPTY, Call: id})
 			if err != nil {
 				return nil, err
 			}
@@ -135,11 +152,11 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 			if err != nil {
 				return nil, err
 			}
-			ex, err := r.runner.Open(ctx, runnerwire.Open{Kind: runnerwire.KindExec, Call: id})
+			ex, err := sessionPeer(ctx).Open(ctx, runnerwire.Open{Kind: runnerwire.KindExec, Call: id})
 			if err != nil {
 				return nil, err
 			}
-			se, err := r.runner.Open(ctx, runnerwire.Open{Kind: runnerwire.KindExecStderr, Call: id})
+			se, err := sessionPeer(ctx).Open(ctx, runnerwire.Open{Kind: runnerwire.KindExecStderr, Call: id})
 			if err != nil {
 				return nil, err
 			}
@@ -190,8 +207,14 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 // attach connects a new runner session to the holder Link, replacing any before it.
 func (r *peerRig) attach(ctx context.Context) {
 	org, run := runnerwire.Loopback()
-	r.runner = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: r.serve})
-	go func() { _ = r.runner.Run(ctx) }()
+	var p *runnerwire.Peer
+	p = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: func(ctx context.Context, id uint32, method string, args json.RawMessage) (any, error) {
+		return r.serve(context.WithValue(ctx, rigSessionKey{}, p), id, method, args)
+	}})
+	r.runnerMu.Lock()
+	r.runner = p
+	r.runnerMu.Unlock()
+	go func() { _ = p.Run(ctx) }()
 	r.holder.Attach(ctx, org)
 }
 
@@ -270,7 +293,7 @@ func TestPeerPinReleasedWhenUnused(t *testing.T) {
 		t.Fatal("a failed first operation succeeded")
 	}
 	r.doorEnded(t)
-	if !r.runner.Online() || !r.holder.Online() {
+	if !r.runnerPeer().Online() || !r.holder.Online() {
 		t.Fatal("releasing a pin ended the runner's session")
 	}
 }
@@ -503,7 +526,7 @@ func TestPeerExecControlOutlivesItsStreams(t *testing.T) {
 		t.Fatalf("close the second exec: %v", err)
 	}
 	r.doorEnded(t)
-	if !r.runner.Online() {
+	if !r.runnerPeer().Online() {
 		t.Fatal("closing the execs ended the runner's session")
 	}
 }
@@ -593,7 +616,7 @@ func TestPeerExecOpensAllStreamsOrNone(t *testing.T) {
 			if peer {
 				r.doorEnded(t)
 			}
-			if !r.runner.Online() || !r.holder.Online() {
+			if !r.runnerPeer().Online() || !r.holder.Online() {
 				t.Fatalf("code %d peer=%v: the failed open ended the runner's session", code, peer)
 			}
 			cancel()
