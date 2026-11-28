@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- On an Azure DevOps organisation engine, a Git request waiting behind another request for the same credential now counts that wait, and its own mint, against its nine-minute hold budget instead of the approval timeout alone.
+
 ## [0.11.0-rc.5] — 2026-11-27
 
 ### Added
