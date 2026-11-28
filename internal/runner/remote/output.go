@@ -195,7 +195,7 @@ func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire
 		accepted, writeErr := sink.accept(offset, data[:n])
 		offset += int64(n)
 		if errors.Is(writeErr, errOutputYielded) {
-			// The sink yielded to the run's adopter: this process records and ACKs nothing more.
+			// The sink yielded to the process that took the run over: this one records and ACKs nothing more.
 			_ = st.Close()
 			return writeErr
 		}
