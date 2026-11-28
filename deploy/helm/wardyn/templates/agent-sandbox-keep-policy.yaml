@@ -1,12 +1,15 @@
 {{- /*
-Every run's own Service on the server's cluster (rendered whenever k8s.enabled). wardynd holds create, get and
+Every run's own Service on the server's cluster (rendered with k8s.enabled, k8s.runService.enabled and
+k8s.admissionPolicies.create, which follows k8s.rbac.create unless set: wardyn.runServicePolicies). wardynd holds create, get and
 delete on Services and create, get, update and deletecollection on EndpointSlices in the runs namespace. These two
 policies hold its writes and deletes to what a run needs: a ClusterIP Service named for a run, with no selector and
 no external IPs, and EndpointSlices labelled for such a Service, before and after an update. Like the pod policies, they select on the
 authenticated requester. One policy per kind, so each expression is type-checked against the one kind it reads.
-The names say "keep" because keep introduced them; scripts and CI select them by those names.
+The names say "keep" because keep introduced them; scripts and CI select them by those names. A platform team that
+takes them over (k8s.admissionPolicies.create=false) on an existing release applies its own under other names first:
+Helm deletes these names when it stops rendering them.
 */ -}}
-{{- if .Values.k8s.enabled }}
+{{- if include "wardyn.runServicePolicies" . }}
 {{- if or (semverCompare "<1.30-0" .Capabilities.KubeVersion.Version) (not (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1")) }}
 {{- fail "wardyn: k8s.enabled needs Kubernetes 1.30 or later serving admissionregistration.k8s.io/v1: the chart renders two admission policies that hold wardynd's per-run Service writes and deletes to a run's own selector-less ClusterIP Service, and without them its Service grant would be unbounded. Upgrade the cluster first. An offline render (helm template) passes --kube-version and --api-versions admissionregistration.k8s.io/v1." }}
 {{- end }}

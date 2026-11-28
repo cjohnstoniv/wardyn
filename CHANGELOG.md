@@ -11,6 +11,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Kubernetes: `k8s.runService.enabled` (`WARDYN_K8S_RUN_SERVICE`, default on) turns off each server run's own Service and EndpointSlice. Off, the agent pod starts once its proxy pod is Ready and reaches that pod's IP, as in 0.11.0-rc.3, and the runs Role needs no `services` or `endpointslices` verbs. `WARDYN_K8S_AGENT_SANDBOX_KEEP` needs it on and refuses to boot without it.
+- Helm: `k8s.admissionPolicies.create` decides whether the chart renders the two run Service admission policies and their bindings. Unset, it follows `k8s.rbac.create`. They render only with `k8s.runService.enabled`, and the Kubernetes 1.30 check applies only when they render. When the Service is on and the chart renders no policies, its install notes name the policies the platform team must apply.
+
+### Before you upgrade
+
+- An existing 0.11.0-rc.4 install with `k8s.rbac.create=false` whose chart rendered the two run Service admission policies: set `k8s.admissionPolicies.create=true` before its first upgrade to this release to keep them. Unset, the value now follows `k8s.rbac.create`, so an unchanged values file drops all four objects while the Role keeps its Service verbs. The alternatives are the platform team's own copies under their own names, or a finished drain with the run Service off, both below.
+- `k8s.rbac.create=false` installs can keep the 0.11.0-rc.3 path by setting `k8s.runService.enabled=false` (`WARDYN_K8S_RUN_SERVICE=off`). The runs Role then needs no `services` or `endpointslices` verbs, and no Service or EndpointSlice admission policies are needed. With the agent-sandbox backend off too, the install needs no admission policy of either kind. `watch` on `pods` was already in rc.3's Role and stays optional here: without it the pod waits poll.
+  - For a fresh install, or an rc.3 install that never used per-run Services, you can switch them off directly. If you used agent-sandbox keep on rc.3, follow the drain steps for any runs that used a Service.
+  - The drain steps, for an install already running with the Service on (0.11.0-rc.4): end or stop the runs that use a Service, account for kept runs, and let their cleanup finish while the Role still grants the Service verbs. Only then switch it off and remove the verbs. A run's Service has no owner reference, and teardown deletes it. Switching off or removing the verbs first leaves those Services and EndpointSlices behind, and deleting them early can cut off running or kept runs.
+  - A platform team that takes over the policies while the Service stays on applies its own copies under its own names first. On an existing release, the upgrade that sets `k8s.admissionPolicies.create=false` makes Helm delete the chart's two policies and two bindings, and an object applied under the same name is deleted with them.
+    1. Apply two ValidatingAdmissionPolicies and two bindings named unlike the chart's. Each binding's `policyName` names its own policy, with the chart's runs-namespace selector and its match on wardynd's ServiceAccount.
+    2. Confirm both bindings enforce `Deny`.
+    3. Only then upgrade with `k8s.admissionPolicies.create=false`. The chart's own names suit only a fresh install that never rendered them.
+
 ### Fixed
 
 - `wardyn run --wait` and `wardyn run get` now show a failed run's reason even when more than a page of refused output reads come before it in the audit trail. The CLI reads up to 100 pages of failure rows (100,000 rows) and then stops.

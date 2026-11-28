@@ -49,6 +49,9 @@ controller retries a refused create, so a denied pod shows as repeated SandboxPo
 {{- if eq $ctlUser $wardynUser -}}
 {{- fail (printf "wardyn: k8s.agentSandbox.controller is wardynd's own ServiceAccount (%s): the policy would hold Wardyn's proxy and canary pods to the Sandbox gate. Set the identity the agent-sandbox controller runs as." $ctlUser) -}}
 {{- end }}
+{{- if or (semverCompare "<1.30-0" .Capabilities.KubeVersion.Version) (not (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1")) }}
+{{- fail "wardyn: k8s.agentSandbox.enabled needs Kubernetes 1.30 or later serving admissionregistration.k8s.io/v1: the chart renders two admission policies that hold the agent-sandbox controller's pod creates and the gate's removal to what Wardyn checked. Upgrade the cluster first. An offline render (helm template) passes --kube-version and --api-versions admissionregistration.k8s.io/v1." }}
+{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

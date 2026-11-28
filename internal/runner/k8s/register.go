@@ -54,6 +54,7 @@ func buildConfig(d substrate.Deps) Config {
 		// Experimental: the SandboxTemplate the agent pod takes its annotations from (agentsandbox_template.go).
 		AgentSandboxTemplate: os.Getenv("WARDYN_K8S_AGENT_SANDBOX_TEMPLATE"),
 		AgentSandboxKeep:     cliutil.EnvBool("WARDYN_K8S_AGENT_SANDBOX_KEEP", false),
+		RunServiceOff:        !cliutil.EnvBool("WARDYN_K8S_RUN_SERVICE", true),
 	}
 }
 

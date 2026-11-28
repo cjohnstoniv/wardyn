@@ -23,10 +23,10 @@ import (
 
 // runService makes the run's Service, with no selector, and its EndpointSlice, empty, in server mode: the agent pins
 // the Service's ClusterIP from its create, and the slice names the proxy pod once that pod has its IP
-// (pointRunService). Runner mode makes neither and returns nil: its agent pins the proxy pod's IP, after the relay
-// fence has passed it.
+// (pointRunService). Runner mode, and a server with WARDYN_K8S_RUN_SERVICE off, make neither and return nil: the agent
+// then pins the proxy pod's IP once that pod is Ready, after a runner's relay fence has passed it.
 func (d *Driver) runService(ctx context.Context, ns string, runID uuid.UUID, labels map[string]string) (*corev1.Service, error) {
-	if d.runnerMode() {
+	if d.runnerMode() || d.cfg.RunServiceOff {
 		return nil, nil
 	}
 	svc, err := d.createKeepService(ctx, ns, runID, labels)
@@ -84,11 +84,12 @@ func podIPOfFamily(pod *corev1.Pod, family discoveryv1.AddressType) string {
 const proxyWaitSecsEnv = "WARDYN_PROXY_WAIT_SECS"
 
 // proxyWaitEnv returns spec.Env with agent-run's proxy wait set to the whole start budget, for an interactive run in
-// server mode: its agent pod starts beside its proxy, and agent-run --idle must hold until the proxy accepts a
-// connection, which it can first do once the run's EndpointSlice names it. A value the run sets wins. It returns a
-// copy, never the caller's map.
+// server mode with the run's Service: its agent pod starts beside its proxy, and agent-run --idle must hold until the
+// proxy accepts a connection, which it can first do once the run's EndpointSlice names it. A value the run sets wins.
+// It returns a copy, never the caller's map. With WARDYN_K8S_RUN_SERVICE off the agent starts after its proxy is
+// Ready, so spec.Env passes unchanged and agent-run keeps its own short default.
 func (d *Driver) proxyWaitEnv(spec runner.SandboxSpec) map[string]string {
-	if d.runnerMode() || !spec.Interactive {
+	if d.runnerMode() || d.cfg.RunServiceOff || !spec.Interactive {
 		return spec.Env
 	}
 	if _, ok := spec.Env[proxyWaitSecsEnv]; ok {

@@ -265,3 +265,24 @@ the pod label and service-account annotation the webhook keys on.
 {{- $azure := (.Values.secretStore | default dict).azure | default dict -}}
 {{- if and (include "wardyn.azureConsumer" .) (eq ($azure.auth | default "workload-identity") "workload-identity") -}}true{{- end -}}
 {{- end -}}
+
+{{/*
+wardyn.runService is "true" when each run on the server's cluster gets its own Service (k8s.runService.enabled,
+default true; a release whose values predate the key keeps it on).
+*/}}
+{{- define "wardyn.runService" -}}
+{{- $rs := .Values.k8s.runService | default dict -}}
+{{- if or (not (hasKey $rs "enabled")) $rs.enabled }}true{{ end -}}
+{{- end -}}
+
+{{/*
+wardyn.runServicePolicies is "true" when the chart renders the run Service admission policies: k8s.enabled, the run
+Service on, and k8s.admissionPolicies.create, which follows k8s.rbac.create unless set.
+*/}}
+{{- define "wardyn.runServicePolicies" -}}
+{{- $rbac := .Values.k8s.rbac | default dict -}}
+{{- $create := or (not (hasKey $rbac "create")) $rbac.create -}}
+{{- $ap := .Values.k8s.admissionPolicies | default dict -}}
+{{- if kindIs "bool" $ap.create }}{{ $create = $ap.create }}{{ end -}}
+{{- if and .Values.k8s.enabled (include "wardyn.runService" .) $create }}true{{ end -}}
+{{- end -}}

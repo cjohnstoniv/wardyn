@@ -321,15 +321,16 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy config secret: %w", err))
 	}
-	// The run's Service, with no selector, and its EndpointSlice, empty (server mode; runner mode makes neither).
+	// The run's Service, with no selector, and its EndpointSlice, empty (server mode with WARDYN_K8S_RUN_SERVICE on;
+	// runner mode and the switch off make neither).
 	runSvc, err := d.runService(ctx, ns, spec.RunID, objLabels(componentProxy))
 	if err != nil {
 		return fail(err)
 	}
 
-	// (4) Proxy pod. A runner then polls until it is ready and has its CNI-assigned IP, which its agent pins, before
-	// the agent pod exists (startProxyPod: a runner redraws a fenced IP). Server mode creates the agent pod next and
-	// waits at (5b).
+	// (4) Proxy pod. With no run Service (a runner, or the switch off) it then polls until the pod is ready and has its
+	// CNI-assigned IP, which the agent pins, before the agent pod exists (startProxyPod: a runner redraws a fenced IP).
+	// With the run's Service the agent pod is created next and the wait is at (5b).
 	proxyPod, err := d.buildProxyPod(proxyPodInputs{
 		RunID: spec.RunID, Namespace: ns, SecretName: secretName(spec.RunID),
 		Deadline: d.podDeadline(spec.Resources.LifetimeCap), ControlPlaneURL: spec.ProxyConfig.ControlPlaneURL,
@@ -355,8 +356,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" (and the sandbox proxy URL's own
-	// name, runner.ProxyHostnames) to proxyAddr: the run's Service in server mode, the proxy pod's IP in runner
-	// mode. That is its only route there, since the agent NetworkPolicy allows no DNS at all.
+	// name, runner.ProxyHostnames) to proxyAddr: the run's Service when it has one, else the proxy pod's IP. That is
+	// its only route there, since the agent NetworkPolicy allows no DNS at all.
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
 		idleCmd = d.interactiveIdleCmd(spec)
@@ -450,7 +451,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
 
-	// (5b) Server mode: the run's EndpointSlice names the proxy pod once it has its IP; then the proxy must be Ready.
+	// (5b) With the run's Service: its EndpointSlice names the proxy pod once it has its IP; then the proxy must be Ready.
 	// Until then the agent's one address leads nowhere.
 	if runSvc != nil {
 		if proxyIP, err = d.pointRunService(ctx, clock, ns, spec, runSvc); err != nil {
