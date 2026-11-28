@@ -677,6 +677,9 @@ func caseOrgFence(t *testing.T, o *orgEnv) {
 	}
 	o.fenced = &fencedProxy{id: id, node: nodeName, pid: pid}
 	note(t, "%s; connection cut %s after the kill (%s); %s; proxy pod still Running on %s (kubelet stopped)", proto, after, cut, redial, nodeName)
+	// A kill call that runs out of time is queued for the runner and its session is ended, so a fresh one
+	// carries the kill: the runner is offline until it reconnects, and the next case's run needs it online.
+	o.online(t, 2*time.Minute)
 }
 
 // caseOrgRestart: after a runnerd restart the fence is replayed before the runner is online, plus the sink

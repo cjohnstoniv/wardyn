@@ -280,6 +280,10 @@ func TestKill_DeliveredByCallThenPendingSettlesOnce(t *testing.T) {
 	id := createLocal(t, m, org)
 	ref := id.String()
 	ctx := t.Context()
+	// The create's own mutation is released, as the dispatcher does once the create returns.
+	if err := m.MutationFinished(ctx, runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.BeforeRefCall(ctx, runnerwire.MethodKill, ref, uuid.Nil); err != nil {
 		t.Fatalf("the kill call: %v", err)
 	}
