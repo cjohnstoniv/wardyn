@@ -1562,3 +1562,33 @@ func TestPeerOutputSinkCheckHoldsEightReadsAtMost(t *testing.T) {
 		t.Fatalf("%d lease reads in flight at once, want at most %d", p, sinkCheckReads)
 	}
 }
+
+// A pass whose deadline passes as it takes a slot gives the slot back: once no read is out, every slot is free.
+func TestPeerOutputSinkCheckDeadlineAtAcquireFreesSlot(t *testing.T) {
+	var reads atomic.Int32
+	lease := func(context.Context, uuid.UUID) (bool, bool, error) {
+		reads.Add(1)
+		return true, true, nil
+	}
+	// The deadline is already past when each pass starts, so its slot select finds both a free slot and a done
+	// context, and takes either; the sinks get their ref directly, so no check loop runs.
+	s, _ := newLauncher(t.Context(), Options{OutputLease: lease, OutputSinkCheck: time.Nanosecond}, nil)
+	for i := range sinkCheckReads + 2 {
+		sink := &outputSink{writer: newEndBuf(), ref: "runner:x/" + strconv.Itoa(i)}
+		s.mu.Lock()
+		s.outputs[uuid.New()] = sink
+		s.mu.Unlock()
+	}
+	for range 200 {
+		s.checkSinks(context.Background())
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.checkSinks(canceled)
+	s.mu.Lock()
+	held := len(s.readSlot)
+	s.mu.Unlock()
+	if held != 0 || reads.Load() != 0 {
+		t.Fatalf("after passes that each met their deadline: %d slots held, %d reads; want every slot free and no read", held, reads.Load())
+	}
+}

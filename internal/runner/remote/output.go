@@ -692,11 +692,16 @@ func (s *Substrate) checkSinks(ctx context.Context) int {
 		if outstanding {
 			continue // its last read has not returned: never two at once
 		}
+		acquired := false
 		select {
 		case slots <- struct{}{}:
+			acquired = true
 		case <-pctx.Done():
 		}
 		if pctx.Err() != nil {
+			if acquired {
+				<-slots // taken as the deadline passed: no read holds it
+			}
 			next = c.id // the pass's deadline: the sinks not yet started are kept, and the next pass starts here
 			break
 		}
