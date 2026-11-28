@@ -63,9 +63,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The drive backup and restore steps in Operations now keep each drive's ownership label. Backup records every label
   beside each volume or claim, and restore puts them back as recorded. Before, the guide said to leave the label off,
   and a restored drive could then be mounted for another person who resolves to the same drive and home.
-- The Docker drive backup lists every `wardyn-drive-` volume first. If it cannot, it says so, and no older list is left to run on. A volume with no drive label
-  is still archived and marked unresolved until its owner is worked out. The restore works from that list for
-  one backup date only and stops on any missing archive. It creates each volume new, and checks the volume's labels
+- Each backup in Operations now writes into a new directory of its own and is marked complete only at the end. The
+  restore reads one complete directory, so a retry cannot pair new files with an earlier owner's labels. The Docker
+  drive backup lists every `wardyn-drive-` volume, and every `wardyn-portal-` volume a portal keeps on a team drive,
+  first, and says so if it cannot. A volume with no drive label,
+  or with a label value spread over lines, is still archived and marked unresolved until its owner is worked out. The restore works from that list and
+  stops on any missing archive. It creates each volume new, and checks the volume's labels
   and that it is empty before writing any file. It stops on a missing label record or a drive the restored database
   does not hold. A backup with no label record is untarred to a plain directory, never straight into a managed volume.
 - Before copying from or deleting an old Kubernetes drive claim by hand, the guide now has you stop the person's runs.
