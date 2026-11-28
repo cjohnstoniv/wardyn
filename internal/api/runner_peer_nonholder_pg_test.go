@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -405,39 +406,60 @@ func capsAnswers(ctx context.Context, srv *Server, id uuid.UUID) (string, bool) 
 	return string(b), true
 }
 
-// R22: a runner claimed after a replica booted is routed there within one refresh, with the holder's caps; a runner
+// countRefreshes counts b's successful view refreshes from now on; set it before b's holder loop starts.
+func countRefreshes(b *Server) *atomic.Int32 {
+	n := new(atomic.Int32)
+	view := b.runnerPeering().view
+	route := view.OnRefresh
+	view.OnRefresh = func(ctx context.Context, elsewhere []uuid.UUID) {
+		route(ctx, elsewhere)
+		n.Add(1)
+	}
+	return n
+}
+
+// claimAsOwner claims rn on srv as its owner does, through the claim handler under the owner's session.
+func claimAsOwner(t *testing.T, srv *Server, rn types.Runner) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/runners/"+rn.ID.String()+"/claim", strings.NewReader(`{"fingerprint":"`+rn.KeyFingerprint+`"}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", rn.ID.String())
+	r = r.WithContext(context.WithValue(withOIDCHuman(r.Context(), rn.Owner), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	srv.handleRunnerClaim(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("claim = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// R22: a runner claimed after a replica booted is routed there by a later refresh, with the holder's caps; a runner
 // whose holder row is fresh but whose stored state is revoked gets no endpoint.
 func TestRunnerClaimedAfterBootRoutedOnNonHolderReplica_PG(t *testing.T) {
 	f := newPeerFixture(t)
 	f.waitHolder(t, f.session(t))
-	// The runner leaves: no session, and no holder row, before the other replica starts.
-	f.disconnect()
-	peerWithin(t, 10*time.Second, "the holder's link to the runner is down", func() bool {
-		return !f.srv.runnerEndpoint(f.rn.ID).link.HeldHere()
-	})
-	if _, err := f.st.Pool.Exec(f.ctx, `DELETE FROM runner_session_holders WHERE runner_id=$1`, f.rn.ID); err != nil {
+	// A runner registered but not yet claimed when the other replica boots.
+	rn, key := registeredLeaseRunner(t, f.ctx, f.st)
+
+	// The other replica boots as a replica boots, and its first refresh is in place.
+	b := f.replicaServer(t)
+	refreshes := countRefreshes(b)
+	if err := b.RegisterRunnerSubstrates(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-
-	// The other replica starts with no endpoint for it, and its first refresh finds no holder row.
-	b := f.replicaServer(t)
-	var refreshes atomic.Int32
-	pb := b.runnerPeering()
-	route := pb.view.OnRefresh
-	pb.view.OnRefresh = func(ctx context.Context, elsewhere []uuid.UUID) {
-		route(ctx, elsewhere)
-		refreshes.Add(1)
-	}
-	b.runnerHub(f.st) // its holder loop: the first refresh at once, then every 5 s
 	peerWithin(t, 5*time.Second, "the other replica's first refresh", func() bool { return refreshes.Load() >= 1 })
-	if _, ok := pb.view.Holder(f.rn.ID); ok || hasEndpoint(b, f.rn.ID) {
-		t.Fatal("the other replica routed a runner with no holder row")
+	if _, ok := b.runnerPeering().view.Holder(rn.ID); ok || hasEndpoint(b, rn.ID) {
+		t.Fatal("the other replica routed a runner nobody had claimed")
 	}
 	initial := refreshes.Load()
 
-	// The runner is admitted on the holder after the other replica's start.
-	f.disconnect = f.connect(t)
-	f.waitHolder(t, f.session(t))
+	// Its owner claims it on the first replica, and it connects there.
+	claimAsOwner(t, f.srv, rn)
+	side := runnerProcessFor(t, f.ctx, f.st, f.srv, rn, key)
+	side.disconnect = side.connect(t)
+	peerWithin(t, 10*time.Second, "the new runner's holder row names the first replica", func() bool {
+		r, ok, err := f.st.RunnerSessionHolder(f.ctx, rn.ID)
+		return err == nil && ok && r.ReplicaID == f.srv.replicaName()
+	})
 
 	// A second runner, revoked in the store, whose holder row names the holder.
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
@@ -461,7 +483,51 @@ func TestRunnerClaimedAfterBootRoutedOnNonHolderReplica_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	peerWithin(t, 6*time.Second, "a refresh after the admission routes the runner on the other replica", func() bool {
+	peerWithin(t, 6*time.Second, "a refresh after the claim routes the new runner on the other replica", func() bool {
+		return hasEndpoint(b, rn.ID) && refreshes.Load() > initial
+	})
+	want, ok := capsAnswers(f.ctx, f.srv, rn.ID)
+	if !ok {
+		t.Fatal("the holder has no caps for the new runner")
+	}
+	peerWithin(t, 6*time.Second, "the other replica answers the holder's caps", func() bool {
+		got, ok := capsAnswers(f.ctx, b, rn.ID)
+		return ok && got == want
+	})
+	time.Sleep(6 * time.Second) // one more refresh
+	if hasEndpoint(b, r2.ID) {
+		t.Fatal("the refresh made an endpoint for a revoked runner")
+	}
+}
+
+// A claimed runner whose session was lost before a replica started, and which connects again after it, is routed
+// there by a later refresh, with the holder's caps.
+func TestRunnerRediscoveredAfterLostSessionOnNonHolderReplica_PG(t *testing.T) {
+	f := newPeerFixture(t)
+	f.waitHolder(t, f.session(t))
+	// The runner leaves: no session, and no holder row, before the other replica starts.
+	f.disconnect()
+	peerWithin(t, 10*time.Second, "the holder's link to the runner is down", func() bool {
+		return !f.srv.runnerEndpoint(f.rn.ID).link.HeldHere()
+	})
+	if _, err := f.st.Pool.Exec(f.ctx, `DELETE FROM runner_session_holders WHERE runner_id=$1`, f.rn.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The other replica starts with no endpoint for it, and its first refresh finds no holder row.
+	b := f.replicaServer(t)
+	refreshes := countRefreshes(b)
+	b.runnerHub(f.st) // its holder loop: the first refresh at once, then every 5 s
+	peerWithin(t, 5*time.Second, "the other replica's first refresh", func() bool { return refreshes.Load() >= 1 })
+	if _, ok := b.runnerPeering().view.Holder(f.rn.ID); ok || hasEndpoint(b, f.rn.ID) {
+		t.Fatal("the other replica routed a runner with no holder row")
+	}
+	initial := refreshes.Load()
+
+	// The runner connects again on the holder after the other replica's start.
+	f.disconnect = f.connect(t)
+	f.waitHolder(t, f.session(t))
+	peerWithin(t, 6*time.Second, "a refresh after the reconnect routes the runner on the other replica", func() bool {
 		return hasEndpoint(b, f.rn.ID) && refreshes.Load() > initial
 	})
 	want, ok := capsAnswers(f.ctx, f.srv, f.rn.ID)
@@ -472,10 +538,6 @@ func TestRunnerClaimedAfterBootRoutedOnNonHolderReplica_PG(t *testing.T) {
 		got, ok := capsAnswers(f.ctx, b, f.rn.ID)
 		return ok && got == want
 	})
-	time.Sleep(6 * time.Second) // one more refresh
-	if hasEndpoint(b, r2.ID) {
-		t.Fatal("the refresh made an endpoint for a revoked runner")
-	}
 }
 
 // revokeAndWait revokes runner id on by and waits up to d until neither replica has an endpoint or an orchestrator
