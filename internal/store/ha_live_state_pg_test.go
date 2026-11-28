@@ -69,7 +69,7 @@ func TestPG_RunOutputChunks(t *testing.T) {
 	}
 
 	// A row from chunks: a capture gap, incomplete, with the bytes; never over a final row.
-	if wrote, err := pg.SaveChunkedRunOutput(ctx, run2, "run", 100); err != nil || !wrote {
+	if wrote, err := pg.SaveChunkedRunOutput(ctx, run2, "", "run", 100); err != nil || !wrote {
 		t.Fatalf("a row from chunks: wrote=%v err=%v", wrote, err)
 	}
 	row, found, _ := pg.GetRunOutput(ctx, run2)
@@ -79,7 +79,7 @@ func TestPG_RunOutputChunks(t *testing.T) {
 	if got, _ = pg.ReadRunOutputChunks(ctx, run2, 100); got.Found {
 		t.Fatal("chunks survived the row written from them")
 	}
-	if wrote, err := pg.SaveChunkedRunOutput(ctx, run, "run", 100); err != nil || wrote {
+	if wrote, err := pg.SaveChunkedRunOutput(ctx, run, "", "run", 100); err != nil || wrote {
 		t.Fatalf("a row from chunks over nothing: wrote=%v err=%v, want false", wrote, err)
 	}
 
@@ -104,7 +104,7 @@ func TestPG_RunOutputChunks(t *testing.T) {
 	if _, err := pg.ReadRunOutputChunks(ctx, run3, 10); !errors.Is(err, store.ErrRunOutputErased) {
 		t.Errorf("a read after the erasure: %v, want ErrRunOutputErased", err)
 	}
-	if _, err := pg.SaveChunkedRunOutput(ctx, run3, "", 10); !errors.Is(err, store.ErrRunOutputErased) {
+	if _, err := pg.SaveChunkedRunOutput(ctx, run3, "", "", 10); !errors.Is(err, store.ErrRunOutputErased) {
 		t.Errorf("a row from chunks after the erasure: %v, want ErrRunOutputErased", err)
 	}
 }

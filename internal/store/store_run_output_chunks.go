@@ -43,8 +43,13 @@ type RunOutputChunkStore interface {
 	ReadRunOutputChunks(ctx context.Context, runID uuid.UUID, limit int) (RunOutputChunks, error)
 	// SaveChunkedRunOutput writes runID's row from its chunks, as an incomplete capture gap (what
 	// the replica that wrote them had not flushed is lost), and deletes them, in one transaction.
-	// It reports false, writing nothing, when the run has no chunks or already has a final row.
-	SaveChunkedRunOutput(ctx context.Context, runID uuid.UUID, maskScope string, limit int) (bool, error)
+	// mine is the replica whose chunks the caller vouches for: "" for the ordinary chunks a gone
+	// replica left, or a replica name for that replica's own recovery's chunks
+	// (RunOutputChunkReplacer). It reports false, writing nothing, when the run has no chunks,
+	// already has a final row, or holds a chunk mine does not cover: with "" a recovery's, with a
+	// name any other. That check shares the write's transaction and lock, so an adoption that
+	// lands while the caller finalises can never turn its unsealed bytes into the row.
+	SaveChunkedRunOutput(ctx context.Context, runID uuid.UUID, mine, maskScope string, limit int) (bool, error)
 }
 
 // RunOutputChunkReplacer is a chunk store a live adoption's recovery tail writes into, replacing the chunks the
@@ -57,9 +62,6 @@ type RunOutputChunkReplacer interface {
 	// chunks another replica appended meanwhile. Without first it writes nothing, and reports false, while another
 	// recovery's chunk is present, so a later adoption supersedes an earlier one.
 	AppendRecoveredRunOutputChunk(ctx context.Context, runID uuid.UUID, replica string, b []byte, keep int, first bool) (bool, error)
-	// RecoveredRunOutputChunks reports whether runID holds a recovery's chunk from a replica other than mine;
-	// with mine "" every recovery's chunk counts.
-	RecoveredRunOutputChunks(ctx context.Context, runID uuid.UUID, mine string) (bool, error)
 }
 
 var (
@@ -118,23 +120,6 @@ func (s PG) AppendRecoveredRunOutputChunk(ctx context.Context, runID uuid.UUID, 
 		err = fmt.Errorf("store: append a recovered run output chunk: %w", err)
 	}
 	return wrote, err
-}
-
-// RecoveredRunOutputChunks — see RunOutputChunkReplacer.
-func (s PG) RecoveredRunOutputChunks(ctx context.Context, runID uuid.UUID, mine string) (bool, error) {
-	mark := ""
-	if mine != "" {
-		mark = recoveredChunkMark + mine
-	}
-	var found bool
-	err := s.runOutputTx(ctx, runID, true, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_output_chunks WHERE run_id = $1 AND replica LIKE 'recovered:%' AND replica <> $2)`,
-			runID, mark).Scan(&found)
-	})
-	if err != nil && !errors.Is(err, ErrRunOutputErased) {
-		err = fmt.Errorf("store: read whether a run's chunks are a recovery's: %w", err)
-	}
-	return found, err
 }
 
 // appendRunOutputChunk writes b as runID's next chunk under replica, inside the caller's transaction, and trims the
@@ -201,9 +186,19 @@ func (s PG) ReadRunOutputChunks(ctx context.Context, runID uuid.UUID, limit int)
 }
 
 // SaveChunkedRunOutput — see RunOutputChunkStore.
-func (s PG) SaveChunkedRunOutput(ctx context.Context, runID uuid.UUID, maskScope string, limit int) (bool, error) {
+func (s PG) SaveChunkedRunOutput(ctx context.Context, runID uuid.UUID, mine, maskScope string, limit int) (bool, error) {
+	mark := ""
+	if mine != "" {
+		mark = recoveredChunkMark + mine
+	}
 	wrote := false
 	err := s.runOutputTx(ctx, runID, false, func(tx pgx.Tx) error {
+		var uncovered bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_output_chunks WHERE run_id = $1
+			AND CASE WHEN $2::text = '' THEN replica LIKE 'recovered:%' ELSE replica <> $2::text END)`,
+			runID, mark).Scan(&uncovered); err != nil || uncovered {
+			return err // only a recovery's own covered seal makes its chunks the row
+		}
 		rows, err := tx.Query(ctx, `SELECT seq, bytes_masked FROM run_output_chunks WHERE run_id = $1 ORDER BY seq`, runID)
 		if err != nil {
 			return err

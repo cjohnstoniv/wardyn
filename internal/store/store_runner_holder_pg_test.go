@@ -304,15 +304,6 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 		}
 		return ch
 	}
-	other := func(run uuid.UUID, mine string) bool {
-		t.Helper()
-		ok, err := st.RecoveredRunOutputChunks(ctx, run, mine)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ok
-	}
-
 	run := newRunID()
 	for _, b := range []string{"a1", "a2", "a3"} {
 		if !plain(run, "a", b) {
@@ -334,12 +325,9 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 	if ch, reps := read(run), chunkReplicas(t, pool, run); string(ch.Bytes) != "b1b2" || len(reps) != 2 || reps[0] != "recovered:b" || reps[1] != "recovered:b" {
 		t.Fatalf("the recovery's chunks: %q on %v, want b1b2 on recovered:b", ch.Bytes, reps)
 	}
-	if !other(run, "") || other(run, "b") {
-		t.Fatal("RecoveredRunOutputChunks: want true for any recovery and false for b's own")
-	}
 	onlyLauncher := newRunID()
 	plain(onlyLauncher, "a", "a1")
-	if other(onlyLauncher, "") || read(onlyLauncher).Recovered {
+	if read(onlyLauncher).Recovered {
 		t.Fatal("a run with only the launcher's chunks reads as recovered")
 	}
 
@@ -353,8 +341,8 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 	if ch := read(run); string(ch.Bytes) != "c1" {
 		t.Fatalf("after the superseded append: %q, want c1", ch.Bytes)
 	}
-	if !other(run, "b") || other(run, "c") {
-		t.Fatal("RecoveredRunOutputChunks after the supersession: want true for b and false for c")
+	if reps := chunkReplicas(t, pool, run); len(reps) != 1 || reps[0] != "recovered:c" {
+		t.Fatalf("after the supersession the chunks are on %v, want only recovered:c", reps)
 	}
 	if !recovered(run, "c", "c2", false) || string(read(run).Bytes) != "c1c2" {
 		t.Fatal("the later recovery's next append did not write")
@@ -377,9 +365,9 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 	_, e1 := st.AppendRunOutputChunk(ctx, erased, "a", []byte("x"), keep)
 	_, e2 := st.AppendRecoveredRunOutputChunk(ctx, erased, "b", []byte("x"), keep, false)
 	_, e3 := st.AppendRecoveredRunOutputChunk(ctx, erased, "c", []byte("x"), keep, true)
-	_, e4 := st.RecoveredRunOutputChunks(ctx, erased, "")
-	_, e5 := st.ReadRunOutputChunks(ctx, erased, keep)
-	_, e6 := st.SaveChunkedRunOutput(ctx, erased, "", keep)
+	_, e4 := st.ReadRunOutputChunks(ctx, erased, keep)
+	_, e5 := st.SaveChunkedRunOutput(ctx, erased, "", "", keep)
+	_, e6 := st.SaveChunkedRunOutput(ctx, erased, "b", "", keep)
 	for i, err := range []error{e1, e2, e3, e4, e5, e6} {
 		if !errors.Is(err, store.ErrRunOutputErased) {
 			t.Fatalf("method %d on an erased run: %v, want ErrRunOutputErased", i+1, err)
@@ -413,5 +401,79 @@ func TestPeerLauncherAppendKeepsRecoveredChunks_PG(t *testing.T) {
 	}
 	if reps := chunkReplicas(t, pool, r.ID); string(ch.Bytes) != "r" || !ch.Recovered || len(reps) != 1 || reps[0] != "recovered:b" {
 		t.Fatalf("after the launcher's append: %q recovered=%v on %v, want the recovery's r on recovered:b", ch.Bytes, ch.Recovered, reps)
+	}
+}
+
+// A finaliser that read only the launcher's chunks, and then lost the race to an adoption whose first append replaced
+// them, writes no row from the recovery's unsealed bytes: the save checks whose chunks they are in its own
+// transaction. Only the recovery's own covered save, and only while no later adoption has superseded it, writes them.
+func TestPeerChunkedRowChecksOwnerInItsWrite_PG(t *testing.T) {
+	pool, st, _ := holderFixture(t)
+	ctx := t.Context()
+	const keep = 1 << 20
+	newRunID := func() uuid.UUID {
+		t.Helper()
+		r, err := st.CreateRun(ctx, newRun(types.RunRunning))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.ID
+	}
+	save := func(run uuid.UUID, mine string) bool {
+		t.Helper()
+		wrote, err := st.SaveChunkedRunOutput(ctx, run, mine, "run", keep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wrote
+	}
+	pending := func(run uuid.UUID) {
+		t.Helper()
+		if o, found, err := st.GetRunOutput(ctx, run); err != nil || !found || o.CapturedAt != nil {
+			t.Fatalf("row %+v found=%v err=%v, want it pending", o, found, err)
+		}
+	}
+
+	run := newRunID()
+	for _, b := range []string{"a1", "a2"} {
+		if wrote, err := st.AppendRunOutputChunk(ctx, run, "a", []byte(b), keep); err != nil || !wrote {
+			t.Fatalf("the launcher's append %q: %v %v", b, wrote, err)
+		}
+	}
+	// The adoption lands after the finaliser chose to save the launcher's chunks, before its save.
+	if wrote, err := st.AppendRecoveredRunOutputChunk(ctx, run, "b", []byte("b1"), keep, true); err != nil || !wrote {
+		t.Fatalf("the adoption's first append: %v %v", wrote, err)
+	}
+	if save(run, "") || save(run, "c") {
+		t.Fatal("a save that does not cover b's recovery wrote its chunks as the row")
+	}
+	pending(run)
+	if reps := chunkReplicas(t, pool, run); len(reps) != 1 || reps[0] != "recovered:b" {
+		t.Fatalf("after the refused saves the chunks are on %v, want b's left as they were", reps)
+	}
+	if !save(run, "b") {
+		t.Fatal("b's own covered save wrote nothing")
+	}
+	if o, _, err := st.GetRunOutput(ctx, run); err != nil || o.CapturedAt == nil || string(o.Output) != "b1" || !o.CaptureGap || !o.Incomplete {
+		t.Fatalf("b's row = %+v err=%v, want b1 as an incomplete capture gap", o, err)
+	}
+	if reps := chunkReplicas(t, pool, run); len(reps) != 0 {
+		t.Fatalf("chunks on %v survived the row written from them", reps)
+	}
+
+	// A later adoption supersedes b before b's finaliser saves: b's covered save no longer covers the chunks.
+	run2 := newRunID()
+	if wrote, err := st.AppendRecoveredRunOutputChunk(ctx, run2, "b", []byte("b1"), keep, true); err != nil || !wrote {
+		t.Fatalf("b's first append: %v %v", wrote, err)
+	}
+	if wrote, err := st.AppendRecoveredRunOutputChunk(ctx, run2, "c", []byte("c1"), keep, true); err != nil || !wrote {
+		t.Fatalf("c's first append: %v %v", wrote, err)
+	}
+	if save(run2, "b") {
+		t.Fatal("the superseded recovery's save wrote the later one's chunks as the row")
+	}
+	pending(run2)
+	if !save(run2, "c") {
+		t.Fatal("c's own covered save wrote nothing")
 	}
 }

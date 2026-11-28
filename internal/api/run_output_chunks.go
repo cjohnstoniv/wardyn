@@ -296,8 +296,9 @@ func (s *Server) readSharedOutput(w http.ResponseWriter, r *http.Request, run ty
 type chunkSave int
 
 const (
-	// chunksAbsent: the store answered that there are no chunks to save, or that the run's row is
-	// already final, so a plain gap row loses nothing.
+	// chunksAbsent: the store answered that there are no chunks to save, that the run's row is
+	// already final, or that the chunks are a recovery's this finaliser does not vouch for, so a
+	// plain gap row loses nothing it may keep.
 	chunksAbsent chunkSave = iota
 	// chunksDone: the row was written from the chunks, or the output was erased and the tail fenced.
 	chunksDone
@@ -313,24 +314,11 @@ func (s *Server) saveRowFromChunks(ctx context.Context, runID uuid.UUID, reason 
 	if !ok {
 		return chunksAbsent
 	}
-	if rs, ok := cs.(store.RunOutputChunkReplacer); ok {
-		mine := "" // every recovered chunk counts
-		if own {
-			mine = s.replicaName() // this tail's covered seal vouches for its own chunks, never another recovery's
-		}
-		switch recovered, err := rs.RecoveredRunOutputChunks(ctx, runID, mine); {
-		case errors.Is(err, store.ErrRunOutputErased):
-			s.fenceRunOutput(runID)
-			return chunksDone
-		case err != nil:
-			slog.WarnContext(ctx, "wardynd: could not read whether a run's live chunks are a recovery's",
-				slog.String("run_id", runID.String()), slog.Any("err", err))
-			return chunksFailed
-		case recovered:
-			return chunksAbsent // a recovery's chunks become a row only through its own covered seal
-		}
+	mine := "" // a recovery's chunks become a row only through its own covered seal
+	if own {
+		mine = s.replicaName() // this tail's covered seal vouches for its own chunks, never another recovery's
 	}
-	wrote, err := cs.SaveChunkedRunOutput(ctx, runID, s.liveMaskScope(false), s.cfg.RunOutputTailBytes)
+	wrote, err := cs.SaveChunkedRunOutput(ctx, runID, mine, s.liveMaskScope(false), s.cfg.RunOutputTailBytes)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
 		s.fenceRunOutput(runID)

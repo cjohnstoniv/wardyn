@@ -107,7 +107,7 @@ func (s *miscCovOutStore) ReadRunOutputChunks(_ context.Context, _ uuid.UUID, li
 	return s.readRes, s.readErr
 }
 
-func (s *miscCovOutStore) SaveChunkedRunOutput(_ context.Context, run uuid.UUID, scope string, limit int) (bool, error) {
+func (s *miscCovOutStore) SaveChunkedRunOutput(_ context.Context, run uuid.UUID, _, scope string, limit int) (bool, error) {
 	s.mu.Lock()
 	s.saveArgs = append(s.saveArgs, miscCovSaveChunked{run, scope, limit})
 	call, fn, res, err := len(s.saveArgs), s.saveFn, s.saveRes, s.saveErr

@@ -74,19 +74,22 @@ func TestPeerYieldDuringDrainWritesNoRow(t *testing.T) {
 }
 
 // peerChunkStore is miscCovOutStore with store.RunOutputChunkReplacer on top. Each recovered append is recorded
-// with its replica name; RecoveredRunOutputChunks(…, mine) answers true when one from a replica other than mine
-// landed ("" excludes none), and ReadRunOutputChunks then serves the recovered bytes, Recovered set. It does not
-// model a later adoption's refusal of an earlier one's append, which the store's PG test pins.
+// with its replica name; SaveChunkedRunOutput(…, mine, …) writes nothing, as the store's own transaction does, when
+// one from a replica other than mine landed ("" excludes none), and ReadRunOutputChunks then serves the recovered
+// bytes, Recovered set. It does not model a later adoption's refusal of an earlier one's append, which the store's
+// PG test pins.
 type peerChunkStore struct {
 	*miscCovOutStore
 
 	pmu      sync.Mutex
 	recs     []miscCovAppend // each recovered append; replica is the name it was given
 	firsts   []bool
-	mines    []string // each RecoveredRunOutputChunks call's mine
-	recErr   error    // when set, RecoveredRunOutputChunks fails with it
+	mines    []string // each SaveChunkedRunOutput call's mine
+	recErr   error    // when set, SaveChunkedRunOutput fails with it
 	gapFails int      // the next N SaveGapRunOutput calls fail
 	gaps     int      // every SaveGapRunOutput call, failed ones included
+
+	beforeSave func() // when set, runs as SaveChunkedRunOutput starts, before its check
 }
 
 var _ store.RunOutputChunkReplacer = (*peerChunkStore)(nil)
@@ -99,14 +102,19 @@ func (s *peerChunkStore) AppendRecoveredRunOutputChunk(_ context.Context, run uu
 	return true, nil
 }
 
-func (s *peerChunkStore) RecoveredRunOutputChunks(_ context.Context, run uuid.UUID, mine string) (bool, error) {
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	s.mines = append(s.mines, mine)
-	if s.recErr != nil {
-		return false, s.recErr
+func (s *peerChunkStore) SaveChunkedRunOutput(ctx context.Context, run uuid.UUID, mine, scope string, limit int) (bool, error) {
+	if s.beforeSave != nil {
+		s.beforeSave()
 	}
-	return slices.ContainsFunc(s.recs, func(a miscCovAppend) bool { return a.run == run && a.replica != mine }), nil
+	s.pmu.Lock()
+	s.mines = append(s.mines, mine)
+	err := s.recErr
+	other := slices.ContainsFunc(s.recs, func(a miscCovAppend) bool { return a.run == run && a.replica != mine })
+	s.pmu.Unlock()
+	if err != nil || other {
+		return false, err
+	}
+	return s.miscCovOutStore.SaveChunkedRunOutput(ctx, run, mine, scope, limit)
 }
 
 func (s *peerChunkStore) ReadRunOutputChunks(ctx context.Context, run uuid.UUID, limit int) (store.RunOutputChunks, error) {
@@ -156,6 +164,7 @@ func (s *peerChunkStore) gapCount() int {
 	return s.gaps
 }
 
+// chunkedSaves counts the SaveChunkedRunOutput calls that were not refused for a recovery's chunk.
 func (s *peerChunkStore) chunkedSaves() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -312,7 +321,7 @@ func TestPeerAdoptUncoveredAtSealWritesPlainGap(t *testing.T) {
 			}
 			if i == 3 { // coverage kept: one read, with the tail's own replica name
 				if m := ps.mineCalls(); len(m) != 1 || m[0] != f.srv.replicaName() {
-					t.Fatalf("RecoveredRunOutputChunks calls %q, want one with %q", m, f.srv.replicaName())
+					t.Fatalf("SaveChunkedRunOutput calls %q, want one with %q", m, f.srv.replicaName())
 				}
 			}
 		})
@@ -415,13 +424,32 @@ func TestPeerUncoveredGapSkipsRecoveredChunks(t *testing.T) {
 		if g, c := ps.gapCount(), ps.chunkedSaves(); g != 1 || c != 0 {
 			t.Fatalf("SaveGapRunOutput %d, SaveChunkedRunOutput %d; want no gap after the erasure", g, c)
 		}
-		if _, ok := logs.find("could not read whether a run's live chunks are a recovery's"); ok {
+		if _, ok := logs.find("could not write a run's row from its live chunks"); ok {
 			t.Fatal("an erased run's read was logged as a failure")
 		}
 		if f.srv.tailFor(f.run.ID) != nil {
 			t.Fatal("the erased run kept a tail")
 		}
 	})
+}
+
+// An adoption whose first append lands while a finaliser writes a gone launcher's chunks as the row: the save
+// refuses in its own check, so the finaliser writes a plain gap and no row from the recovery's chunks.
+func TestPeerAdoptionDuringTheChunkSaveWritesPlainGap(t *testing.T) {
+	f, ps, _ := peerOutputFixture(t)
+	ps.beforeSave = func() {
+		_, _ = ps.AppendRecoveredRunOutputChunk(t.Context(), f.run.ID, "adopting-replica", []byte("unsealed\n"), 1, true)
+	}
+	f.srv.writeGapRow(t.Context(), ps, f.run.ID, "replica_gone")
+	if g, c := ps.gapCount(), ps.chunkedSaves(); g != 1 || c != 0 {
+		t.Fatalf("SaveGapRunOutput %d, SaveChunkedRunOutput %d; want the plain gap and no row from the chunks", g, c)
+	}
+	if m := ps.mineCalls(); len(m) != 1 || m[0] != "" {
+		t.Fatalf("SaveChunkedRunOutput calls %q, want one that vouches for no recovery", m)
+	}
+	if reason, fc := finalizeAudit(t, f); reason != "replica_gone" || fc {
+		t.Fatalf("audit reason %q from_chunks %v, want replica_gone and no from_chunks", reason, fc)
+	}
 }
 
 // R23j: the recovered chunks of a replica that took the run over and died serve another replica's live read only

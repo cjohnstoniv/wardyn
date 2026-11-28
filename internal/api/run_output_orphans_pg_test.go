@@ -43,6 +43,58 @@ func (f *faultyOutputPG) RefreshRunOutputClaim(context.Context, uuid.UUID) error
 	return errors.New("postgres is down")
 }
 
+// adoptsBeforeChunkSave is the run-output store over Postgres with an adoption that lands while a finaliser writes a
+// row from the chunks: just before the save's transaction, a replica that took the run over makes its first recovered
+// append, which replaces the chunks the finaliser meant to save.
+type adoptsBeforeChunkSave struct {
+	store.PG
+	landed atomic.Bool
+}
+
+func (a *adoptsBeforeChunkSave) SaveChunkedRunOutput(ctx context.Context, runID uuid.UUID, mine, scope string, limit int) (bool, error) {
+	if a.landed.CompareAndSwap(false, true) {
+		if _, err := a.AppendRecoveredRunOutputChunk(ctx, runID, "adopting-replica", []byte("unsealed recovery bytes\n"), 1<<20, true); err != nil {
+			return false, err
+		}
+	}
+	return a.PG.SaveChunkedRunOutput(ctx, runID, mine, scope, limit)
+}
+
+// A finaliser that writes a gone launcher's chunks as the row, while an adoption replaces them, writes a plain gap:
+// whose chunks they are is checked in the save's own transaction, so the recovery's unsealed bytes never become the
+// row the terminal read serves.
+func TestRunOutputPG_AdoptionDuringTheChunkSaveIsNeverTheRow(t *testing.T) {
+	l := newMaskLab(t)
+	ctx := t.Context()
+	a := l.replica()
+	run := l.run()
+	st := &adoptsBeforeChunkSave{PG: store.NewPG(l.pool)}
+	if _, err := st.AppendRunOutputChunk(ctx, run.ID, "launching-replica", []byte("launcher bytes\n"), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	a.srv.cfg.Store = st
+
+	a.srv.writeGapRow(ctx, st, run.ID, "replica_gone")
+	if !st.landed.Load() {
+		t.Fatal("setup: the finaliser never reached the chunk save")
+	}
+	if n := l.count(`SELECT count(*) FROM run_outputs WHERE run_id=$1 AND captured_at IS NOT NULL AND capture_gap AND octet_length(output) = 0`, run.ID); n != 1 {
+		t.Fatalf("%d empty capture-gap rows, want the plain gap and none of the recovery's bytes", n)
+	}
+	if n := l.count(`SELECT count(*) FROM run_output_chunks WHERE run_id=$1`, run.ID); n != 0 {
+		t.Fatalf("%d chunks outlived the gap row", n)
+	}
+	l.endRunAgo(run.ID, "0 seconds")
+	if code, _, body := l.readOutput(a, run.ID); strings.Contains(body, "unsealed recovery") {
+		t.Fatalf("the terminal read = %d %s, served the recovery's unsealed bytes", code, body)
+	}
+	for _, ev := range l.rec.snapshot() {
+		if ev.Action == "run.output.finalize" && ev.RunID != nil && *ev.RunID == run.ID && strings.Contains(string(ev.Data), "from_chunks") {
+			t.Fatalf("an audit row says the row came from the chunks: %s", ev.Data)
+		}
+	}
+}
+
 // orphanChunks leaves runID as a server whose chunk append wrote no pending row left it after a failed
 // dispatch-time insert: chunks holding b, and no run_outputs row at all.
 func (l *maskLab) orphanChunks(runID uuid.UUID, b string) {
