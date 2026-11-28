@@ -1028,6 +1028,12 @@ func TestPeerOutputOpenForwardedToLauncher(t *testing.T) {
 	if _, n, err := r.openRetry(ctx, 11); err == nil || n < 2 {
 		t.Fatalf("while the launcher's sink is pending: %v after %d capacity answers, want capacity until 5 s", err, n)
 	}
+	// The last capacity answer may have started an attempt still in flight: let it return while the sink is
+	// pending, so no ready forward from it meets the next open.
+	waitUntil(t, "the pending phase's last attempt returns", func() bool { return !r.forward().attempting })
+	if r.forward().ready != nil {
+		t.Fatal("an attempt while the launcher's sink was pending left a ready forward")
+	}
 	sink.mu.Lock()
 	sink.pending = false
 	sink.mu.Unlock()
