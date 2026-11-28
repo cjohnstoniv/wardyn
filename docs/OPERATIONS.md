@@ -509,10 +509,13 @@ done 3< "$B/drives.list"
 #    installation's, a drive deleted here, one with no label or a malformed
 #    one) is HELD, and the script asks about each before anything is copied.
 #    When another installation runs from a copy of this database, or you
-#    cannot tell, every drive volume is held, its label included: match its
-#    home against this installation's allocations, each of which names its
-#    home on the Drives page: note them before you run this script, since
-#    step 0 stops wardynd.
+#    cannot tell, every drive volume is held, its label included. Answer from
+#    the volume names this installation itself reports, noted before you run
+#    this script, since step 0 stops wardynd: for a person, the object name
+#    the Drives page's Preview shows for their claims; for a group or
+#    everyone grant, each member's Preview; for a portal, the object name
+#    its allocation returns; for a volume older than drive labels, your own
+#    record of whose it is.
 #    yes backs it up here; with only this installation on the host every
 #    held volume is its own. no records it in drives.elsewhere, to back up
 #    with the installation it belongs to. A volume you cannot place stops the
