@@ -189,7 +189,7 @@ func TestPeerPinRelaysCallsAndStreams(t *testing.T) {
 	}
 }
 
-// CX-824: a pin's WebSocket ends at both peers once its last stream is closed, and after a failed first operation,
+// A pin's WebSocket ends at both peers once its last stream is closed, and after a failed first operation,
 // while the runner stays connected.
 func TestPeerPinReleasedWhenUnused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
@@ -220,7 +220,7 @@ func TestPeerPinReleasedWhenUnused(t *testing.T) {
 	}
 }
 
-// CX-823: the start's cutoff crosses the hop and is enforced at the holder's writer. Values: no cutoff; a cutoff
+// The start's cutoff crosses the hop and is enforced at the holder's writer. Values: no cutoff; a cutoff
 // ahead of both hops; a cutoff that passes during the second hop; a cutoff already passed at the first.
 func TestPeerCutoffEnforcedAtHolder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
@@ -271,7 +271,7 @@ func TestPeerCutoffEnforcedAtHolder(t *testing.T) {
 	}
 }
 
-// CX-825: a pin is the session's id, READY and exact peer read as one snapshot, and is checked again before every
+// A pin is the session's id, READY and exact peer read as one snapshot, and is checked again before every
 // forward. Values: same peer; peer replaced before the capture; replaced between capture and forward; no peer; a
 // slot held by an admission.
 func TestPeerPinSnapshotRefusesReplacedPeer(t *testing.T) {
@@ -326,7 +326,7 @@ func TestPeerPinSnapshotRefusesReplacedPeer(t *testing.T) {
 	}
 }
 
-// CX-826: a cancelled request stops waiting on the holder lookup, and no peer connection is opened.
+// A cancelled request stops waiting on the holder lookup, and no peer connection is opened.
 func TestPeerLookupHonoursCancel(t *testing.T) {
 	var dials atomic.Int32
 	pt := NewPeerTransport(PeerConfig{Key: make([]byte, 32)}, "a", func(ctx context.Context, _ uuid.UUID) (PeerRoute, bool, error) {
