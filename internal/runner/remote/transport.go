@@ -7,6 +7,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -40,6 +42,10 @@ type Link struct {
 	// stated: the attached session's final STATE page reached the org, or the session was resumed.
 	// Past judging that page the org refuses no session for a queued action (requireFresh).
 	stated bool
+	// runner and pt route a call to the replica that holds the runner's session while this one holds none
+	// (UsePeer). Nil pt keeps every call local.
+	runner uuid.UUID
+	pt     *PeerTransport
 }
 
 var _ Transport = (*Link)(nil)
@@ -83,9 +89,28 @@ func (l *Link) Online() bool {
 	return l.ready && l.peer != nil && l.peer.Online()
 }
 
+// UsePeer routes this runner's calls through the replica that holds its session whenever this replica holds
+// none. Call it once, before the Link is used.
+func (l *Link) UsePeer(runnerID uuid.UUID, pt *PeerTransport) {
+	l.mu.Lock()
+	l.runner, l.pt = runnerID, pt
+	l.mu.Unlock()
+}
+
+func (l *Link) peerTransport() *PeerTransport {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.pt
+}
+
+// Call sends one call on this replica's session, or, with none here and UsePeer set, through the holder of the
+// runner's session, read at this call.
 func (l *Link) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
 	p := l.current()
 	if p == nil || !l.Online() {
+		if pt := l.peerTransport(); pt != nil {
+			return pt.call(ctx, l.runner, method, args, result, opts...)
+		}
 		return errOffline
 	}
 	return p.Call(ctx, method, args, result, opts...)
@@ -107,10 +132,16 @@ type session interface {
 }
 
 // pinSession returns the current session for the life of the streams it opens. Once a reconnect replaces it,
-// its calls answer errOffline and never reach the replacement, whose stream ids may repeat the old ones.
+// its calls answer errOffline and never reach the replacement, whose stream ids may repeat the old ones. With no
+// session here and UsePeer set, it reads the holder once and pins that replica's session (peerPinned).
 func (l *Link) pinSession() (session, error) {
 	p := l.current()
 	if p == nil || !l.Online() {
+		if pt := l.peerTransport(); pt != nil {
+			if route, ok := pt.route(context.Background(), l.runner); ok {
+				return &peerPinned{pt: pt, runner: l.runner, route: route}, nil
+			}
+		}
 		return nil, errOffline
 	}
 	return pinnedPeer{l: l, p: p}, nil

@@ -91,6 +91,9 @@ type HubConfig struct {
 	// Mac's session (posture OS darwin) whose AUTH_OK said otherwise, so a CA set or cleared through any replica
 	// reaches it within one recheck. Nil, or an error, says false in AUTH_OK and ends no session.
 	DeviceCert func(context.Context) (bool, error)
+	// Peer, when set, records this replica as the holder of each session it admits, touches the rows of the
+	// sessions whose link is up every peerTouchEvery, and drops a session's row when the session ends.
+	Peer PeerLoop
 }
 
 type hubSession struct {
@@ -166,6 +169,9 @@ type liveSession struct {
 func NewHub(ctx context.Context, cfg HubConfig) *Hub {
 	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}, live: map[*runnerwire.Peer]liveSession{}, rechecking: map[*runnerwire.Peer]bool{}, recheckEvery: storedRowRecheck}
 	context.AfterFunc(ctx, h.Close)
+	if cfg.Peer != nil {
+		go h.peerLoop()
+	}
 	return h
 }
 
@@ -617,6 +623,7 @@ func (h *Hub) fresh(ctx context.Context, s *hubSession, a Admission, id uuid.UUI
 	if err := a.BeginInventory(ctx, s.id); err != nil {
 		return nil, err
 	}
+	h.claimHolder(ctx, id, s.id)
 	pending, err := a.Pending(ctx)
 	if err != nil {
 		return nil, err
@@ -743,6 +750,7 @@ func (h *Hub) ended(id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 			delete(h.sessions, id)
 		}
 		h.mu.Unlock()
+		h.dropHolder(id, endedID)
 		if s.connected && h.cfg.LinkLost != nil {
 			h.cfg.LinkLost(h.ctx, id, endedID, time.Since(endedAt))
 		}
