@@ -18,9 +18,11 @@ import (
 
 // pin is the session a new stream is opened, claimed and controlled on (Link.pinSession). A transport that
 // cannot pin (a test double) is its own one session.
-func (s *Substrate) pin() (session, error) {
-	if p, ok := s.t.(interface{ pinSession() (session, error) }); ok {
-		return p.pinSession()
+func (s *Substrate) pin(ctx context.Context) (session, error) {
+	if p, ok := s.t.(interface {
+		pinSession(context.Context) (session, error)
+	}); ok {
+		return p.pinSession(ctx)
 	}
 	return s.t, nil
 }
@@ -40,7 +42,7 @@ func (s *Substrate) Attach(ctx context.Context, ref string, opts runner.AttachOp
 	if err := s.own(ref); err != nil {
 		return nil, err
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +135,7 @@ func (s *Substrate) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCl
 	if c, ok := s.Caps(); !ok || !offersDesktop(c, s.vmKind(ref)) {
 		return nil, runner.ErrDesktopUnsupported
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +160,7 @@ func (s *Substrate) LocalAttach(ctx context.Context, ref string, req runner.Loca
 	if c, ok := s.Caps(); !ok || !c.LocalAttach {
 		return nil, fmt.Errorf("%w: upgrade the runner", runner.ErrLocalAttachUnsupported)
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +232,7 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 	if err := s.own(ref); err != nil {
 		return nil, err
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return nil, err
 	}

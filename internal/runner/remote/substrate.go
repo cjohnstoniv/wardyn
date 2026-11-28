@@ -725,7 +725,7 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		return err
 	}
 	// The stream is claimed on the session that answered the call, as Attach does.
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return err
 	}

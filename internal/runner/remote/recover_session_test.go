@@ -32,8 +32,8 @@ func (r *relinkAfterCall) Call(ctx context.Context, method string, args, result 
 	return err
 }
 
-func (r *relinkAfterCall) pinSession() (session, error) {
-	sess, err := r.Link.pinSession()
+func (r *relinkAfterCall) pinSession(ctx context.Context) (session, error) {
+	sess, err := r.Link.pinSession(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -54,7 +54,7 @@ func (s *Substrate) LocalWindow(ctx context.Context, ref string, req LocalWindow
 	if err := s.own(ref); err != nil {
 		return nil, err
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return nil, err
 	}

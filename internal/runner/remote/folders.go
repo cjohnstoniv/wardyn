@@ -34,7 +34,7 @@ func (e *PassEnded) Error() string { return "the runner's pass ended before its 
 // SyncFolder starts one pass on a folder-only runner. The caller joins Stream to the sandbox's
 // sftp-server and closes it when either side ends.
 func (s *Substrate) SyncFolder(ctx context.Context, args runnerwire.SyncFolderArgs) (FolderPass, error) {
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return FolderPass{}, err
 	}

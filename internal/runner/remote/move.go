@@ -44,7 +44,7 @@ func (s *Substrate) ExportState(ctx context.Context, ref string, set runner.Carr
 	if err := s.own(ref); err != nil {
 		return runner.StateExport{}, err
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return runner.StateExport{}, err
 	}
@@ -92,7 +92,7 @@ func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, 
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
 		return fail(runner.ErrMoveCreate, err)
 	}
-	sess, err := s.pin()
+	sess, err := s.pin(ctx)
 	if err != nil {
 		return fail(runner.ErrMoveCreate, err)
 	}

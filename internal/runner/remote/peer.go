@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -64,6 +66,10 @@ const (
 
 // PeerTokenTTL is the longest a peer token is valid for; the door refuses an exp further ahead.
 const PeerTokenTTL = 30 * time.Second
+
+// peerLookupTimeout bounds the read of a runner's holder row on the caller's context: one primary-key read, so a
+// wait past it is a pool or database stall, and the call answers offline rather than holding the request.
+const peerLookupTimeout = 5 * time.Second
 
 // peerTokenLife is how far ahead the dialer sets exp, under PeerTokenTTL so a small clock difference is admitted.
 const peerTokenLife = 20 * time.Second
@@ -219,7 +225,9 @@ func (pt *PeerTransport) dialWebSocket(ctx context.Context, route PeerRoute, h h
 // route reads the runner's holder. A row naming this replica, or none, is no route: a request never comes back
 // here, and this replica has no session for the runner.
 func (pt *PeerTransport) route(ctx context.Context, runnerID uuid.UUID) (PeerRoute, bool) {
-	r, ok, err := pt.lookup(ctx, runnerID)
+	lctx, cancel := context.WithTimeout(ctx, peerLookupTimeout)
+	defer cancel()
+	r, ok, err := pt.lookup(lctx, runnerID)
 	if err != nil || !ok || r.ReplicaID == pt.self || r.PeerURL == "" {
 		return PeerRoute{}, false
 	}
@@ -244,6 +252,50 @@ func (pt *PeerTransport) open(ctx context.Context, runnerID uuid.UUID, route Pee
 	return p, nil
 }
 
+// peerCall is every call's argument across the peer hop: the caller's arguments, and the start's absolute
+// cutoff (unix nanoseconds, 0 for none), which the holder enforces at its own writer to the runner.
+type peerCall struct {
+	Args    json.RawMessage `json:"args,omitempty"`
+	AdmitBy int64           `json:"admit_by,omitempty"`
+}
+
+// peerReply is every call's answer across the peer hop: the runner's result, or Cutoff when the holder's writer
+// refused the call because its cutoff had passed (the call never reached the runner).
+type peerReply struct {
+	Result json.RawMessage `json:"result,omitempty"`
+	Cutoff bool            `json:"cutoff,omitempty"`
+}
+
+// errPeerCutoff is the caller's answer for a call the holder refused at its cutoff: the same refusal a local start
+// gets at the link's writer, so errors.Is(err, runner.ErrStartCutoff) holds.
+var errPeerCutoff = fmt.Errorf("runnerwire: the call reached the link's writer after its cutoff: %w", runner.ErrStartCutoff)
+
+// peerSend sends one call over p in the peer envelope, with the start cutoff ctx carries, and unwraps the answer.
+func peerSend(ctx context.Context, p *runnerwire.Peer, method string, args, result any, opts ...runnerwire.CallOption) error {
+	var in peerCall
+	if args != nil {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return fmt.Errorf("runnerwire: marshal %s args: %w", method, err)
+		}
+		in.Args = raw
+	}
+	if by, ok := runner.StartCutoff(ctx); ok {
+		in.AdmitBy = by.UnixNano()
+	}
+	var out peerReply
+	if err := p.Call(ctx, method, in, &out, opts...); err != nil {
+		return peerErr(p, err)
+	}
+	if out.Cutoff {
+		return errPeerCutoff
+	}
+	if result == nil || len(out.Result) == 0 {
+		return nil
+	}
+	return json.Unmarshal(out.Result, result)
+}
+
 // call is one unpinned call through the holder: the holder row is read at this call, and the WebSocket lives for
 // this call only.
 func (pt *PeerTransport) call(ctx context.Context, runnerID uuid.UUID, method string, args, result any, opts ...runnerwire.CallOption) error {
@@ -256,7 +308,7 @@ func (pt *PeerTransport) call(ctx context.Context, runnerID uuid.UUID, method st
 		return err
 	}
 	defer p.Close()
-	return peerErr(p, p.Call(ctx, method, args, result, opts...))
+	return peerSend(ctx, p, method, args, result, opts...)
 }
 
 // peerErr answers a call whose peer link went down (the door closed it: the session moved, or the request was
@@ -268,57 +320,135 @@ func peerErr(p *runnerwire.Peer, err error) error {
 	return err
 }
 
+// Session is one runner session's calls and stream claims, as a pin holds them.
+type Session = session
+
+// Pin pins the session a stream would be opened on now (pinSession): this replica's, or the holder's through the
+// peer door.
+func (l *Link) Pin(ctx context.Context) (Session, error) { return l.pinSession(ctx) }
+
+// TouchHolders runs one touch of the holder rows now, as the touch loop does every peerTouchEvery.
+func (h *Hub) TouchHolders(ctx context.Context) {
+	if h.cfg.Peer != nil {
+		h.touchHolders(ctx)
+	}
+}
+
 // peerPinned is a pin on another replica's session for the runner: every call and stream claim goes to the
-// replica and session captured when the pin was made, over one WebSocket opened at the pin's first operation. It
-// never re-reads the holder row, never falls back to a local session that appears later, and never follows a new
-// holder.
+// replica and session captured when the pin was made. It never re-reads the holder row, never falls back to a
+// local session that appears later, and never follows a new holder. Its WebSocket is opened at the first operation
+// and released once nothing uses it: no call in flight, no stream a reply named still to be taken, and no taken
+// stream still open. A later operation opens another WebSocket to the same replica and session, which the holder
+// refuses once that session is replaced.
 type peerPinned struct {
 	pt     *PeerTransport
 	runner uuid.UUID
 	route  PeerRoute
 
-	mu sync.Mutex
-	p  *runnerwire.Peer
+	mu    sync.Mutex
+	p     *runnerwire.Peer
+	calls int             // calls in flight on p
+	owed  map[uint32]bool // stream ids a reply named, not yet taken
+	live  int             // taken streams not yet ended
 }
 
-func (s *peerPinned) peer(ctx context.Context, method string) (*runnerwire.Peer, error) {
+// acquire is p for one call, opened for method when the pin has none.
+func (s *peerPinned) acquire(ctx context.Context, method string) (*runnerwire.Peer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.p != nil {
-		if !s.p.Online() {
-			return nil, errOffline
+	if s.p != nil && !s.p.Online() {
+		s.p, s.owed, s.live = nil, nil, 0
+	}
+	if s.p == nil {
+		p, err := s.pt.open(ctx, s.runner, s.route, method, uuid.Nil)
+		if err != nil {
+			return nil, err
 		}
-		return s.p, nil
+		s.p = p
 	}
-	p, err := s.pt.open(ctx, s.runner, s.route, method, uuid.Nil)
-	if err != nil {
-		return nil, err
+	s.calls++
+	return s.p, nil
+}
+
+// releaseLocked closes the WebSocket once nothing uses it. Callers hold s.mu.
+func (s *peerPinned) releaseLocked() {
+	if s.p != nil && s.calls == 0 && s.live == 0 && len(s.owed) == 0 {
+		s.p.Close()
+		s.p = nil
 	}
-	s.p = p
-	return p, nil
 }
 
 func (s *peerPinned) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
-	p, err := s.peer(ctx, method)
+	p, err := s.acquire(ctx, method)
 	if err != nil {
 		return err
 	}
-	return peerErr(p, p.Call(ctx, method, args, result, opts...))
+	var raw json.RawMessage
+	err = peerSend(ctx, p, method, args, &raw, opts...)
+	s.mu.Lock()
+	s.calls--
+	if err == nil && s.p == p {
+		for _, id := range peerStreamIDs(raw) {
+			if s.owed == nil {
+				s.owed = map[uint32]bool{}
+			}
+			s.owed[id] = true
+		}
+	}
+	s.releaseLocked()
+	s.mu.Unlock()
+	if err != nil || result == nil || len(raw) == 0 {
+		return err
+	}
+	return json.Unmarshal(raw, result)
 }
 
 // TakeStream claims a stream a call on this pin opened. Before any call there is no WebSocket and no stream.
 func (s *peerPinned) TakeStream(id uint32) (*runnerwire.Stream, error) {
 	s.mu.Lock()
 	p := s.p
-	s.mu.Unlock()
+	delete(s.owed, id)
 	if p == nil {
+		s.mu.Unlock()
 		return nil, runnerwire.ErrNoStream
 	}
 	st, err := p.TakeStream(id)
-	if err != nil && !p.Online() {
-		return nil, errOffline
+	if err != nil {
+		s.releaseLocked()
+		s.mu.Unlock()
+		if !p.Online() {
+			return nil, errOffline
+		}
+		return nil, err
 	}
-	return st, err
+	s.live++
+	s.mu.Unlock()
+	go func() {
+		<-st.Done()
+		s.mu.Lock()
+		if s.p == p {
+			s.live--
+			s.releaseLocked()
+		}
+		s.mu.Unlock()
+	}()
+	return st, nil
+}
+
+// peerStreamIDs are the stream ids a reply names.
+func peerStreamIDs(raw json.RawMessage) []uint32 {
+	var m map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	var ids []uint32
+	for _, k := range peerStreamKeys {
+		var n uint32
+		if v, ok := m[k]; ok && json.Unmarshal(v, &n) == nil && n != 0 {
+			ids = append(ids, n)
+		}
+	}
+	return ids
 }
 
 // ServePeer serves one peer WebSocket on this hub: the holder's end of a pin the token names. It is refused
@@ -355,25 +485,46 @@ func (h *Hub) HoldsSession(runnerID, sessionID uuid.UUID) bool {
 	return ok
 }
 
-// pinHeld is the local pin on runnerID's session sessionID, when this replica holds it ready now. It never takes
-// the Link's peer path: one hop only.
+// pinHeld is the local pin on runnerID's session sessionID, when this replica holds it ready now. The session's
+// id, its READY and its exact peer are read together under the session's slot lock, which every admission and
+// replacement holds while it changes them; a session in transition is refused. The pin is checked again against the
+// Link's current peer before every forward (pinnedPeer.Call). It never takes the Link's peer path: one hop only.
 func (h *Hub) pinHeld(runnerID, sessionID uuid.UUID) (pinnedPeer, bool) {
 	h.mu.Lock()
 	s := h.sessions[runnerID]
 	h.mu.Unlock()
-	if s == nil || s.link == nil {
+	if s == nil {
 		return pinnedPeer{}, false
 	}
-	return s.link.pinLocal(sessionID, s.readyID.Load())
+	snap, ok := s.snapshot()
+	if !ok || snap.id != sessionID {
+		return pinnedPeer{}, false
+	}
+	return pinnedPeer{l: snap.link, p: snap.peer}, true
 }
 
-// pinLocal pins the current session when it is up and readyID names sessionID.
-func (l *Link) pinLocal(sessionID uuid.UUID, readyID *string) (pinnedPeer, bool) {
-	p := l.current()
-	if p == nil || !l.Online() || readyID == nil || *readyID != sessionID.String() || l.current() != p {
-		return pinnedPeer{}, false
+// sessionSnap is one coherent read of a hub session: its id, Link and the peer that session is on.
+type sessionSnap struct {
+	id   uuid.UUID
+	link *Link
+	peer *runnerwire.Peer
+}
+
+// snapshot reads the session's id, Link and peer under its slot lock, only while that session reached READY
+// itself and the Link's current peer is that same peer and up. A slot held by an admission is not waited for.
+func (s *hubSession) snapshot() (sessionSnap, bool) {
+	if !s.mu.TryLock() {
+		return sessionSnap{}, false
 	}
-	return pinnedPeer{l: l, p: p}, true
+	defer s.mu.Unlock()
+	if s.link == nil || s.peer == nil || !s.readyFor(s.id) || s.link.current() != s.peer || !s.link.Online() {
+		return sessionSnap{}, false
+	}
+	id, err := uuid.Parse(s.id)
+	if err != nil {
+		return sessionSnap{}, false
+	}
+	return sessionSnap{id: id, link: s.link, peer: s.peer}, true
 }
 
 // peerRelay replays a peer WebSocket's calls on one pinned runner session. A byte stream the runner opens for a
@@ -389,6 +540,9 @@ type peerRelay struct {
 	first    bool
 	toRunner map[uint32]uint32 // WebSocket stream id -> runner stream id
 }
+
+// peerReplayHook, when set by a test, runs at the holder after a call is admitted and before it is sent on.
+var peerReplayHook func()
 
 // peerStreamKeys are the top-level argument and reply fields that name a byte stream.
 var peerStreamKeys = []string{"stream", "exec", "stderr"}
@@ -411,7 +565,13 @@ func (r *peerRelay) serveCall(ctx context.Context, id uint32, method string, arg
 		r.ws.Close()
 		return nil, errOffline
 	}
-	args = r.rewrite(args, func(ws uint32) (uint32, bool) {
+	var env peerCall
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &env); err != nil {
+			return nil, err
+		}
+	}
+	args = r.rewrite(env.Args, func(ws uint32) (uint32, bool) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		x, ok := r.toRunner[ws]
@@ -421,18 +581,29 @@ func (r *peerRelay) serveCall(ctx context.Context, id uint32, method string, arg
 	if len(args) > 0 {
 		in = args
 	}
-	var raw json.RawMessage
-	err := r.pin.Call(ctx, method, in, &raw, runnerwire.WithEvents(func(ev runnerwire.Event) {
+	opts := []runnerwire.CallOption{runnerwire.WithEvents(func(ev runnerwire.Event) {
 		ev.Call = id
 		_ = r.ws.Event(ctx, ev)
-	}))
+	})}
+	if env.AdmitBy != 0 {
+		// The start's cutoff, enforced here at this replica's writer to the runner as at the caller's.
+		opts = append(opts, runnerwire.AdmitBy(time.Unix(0, env.AdmitBy)))
+	}
+	if peerReplayHook != nil {
+		peerReplayHook()
+	}
+	var raw json.RawMessage
+	err := r.pin.Call(ctx, method, in, &raw, opts...)
+	if errors.Is(err, runner.ErrStartCutoff) {
+		return peerReply{Cutoff: true}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	if len(raw) == 0 {
-		return nil, nil
+		return peerReply{}, nil
 	}
-	return r.rewrite(raw, func(x uint32) (uint32, bool) { return r.relayStream(ctx, id, x) }), nil
+	return peerReply{Result: r.rewrite(raw, func(x uint32) (uint32, bool) { return r.relayStream(ctx, id, x) })}, nil
 }
 
 // rewrite replaces each stream id field of a JSON object with what swap gives; any other value is kept.
@@ -556,7 +727,8 @@ func (h *Hub) touchHolders(ctx context.Context) {
 	}
 }
 
-// heldSessions is every session this hub holds with its link up, by session id.
+// heldSessions is every session this hub holds with its link up, by session id, each read as one snapshot under
+// its slot lock; a session in transition is left to the next touch.
 func (h *Hub) heldSessions() map[uuid.UUID]uuid.UUID {
 	h.mu.Lock()
 	type held struct {
@@ -570,12 +742,8 @@ func (h *Hub) heldSessions() map[uuid.UUID]uuid.UUID {
 	h.mu.Unlock()
 	out := map[uuid.UUID]uuid.UUID{}
 	for _, e := range all {
-		rid := e.s.readyID.Load()
-		if rid == nil || e.s.link == nil || !e.s.link.Online() {
-			continue
-		}
-		if sid, err := uuid.Parse(*rid); err == nil {
-			out[sid] = e.id
+		if snap, ok := e.s.snapshot(); ok {
+			out[snap.id] = e.id
 		}
 	}
 	return out

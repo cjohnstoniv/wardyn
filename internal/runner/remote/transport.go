@@ -134,11 +134,11 @@ type session interface {
 // pinSession returns the current session for the life of the streams it opens. Once a reconnect replaces it,
 // its calls answer errOffline and never reach the replacement, whose stream ids may repeat the old ones. With no
 // session here and UsePeer set, it reads the holder once and pins that replica's session (peerPinned).
-func (l *Link) pinSession() (session, error) {
+func (l *Link) pinSession(ctx context.Context) (session, error) {
 	p := l.current()
 	if p == nil || !l.Online() {
 		if pt := l.peerTransport(); pt != nil {
-			if route, ok := pt.route(context.Background(), l.runner); ok {
+			if route, ok := pt.route(ctx, l.runner); ok {
 				return &peerPinned{pt: pt, runner: l.runner, route: route}, nil
 			}
 		}
