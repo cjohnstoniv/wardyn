@@ -150,7 +150,7 @@ func (s *Server) capturePane(ctx context.Context, st store.RunOutputStore, run t
 		RunID: run.ID, Output: out, Truncated: truncated, Incomplete: dropped,
 		Source: paneSnapshotSource, MaskScope: s.liveMaskScope(false),
 	}
-	switch err := st.SaveFinalRunOutput(ctx, row); {
+	switch _, err := st.SaveFinalRunOutput(ctx, row); {
 	case errors.Is(err, store.ErrRunOutputErased):
 		s.fenceRunOutput(run.ID)
 		return 0, "erased"

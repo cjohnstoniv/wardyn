@@ -357,7 +357,7 @@ func TestRecoverRunOutput_NeverReplacesAFinalRowOrReadsForAnErasedRun(t *testing
 	rr := newRecoveringRunner()
 	rr.log = "must not be read\n"
 	f, _ := recoveryFixture(t, rr)
-	if err := f.mem.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: f.run.ID, Output: []byte("kept\n"), Source: "stdout"}); err != nil {
+	if _, err := f.mem.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: f.run.ID, Output: []byte("kept\n"), Source: "stdout"}); err != nil {
 		t.Fatal(err)
 	}
 	f.srv.FinishRunOutput(t.Context(), f.run.ID)

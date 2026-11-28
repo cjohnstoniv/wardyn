@@ -349,7 +349,7 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 	}
 
 	// After the final row every append writes nothing.
-	if err := st.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run, Output: []byte("final"), Source: "stdout"}); err != nil {
+	if _, err := st.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run, Output: []byte("final"), Source: "stdout"}); err != nil {
 		t.Fatal(err)
 	}
 	if plain(run, "a", "x") || recovered(run, "c", "x", false) || recovered(run, "d", "x", true) {

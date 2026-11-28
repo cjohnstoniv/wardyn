@@ -151,14 +151,14 @@ func (s *miscCovOutStore) ListStalePendingRunOutputs(ctx context.Context, age ti
 	return s.memRunOutputs.ListStalePendingRunOutputs(ctx, age, after, limit)
 }
 
-func (s *miscCovOutStore) SaveFinalRunOutput(ctx context.Context, o store.RunOutput) error {
+func (s *miscCovOutStore) SaveFinalRunOutput(ctx context.Context, o store.RunOutput) (bool, error) {
 	s.mu.Lock()
 	s.saveFinalCalls++
 	call, fn := s.saveFinalCalls, s.saveFinalFn
 	s.mu.Unlock()
 	if fn != nil {
 		if err := fn(call); err != nil {
-			return err
+			return false, err
 		}
 	}
 	return s.memRunOutputs.SaveFinalRunOutput(ctx, o)

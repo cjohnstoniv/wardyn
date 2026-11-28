@@ -35,8 +35,8 @@ func (f *faultyOutputPG) InsertPendingRunOutput(ctx context.Context, id uuid.UUI
 	return f.PG.InsertPendingRunOutput(ctx, id)
 }
 
-func (f *faultyOutputPG) SaveFinalRunOutput(context.Context, store.RunOutput) error {
-	return errors.New("postgres is down")
+func (f *faultyOutputPG) SaveFinalRunOutput(context.Context, store.RunOutput) (bool, error) {
+	return false, errors.New("postgres is down")
 }
 
 func (f *faultyOutputPG) RefreshRunOutputClaim(context.Context, uuid.UUID) error {

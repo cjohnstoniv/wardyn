@@ -55,7 +55,7 @@ func TestPG_RunOutputChunks(t *testing.T) {
 	}
 
 	// The final row replaces the chunks, in its own transaction, and no later chunk is written.
-	if err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run, Output: []byte("one two three"), Source: "stdout"}); err != nil {
+	if _, err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run, Output: []byte("one two three"), Source: "stdout"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = pg.ReadRunOutputChunks(ctx, run, 100); got.Found {

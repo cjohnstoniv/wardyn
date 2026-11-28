@@ -446,6 +446,7 @@ type persistOutcome int
 const (
 	persistFailed persistOutcome = iota
 	persistDone
+	persistKept // the run's row was already final, so this write stored nothing and reports nothing
 	persistStop // erased or fenced: nothing more to write, ever
 )
 
@@ -463,7 +464,7 @@ func (s *Server) persistFinalOutput(ctx context.Context, e *execOutputTail, st s
 				s.auditOutputFinalize(ctx, row.RunID, reasons)
 			}
 			return
-		case persistStop:
+		case persistKept, persistStop:
 			return
 		}
 		if attempt < runOutputSyncAttempts {
@@ -512,12 +513,12 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 	wrote := row.Incomplete
 	e.fmu.Unlock()
 	wctx, rep := store.WithReplacedIncomplete(ctx)
-	err := st.SaveFinalRunOutput(wctx, *row)
+	stored, err := st.SaveFinalRunOutput(wctx, *row)
 	switch {
 	case err == nil:
 		e.fmu.Lock()
 		e.committed, e.revision = true, rep.CapturedAt
-		lateSince := e.late && !wrote
+		lateSince := stored && e.late && !wrote
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
 		if as := s.repairAudits(); rep.Replaced && as != nil {
@@ -527,6 +528,9 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
 			id, rev := row.RunID, rep.CapturedAt
 			s.goBackground(func() { s.markLateIncompleteOwed(id, rev) })
+		}
+		if !stored {
+			return persistKept
 		}
 		return persistDone
 	case errors.Is(err, store.ErrRunOutputErased):

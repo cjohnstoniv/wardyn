@@ -66,25 +66,25 @@ func (m *memRunOutputs) RefreshRunOutputClaim(_ context.Context, id uuid.UUID) e
 	return nil
 }
 
-func (m *memRunOutputs) SaveFinalRunOutput(_ context.Context, o store.RunOutput) error {
+func (m *memRunOutputs) SaveFinalRunOutput(_ context.Context, o store.RunOutput) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.erased[o.RunID] {
-		return store.ErrRunOutputErased
+		return false, store.ErrRunOutputErased
 	}
 	if m.failSave > 0 {
 		m.failSave--
-		return errors.New("postgres is down")
+		return false, errors.New("postgres is down")
 	}
 	if r, ok := m.rows[o.RunID]; ok && r.CapturedAt != nil && !(r.Source == "stdout" && r.CaptureGap) {
-		return nil
+		return false, nil
 	}
 	now := time.Now()
 	o.CapturedAt, o.ClaimedAt = &now, now
 	o.Output = append([]byte{}, o.Output...)
 	m.rows[o.RunID] = o
 	m.saves[o.RunID]++
-	return nil
+	return true, nil
 }
 
 func (m *memRunOutputs) SaveGapRunOutput(_ context.Context, id uuid.UUID) (bool, error) {
@@ -823,5 +823,33 @@ func TestFenceRunOutput_DropsTheQueuedChunks(t *testing.T) {
 	defer q.mu.Unlock()
 	if len(q.pend) != 0 || !q.stopped {
 		t.Fatalf("after the fence the chunk queue holds %d byte(s), stopped=%v; want it emptied and stopped", len(q.pend), q.stopped)
+	}
+}
+
+// An incomplete final write that meets a row already final stores nothing, so it is not audited as an incomplete
+// capture: the stored row stayed as it was. Over a pending row the same write is stored and audited.
+func TestFinalOutputAuditsOnlyAStoredIncompleteRow(t *testing.T) {
+	for _, final := range []bool{true, false} {
+		f := newOutputFixture(t)
+		writeExecOutput(t, f.open(t), "part\n")
+		if final {
+			now := time.Now()
+			f.mem.mu.Lock()
+			f.mem.rows[f.run.ID] = store.RunOutput{RunID: f.run.ID, Output: []byte("part\nand the rest\n"), Source: "stdout", CapturedAt: &now}
+			f.mem.mu.Unlock()
+		}
+		row := store.RunOutput{RunID: f.run.ID, Output: []byte("part\n"), Incomplete: true, Source: "stdout"}
+		f.srv.persistFinalOutput(t.Context(), f.srv.tailFor(f.run.ID), f.mem, row, map[string]any{"drain": true})
+		got, _ := f.mem.row(f.run.ID)
+		audits := miscCovFinalizeData(t, f)
+		switch {
+		case final && (string(got.Output) != "part\nand the rest\n" || got.Incomplete || len(audits) != 0):
+			t.Fatalf("over a final row: %q incomplete=%v, audits %v; want the row unchanged and no audit", got.Output, got.Incomplete, audits)
+		case !final && (string(got.Output) != "part\n" || !got.Incomplete || len(audits) != 1 || audits[0]["incomplete"] != true):
+			t.Fatalf("over a pending row: %q incomplete=%v, audits %v; want the incomplete row and its audit", got.Output, got.Incomplete, audits)
+		}
+		if f.srv.tailFor(f.run.ID) != nil {
+			t.Fatal("the tail outlived the final row")
+		}
 	}
 }

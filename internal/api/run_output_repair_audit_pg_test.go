@@ -36,11 +36,11 @@ func replacedOwing(t *testing.T, st store.PG, run uuid.UUID) store.RunOutputRepa
 	if err := st.InsertPendingRunOutput(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: run, Output: []byte("part\n"), Incomplete: true, Source: "stdout", MaskScope: "run"}); err != nil {
+	if _, err := st.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: run, Output: []byte("part\n"), Incomplete: true, Source: "stdout", MaskScope: "run"}); err != nil {
 		t.Fatal(err)
 	}
 	wctx, rep := store.WithReplacedIncomplete(t.Context())
-	if err := st.SaveFinalRunOutput(wctx, store.RunOutput{RunID: run, Output: []byte("part\nand the rest\n"), Source: "stdout", MaskScope: "run"}); err != nil {
+	if _, err := st.SaveFinalRunOutput(wctx, store.RunOutput{RunID: run, Output: []byte("part\nand the rest\n"), Source: "stdout", MaskScope: "run"}); err != nil {
 		t.Fatal(err)
 	}
 	if !rep.Replaced || rep.Owed.EventID == uuid.Nil {

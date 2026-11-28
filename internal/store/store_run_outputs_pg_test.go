@@ -39,7 +39,7 @@ func TestPG_RunOutputs(t *testing.T) {
 	}
 
 	final := store.RunOutput{RunID: run, Output: []byte("a\x00b \xff"), Truncated: true, Source: "stdout", MaskScope: "run"}
-	if err := pg.SaveFinalRunOutput(ctx, final); err != nil {
+	if _, err := pg.SaveFinalRunOutput(ctx, final); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = pg.GetRunOutput(ctx, run)
@@ -62,7 +62,7 @@ func TestPG_RunOutputs(t *testing.T) {
 	if wrote, err := pg.SaveGapRunOutput(ctx, run2); err != nil || !wrote {
 		t.Fatalf("gap over a pending row: %v %v", wrote, err)
 	}
-	if err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run2, Output: []byte("late arrival"), Source: "stdout"}); err != nil {
+	if _, err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run2, Output: []byte("late arrival"), Source: "stdout"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, _ = pg.GetRunOutput(ctx, run2); got.CaptureGap || string(got.Output) != "late arrival" {
@@ -83,7 +83,7 @@ func TestPG_RunOutputs(t *testing.T) {
 	for name, call := range map[string]func() error{
 		"pending":  func() error { return pg.InsertPendingRunOutput(ctx, run) },
 		"refresh":  func() error { return pg.RefreshRunOutputClaim(ctx, run) },
-		"final":    func() error { return pg.SaveFinalRunOutput(ctx, final) },
+		"final":    func() error { _, err := pg.SaveFinalRunOutput(ctx, final); return err },
 		"gap":      func() error { _, err := pg.SaveGapRunOutput(ctx, run); return err },
 		"mark":     func() error { _, err := pg.MarkRunOutputIncomplete(ctx, run, time.Time{}); return err },
 		"read":     func() error { _, _, err := pg.GetRunOutput(ctx, run); return err },
@@ -116,7 +116,7 @@ func TestPeerCompleteFinalReplacesIncomplete_PG(t *testing.T) {
 	save := func(o store.RunOutput) bool {
 		t.Helper()
 		wctx, rep := store.WithReplacedIncomplete(ctx)
-		if err := pg.SaveFinalRunOutput(wctx, o); err != nil {
+		if _, err := pg.SaveFinalRunOutput(wctx, o); err != nil {
 			t.Fatal(err)
 		}
 		return rep.Replaced
@@ -185,6 +185,29 @@ func TestPeerCompleteFinalReplacesIncomplete_PG(t *testing.T) {
 	}
 	if got := read(run4); string(got.Output) != "part" || got.MaskScope != "globals_only" {
 		t.Fatalf("a run-scope write replaced a globals_only row: %q scope=%q", got.Output, got.MaskScope)
+	}
+}
+
+// The reverse order: a complete stdout row commits first, and a slower finaliser's incomplete copy then stores
+// nothing. The write reports that, so its caller records no incomplete capture against output that stayed complete.
+func TestPeerIncompleteFinalAfterCompleteStoresNothing_PG(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if err := pg.InsertPendingRunOutput(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run, Output: []byte("part and rest"), Source: "stdout", MaskScope: "run"}); err != nil || !stored {
+		t.Fatalf("the complete final over the pending row: stored=%v err=%v, want it stored", stored, err)
+	}
+	wctx, rep := store.WithReplacedIncomplete(ctx)
+	stored, err := pg.SaveFinalRunOutput(wctx, store.RunOutput{RunID: run, Output: []byte("part"), Incomplete: true, Source: "stdout", MaskScope: "run"})
+	if err != nil || stored || rep.Replaced || !rep.CapturedAt.IsZero() {
+		t.Fatalf("the incomplete final over the complete row: stored=%v replaced=%v revision=%v err=%v, want nothing stored", stored, rep.Replaced, rep.CapturedAt, err)
+	}
+	if got, found, err := pg.GetRunOutput(ctx, run); err != nil || !found || string(got.Output) != "part and rest" || got.Incomplete {
+		t.Fatalf("the row after the incomplete write = %q incomplete=%v found=%v err=%v, want the complete row", got.Output, got.Incomplete, found, err)
 	}
 }
 

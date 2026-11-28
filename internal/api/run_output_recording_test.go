@@ -223,7 +223,7 @@ func TestRecordingOutput_PreservesIndependentFinalRowsAndOptOuts(t *testing.T) {
 	for _, source := range []string{"stdout", paneSnapshotSource} {
 		t.Run(source, func(t *testing.T) {
 			f, rs := newRecordingOutputFixture(t)
-			if err := f.mem.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: f.run.ID, Source: source, Output: []byte("independent")}); err != nil {
+			if _, err := f.mem.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: f.run.ID, Source: source, Output: []byte("independent")}); err != nil {
 				t.Fatal(err)
 			}
 			f.srv.FinishRunOutput(t.Context(), f.run.ID)

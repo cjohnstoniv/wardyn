@@ -127,7 +127,7 @@ func TestPG_PersonErasure_ReachesEveryCopyOnEveryReplica(t *testing.T) {
 	aliceRuns := []types.AgentRun{l.personRun(alice, "alice secret plan one"), l.personRun(alice, "alice secret plan two")}
 	bobRun := l.personRun(bob, "bob plan")
 	for _, r := range append(aliceRuns, bobRun) {
-		if err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: r.ID, Output: []byte("output of " + r.CreatedBy), Source: "stdout"}); err != nil {
+		if _, err := pg.SaveFinalRunOutput(ctx, store.RunOutput{RunID: r.ID, Output: []byte("output of " + r.CreatedBy), Source: "stdout"}); err != nil {
 			t.Fatal(err)
 		}
 		if err := a.srv.cfg.RecordingStore.SaveCast(ctx, r.ID.String(), strings.NewReader("cast of "+r.CreatedBy)); err != nil {

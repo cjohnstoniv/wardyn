@@ -242,7 +242,7 @@ func TestRecordingOutputPG_BackendChangesDoNotWidenErasureClaims(t *testing.T) {
 			for _, source := range []string{"stdout", paneSnapshotSource} {
 				id := l.run().ID
 				independent[id] = source
-				if err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: source, Output: []byte(source)}); err != nil {
+				if _, err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: source, Output: []byte(source)}); err != nil {
 					t.Fatal(err)
 				}
 			}

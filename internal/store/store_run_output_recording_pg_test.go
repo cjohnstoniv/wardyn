@@ -85,13 +85,13 @@ func TestPG_RecordingOutputCannotReplaceIndependentFinalOrLoseBetterRecording(t 
 	for _, source := range []string{"stdout", "pane_snapshot"} {
 		id := persistRun(t, t.Context(), pool, newRun(types.RunCompleted)).ID
 		claim := queuedRecordingClaim(t, pg, id)
-		if err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: source, Output: []byte("direct")}); err != nil {
+		if _, err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: source, Output: []byte("direct")}); err != nil {
 			t.Fatal(err)
 		}
 		if wrote, err := pg.SaveRecordingRunOutput(t.Context(), claim, recordingRow(id, "recorded"), 0); err != nil || wrote {
 			t.Fatalf("replaced %s: %v %v", source, wrote, err)
 		}
-		if err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: "stdout", Output: []byte("late finalizer")}); err != nil {
+		if _, err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: "stdout", Output: []byte("late finalizer")}); err != nil {
 			t.Fatal(err)
 		}
 		row, _, err := pg.GetRunOutput(t.Context(), id)
@@ -109,7 +109,7 @@ func TestPG_RecordingOutputCannotReplaceIndependentFinalOrLoseBetterRecording(t 
 	if wrote, err := pg.SaveRecordingRunOutput(t.Context(), claim, gap, 0); err != nil || wrote {
 		t.Fatalf("gap replaced prior result: %v %v", wrote, err)
 	}
-	if err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: "stdout", Output: []byte("obsolete stdout")}); err != nil {
+	if _, err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: "stdout", Output: []byte("obsolete stdout")}); err != nil {
 		t.Fatal(err)
 	}
 	if row, _, err := pg.GetRunOutput(t.Context(), id); err != nil || string(row.Output) != "kept recording" {
@@ -130,7 +130,7 @@ func TestPG_RecordingOutputErasureIsSourceSpecificAndSurvivesRetentionAndRunDele
 	for _, source := range []string{"stdout", "pane_snapshot"} {
 		id := persistRun(t, t.Context(), pool, newRun(types.RunCompleted)).ID
 		ids = append(ids, id)
-		if err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: source, Output: []byte(source)}); err != nil {
+		if _, err := pg.SaveFinalRunOutput(t.Context(), store.RunOutput{RunID: id, Source: source, Output: []byte(source)}); err != nil {
 			t.Fatal(err)
 		}
 	}

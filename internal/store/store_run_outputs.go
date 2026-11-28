@@ -60,8 +60,10 @@ type RunOutputStore interface {
 	// mask_scope as given), replacing a pending or stdout capture-gap row, or an
 	// incomplete stdout row when this one is a complete stdout capture of the
 	// same mask scope. The database stamps captured_at, later than the replaced
-	// row's, so each write's stamp names it.
-	SaveFinalRunOutput(ctx context.Context, o RunOutput) error
+	// row's, so each write's stamp names it. It reports whether it stored the
+	// row: false, with a nil error, when the run's row is already final and this
+	// write may not replace it, so nothing changed.
+	SaveFinalRunOutput(ctx context.Context, o RunOutput) (bool, error)
 	// SaveGapRunOutput writes a capture-gap row with no bytes, only over a
 	// pending row or none: a final row already committed is never overwritten.
 	// It reports whether it wrote.
@@ -153,11 +155,12 @@ func (s PG) RefreshRunOutputClaim(ctx context.Context, runID uuid.UUID) error {
 }
 
 // SaveFinalRunOutput — see RunOutputStore.
-func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
+func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) (bool, error) {
 	if o.Source == "recording" {
-		return errors.New("store: recording output requires a recovery claim")
+		return false, errors.New("store: recording output requires a recovery claim")
 	}
-	return s.runOutputTx(ctx, o.RunID, false, func(tx pgx.Tx) error {
+	stored := false
+	err := s.runOutputTx(ctx, o.RunID, false, func(tx pgx.Tx) error {
 		body := o.Output
 		if body == nil {
 			body = []byte{}
@@ -185,10 +188,11 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 		var capturedAt time.Time
 		switch err := row.Scan(&capturedAt); {
 		case errors.Is(err, pgx.ErrNoRows):
-			return nil
+			return nil // the final row stands as it is
 		case err != nil:
 			return err
 		}
+		stored = true
 		if rep, ok := ctx.Value(replacedIncompleteKey{}).(*ReplacedIncomplete); ok {
 			rep.CapturedAt = capturedAt
 		}
@@ -211,6 +215,7 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 		}
 		return nil
 	})
+	return stored && err == nil, err
 }
 
 // RunOutputRepairAudit is the run.output.finalize event a replacement of an incomplete row owes: its id and time

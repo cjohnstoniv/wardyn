@@ -96,6 +96,57 @@ func TestPeerAdopterCompleteRowReplacesLauncherPartial_PG(t *testing.T) {
 	}
 }
 
+// The reverse order: the complete row of the replica that took the run over commits first, and the launcher's slower
+// incomplete write then stores nothing. The launcher records no run.output.finalize row in the audit table, so no
+// failed incomplete capture is reported against output that stayed complete.
+func TestPeerLauncherPartialAfterCompleteRowAuditsNothing_PG(t *testing.T) {
+	l := newMaskLab(t)
+	a, b := l.replica(), l.replica()
+	a.srv.cfg.Audit = store.Recorder{Pool: l.pool}
+	run := l.run()
+	a.dispatch(t, run)
+	st := store.NewPG(l.pool)
+	if err := st.InsertPendingRunOutput(t.Context(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	writeExecOutput(t, a.srv.openExecOutput(run, false), "part\n")
+	writeExecOutput(t, b.srv.openExecOutput(run, false), "part\nand the rest\n")
+	ta, tb := a.srv.tailFor(run.ID), b.srv.tailFor(run.ID)
+	if ta == nil || tb == nil {
+		t.Fatal("each replica should hold a tail for the run")
+	}
+	finalizeRows := func() int {
+		t.Helper()
+		var n int
+		if err := l.pool.QueryRow(t.Context(), `SELECT count(*) FROM audit_events WHERE run_id = $1 AND action = 'run.output.finalize'`, run.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	full := store.RunOutput{RunID: run.ID, Output: []byte("part\nand the rest\n"), Source: "stdout", MaskScope: "run"}
+	if got := b.srv.tryPersistOutput(t.Context(), tb, st, &full); got != persistDone {
+		t.Fatalf("B's complete row: outcome %v, want persistDone", got)
+	}
+	partial := store.RunOutput{RunID: run.ID, Output: []byte("part\n"), Incomplete: true, Source: "stdout", MaskScope: "run"}
+	a.srv.persistFinalOutput(t.Context(), ta, st, partial, map[string]any{"drain": true})
+	row, found, err := st.GetRunOutput(t.Context(), run.ID)
+	if err != nil || !found || string(row.Output) != "part\nand the rest\n" || row.Incomplete {
+		t.Fatalf("stored row = %q incomplete=%v found=%v err=%v, want B's complete bytes", row.Output, row.Incomplete, found, err)
+	}
+	if a.srv.tailFor(run.ID) != nil {
+		t.Fatal("A's tail outlived the final row its write met")
+	}
+	if n := finalizeRows(); n != 0 {
+		t.Fatalf("%d run.output.finalize rows after A's write stored nothing, want none", n)
+	}
+	// The recorder does take this run's rows, so the count above is not empty by accident.
+	a.srv.auditOutputFinalize(t.Context(), run.ID, map[string]any{"incomplete": true})
+	if n := finalizeRows(); n != 1 {
+		t.Fatalf("%d run.output.finalize rows after a direct one, want it recorded", n)
+	}
+}
+
 // tailRevision is the captured_at of the row e committed.
 func tailRevision(e *execOutputTail) time.Time {
 	e.fmu.Lock()
