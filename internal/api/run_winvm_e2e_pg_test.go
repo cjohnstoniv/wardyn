@@ -104,7 +104,7 @@ func newWinvmEnv(t *testing.T, max int) (*queueEnv, types.RunnerPool, uuid.UUID,
 }
 
 func winvmCreateBody(pool types.RunnerPool) string {
-	return `{"title":"Windows desk","machine_kind":"windows_vm","windows_image":"Server","interactive":true,` +
+	return `{"title":"Windows desk","machine_kind":"windows_vm","windows_image":"Server","experience":"interactive",` +
 		`"placement":"local","runner_pool_id":"` + pool.ID.String() + `"}`
 }
 

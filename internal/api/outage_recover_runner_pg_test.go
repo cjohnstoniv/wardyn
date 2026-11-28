@@ -159,8 +159,9 @@ func TestRunnerState_HeldRunDoesNotNeedLoss_PG(t *testing.T) {
 }
 
 // A held run whose runner reports its proxy stopped is held no longer, by the sweeps as by the STATE judge: the
-// offline sweep marks it lost, and the runner's next page is READY. Nothing waits for the hold to run out, with the
-// runner not ready and its other held runs refused with it.
+// offline sweep marks it lost and queues its containment stop, and once the runner's next session has taken that
+// stop in PENDING and answered it, the page is READY. Nothing waits for the hold to run out, with the runner not
+// ready and its other held runs refused with it. A runner's report of its proxy stopped never stands in for the stop.
 func TestOfflineFromRunner_HeldRunWithStoppedProxyIsMarkedLost_PG(t *testing.T) {
 	f := ohRunnerFixture(t)
 	run := ohRunnerRun(t, f, 70*time.Minute, ohPauses)
@@ -173,7 +174,36 @@ func TestOfflineFromRunner_HeldRunWithStoppedProxyIsMarkedLost_PG(t *testing.T) 
 	}
 	ohOfflineSweep(t, f)
 	ohRequireMarked(t, f.st, run, "the held run with its proxy stopped")
-	ohRequireReady(t, f, run, true, "after the loss mark")
+	if n := ohQueued(t, f, run, types.RunnerActionStopProxy); n != 1 {
+		t.Fatalf("stop_proxy actions queued by the loss = %d, want 1", n)
+	}
+	ohAnswerPending(t, f, run, types.RunnerActionStopProxy)
+	ohRequireReady(t, f, run, true, "after the loss mark and the answered stop")
+}
+
+// ohAnswerPending is a reconnecting runner's session: it takes the open actions in PENDING, which must hold one of
+// kind for run, and answers each with a success action_result.
+func ohAnswerPending(t *testing.T, f *runnerLeaseFixture, run types.AgentRun, kind types.RunnerActionKind) {
+	t.Helper()
+	pending, err := f.srv.PendingFromRunner(f.ctx, f.rn.ID)
+	if err != nil {
+		t.Fatalf("PENDING: %v", err)
+	}
+	found := false
+	for _, a := range pending {
+		found = found || (a.Kind == kind && a.RunID == run.ID && a.Ref == run.SandboxRef)
+		runID := a.RunID
+		result := runnerwire.ActionResult{ID: a.ID, Outcome: types.RunnerActionSuccess, ObservedAt: time.Now()}
+		if err := f.srv.EventFromRunner(f.ctx, f.rn.ID, runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &runID, Data: mustJSON(result)}); err != nil {
+			t.Fatalf("action_result for %s %s: %v", a.Kind, a.ID, err)
+		}
+	}
+	if !found {
+		t.Fatalf("PENDING = %+v, want a %s for the run", pending, kind)
+	}
+	if n := ohQueued(t, f, run, kind); n != 0 {
+		t.Fatalf("%s actions still open after the answer = %d, want 0", kind, n)
+	}
 }
 
 // The STATE judge and the sweeps read one hold: for each report of a held run, the judge asks for the run's loss

@@ -97,6 +97,9 @@ func TestOutageRecover_ServerDocker_Docker(t *testing.T) {
 	pool := ordConnectPostgres(t, dsn)
 	t.Cleanup(pool.Close)
 	pg := store.NewPG(pool)
+	// A deployment with a runner wired places every run through a pool, and a run naming none takes the
+	// organisation's default: the same default pool every Postgres fixture with a runner seeds.
+	seedRunPool(t, pool)
 	if _, err := pg.PutSiteConfig(ctx, types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}}); err != nil {
 		t.Fatalf("put the site config: %v", err)
 	}

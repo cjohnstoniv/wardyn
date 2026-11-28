@@ -14,8 +14,10 @@
 #   I-3   wardyn-signin browser opens no port, refuses a port flag, and ignores CHROMIUM_FLAGS and CHROME_FLAGS;
 #   I-3b  cdp --agent --session drives a page under the policy (I-3bc: and without it);
 #   I-4   the sign-in gate passes with the policy installed;
-#   I-5   records which policy keys leave the pipe and page sessions working (never fails; I-5c is
+#   I-5   records which policy keys leave the pipe and page sessions working (I-5c is
 #         DeveloperToolsAvailability 2, which the baseline leaves out because it refuses page sessions);
+#         RemoteDebuggingAllowed false must give no CDP answer within I5_SILENT_SECS while the browser was
+#         alive and a matched control (same image, no policy) answered;
 #   I-6   the agent cannot mask the policy directory in a user namespace of its own.
 # MEASURE lines are the measurements.
 #
@@ -29,7 +31,7 @@ export DOCKER_HOST="${DOCKER_HOST:-unix:///run/wardyn-docker.sock}"
 P="wardyn-lockdown-gate-$$"
 fail() { echo "test-image-browser-lockdown: FAIL: $*" >&2; exit 1; }
 pass() { echo "test-image-browser-lockdown: ok: $*"; }
-trap 'docker rm -f "$P-on" "$P-off" "$P-tar" "$P-i5" "$P-i5b" "$P-i5c" >/dev/null 2>&1 || true' EXIT
+trap 'docker rm -f "$P-on" "$P-off" "$P-tar" "$P-i5" "$P-i5-ctl" "$P-i5b" "$P-i5c" >/dev/null 2>&1 || true' EXIT
 
 # browserpolicy.Render(nil), byte for byte: TestRender_BaselineAlone pins the same bytes.
 BASELINE='{"ExtensionInstallBlocklist":["*"]}'
@@ -243,8 +245,61 @@ measure() {
 	echo "MEASURE $label pipe=$pipe session=$session port=$port"
 	i5port=$port
 }
+# measure_silent C POLICY LABEL: under POLICY the pipe must give no CDP answer for I5_SILENT_SECS while the browser is
+# alive and a matched control answers. The browser keeps the pipe and does not answer, so start_browser's 100 tries of
+# the 30 s cdpCallTimeout would wait some 50 minutes: here one window bounds the measure. It starts once chromium runs
+# in C (pgrep -x chromium, the binary browser.go runs); through it cdp --agent asks C for Browser.getVersion again and
+# again, and a control container of the same image with no policy is asked the same. It passes when every ask of C got
+# no answer (cdp --agent gave up, or the window's timeout cut it off) or a closed pipe, chromium still runs in C at the
+# window's end, and the control answered inside the window. pipe= lists what C did, in order; session= is not tried.
+I5_SILENT_SECS=${I5_SILENT_SECS:-40}
+measure_silent() {
+	local c=$1 policy=$2 label=$3 ctl=$1-ctl port=none out rc left seen="" obs cpid end alive=no
+	run_c "$c"
+	run_c "$ctl"
+	install_policy "$c" "$policy"
+	docker exec -d -u 1000:1000 "$c" wardyn-signin browser --headless
+	docker exec -d -u 1000:1000 "$ctl" wardyn-signin browser --headless
+	for _ in $(seq 50); do docker exec "$c" pgrep -x chromium >/dev/null && { alive=yes; break; }; sleep 0.2; done
+	[ "$alive" = yes ] || fail "$label browser not alive at the window's start"
+	end=$((SECONDS + I5_SILENT_SECS))
+	(
+		while left=$((end - SECONDS)); ((left > 0)); do
+			timeout "$left" docker exec -i -u 1000:1000 "$ctl" wardyn-signin cdp --agent Browser.getVersion >/dev/null 2>&1 && exit 0
+			sleep 0.2
+		done
+		exit 1
+	) &
+	cpid=$!
+	while left=$((end - SECONDS)); ((left > 0)); do
+		rc=0
+		out=$(timeout "$left" docker exec -i -u 1000:1000 "$c" wardyn-signin cdp --agent Browser.getVersion 2>&1) || rc=$?
+		case $rc:$out in
+		0:*) obs=answered ;;
+		124:*) obs=no-answer ;;
+		*"did not answer within"*) obs=no-answer ;;
+		*'"code":'*) obs=answered ;;
+		*EOF* | *"file already closed"* | *"broken pipe"*) obs=closed ;;
+		*"the browser is not running"*) obs="" ;;
+		*) kill "$cpid" 2>/dev/null || true; fail "$label unrecognised cdp --agent output: rc=$rc $out" ;;
+		esac
+		if [ "$obs" = answered ]; then
+			kill "$cpid" 2>/dev/null || true
+			echo "MEASURE $label pipe=answered session=untried port=untried"
+			fail "$label CDP answered with RemoteDebuggingAllowed false: $out"
+		fi
+		[ -z "$obs" ] || [[ ,$seen, == *",$obs,"* ]] || seen=${seen:+$seen,}$obs
+		sleep 0.2
+	done
+	docker exec "$c" pgrep -x chromium >/dev/null || fail "$label browser not alive at the window's end (pipe=${seen:-none})"
+	wait "$cpid" || fail "$label control did not answer Browser.getVersion within ${I5_SILENT_SECS}s"
+	[ -n "$seen" ] || fail "$label cdp --agent never reached the browser within ${I5_SILENT_SECS}s (last: rc=${rc:-none} ${out:-})"
+	if port_opens "$c"; then port=listening; fi
+	echo "MEASURE $label pipe=$seen session=untried port=$port"
+	pass "$label no CDP answer within ${I5_SILENT_SECS}s while the browser was alive and the matched control answered ($seen)"
+}
 measure "$P-i5c" '{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"]}' I-5c
-measure "$P-i5" '{"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
+measure_silent "$P-i5" '{"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
 measure "$P-i5b" '{"ExtensionInstallBlocklist":["*"]}' I-5b
 [ "$i5port" = listening ] || fail "I-5b control: an agent's Chromium opened no port with neither key set, so I-5's port= proves nothing"
 
