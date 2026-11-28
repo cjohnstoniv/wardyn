@@ -487,11 +487,15 @@ while IFS= read -r v <&3; do
     "$v" > "$B/$v.labels.tmp" ||
   { echo "STOP: $v is not backed up with its labels"; exit 1; }
   n=$(docker volume inspect --format '{{len .Labels}}' "$v")
-  if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] && usable "$B/$v.labels.tmp" >/dev/null; then
+  u=$(usable "$B/$v.labels.tmp") || u=
+  own=
+  for i in $ids; do [ "$i" != "$u" ] || own=1; done
+  # docker ends the record with one empty line of its own, so it is n+1 lines long.
+  if [ "$(wc -l < "$B/$v.labels.tmp")" -eq "$((n + 1))" ] && [ -n "$own" ]; then
     mv "$B/$v.labels.tmp" "$B/$v.labels"
   else
     mv "$B/$v.labels.tmp" "$B/$v.unresolved"
-    echo "UNRESOLVED: $v has no usable drive, home and managed labels, or one line per label cannot hold it: see below"
+    echo "UNRESOLVED: $v has no usable drive, home and managed labels for one of this installation's drives, or one line per label cannot hold it: see below"
   fi
 done 3< "$B/drives.list"
 if [ -f "$B/drives.retired" ]; then
@@ -637,11 +641,13 @@ case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 ask "WARDYN_AGE_KEY is back in deploy/compose/.env"
 
 # 2. Start Postgres ALONE, not the full stack, so nothing else touches the
-#    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
-#    `docker compose -f deploy/compose/docker-compose.yaml down -v` first —
-#    pg_dump's plain-SQL output re-creates the schema from scratch and will
-#    collide with an existing one. Preserve any current spool/quarantine
-#    before down -v deletes the audit volume.)
+#    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA? Run
+#    `docker compose -f deploy/compose/docker-compose.yaml down -v` from a
+#    second shell at the prompt below, after step 0 has saved its mark, never
+#    before the script: pg_dump's plain-SQL output re-creates the schema from
+#    scratch and will collide with an existing one. Preserve any current
+#    spool/quarantine before down -v deletes the audit volume.)
+ask "This host's Wardyn database is new, or you have run down -v from a second shell after keeping its spool and quarantine"
 docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
@@ -708,7 +714,7 @@ while IFS= read -r v <&3; do
     cmp -s - "$l" &&
   docker run --rm -v "$v":/to -v "$B":/from alpine \
     sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
-    { echo "STOP: $v is not restored"; exit 1; }
+    { echo "STOP: $v is not restored: remove the volume this pass made, if any (docker volume rm $v), before running again"; exit 1; }
 done 3< "$B/drives.list"
 [ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run step 5's loop and 5b-6 by hand"; exit 1; }
 #    A .labels record holds one key=value line per label its volume had:

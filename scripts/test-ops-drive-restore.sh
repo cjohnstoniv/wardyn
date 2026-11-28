@@ -30,7 +30,7 @@ docker() {
   case "$*" in
     *psql*) printf '%s\n' "$DB_IDS" ;;
     "volume inspect --format {{.Driver}} {{len .Options}} "*) echo "local 0" ;;
-    "volume inspect --format "*) sed -n 's/^--label //p' "$B/create.args" ;;
+    "volume inspect --format "*) sed -n 's/^--label //p' "$B/create.args"; echo ;;
     "volume inspect "*) return 1 ;;
     "volume create "*) printf '%s\n' "$@" | sed '1,2d;$d' | paste -d' ' - - >"$B/create.args" ;;
     "run "*) return 0 ;;
@@ -42,7 +42,7 @@ EOF
 run() {
   local B="$T/$1"
   mkdir -p "$B"
-  printf '%s\n' "$3" >"$B/wardyn-drive-a.labels"
+  printf '%s\n\n' "$3" >"$B/wardyn-drive-a.labels"
   : >"$B/wardyn-drive-a.tar.gz"
   echo wardyn-drive-a >"$B/drives.list"
   (cd "$B" && B="$B" DB_IDS="$ID" bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$2")
@@ -78,7 +78,7 @@ wardyn.drive=" "$lookalike"; do
 done
 
 # A drive the restored database does not hold stops the loop.
-out="$(cd "$T" && mkdir -p nodrive && printf '%s\n' "$good" >nodrive/wardyn-drive-a.labels && : >nodrive/wardyn-drive-a.tar.gz &&
+out="$(cd "$T" && mkdir -p nodrive && printf '%s\n\n' "$good" >nodrive/wardyn-drive-a.labels && : >nodrive/wardyn-drive-a.tar.gz &&
   echo wardyn-drive-a >nodrive/drives.list && B="$T/nodrive" DB_IDS=00000000-0000-4000-8000-000000000000 \
   bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" && fail "an unknown drive did not stop the loop: $out"
 [[ "$out" == *"has no drive $ID"* ]] || fail "an unknown drive stopped with the wrong line: $out"
@@ -97,6 +97,43 @@ wardyn.home=other" "${good/wardyn.managed=true/wardyn.managed=yes}"; do
   printf '%s\n' "$bad" >"$T/rec"
   ! (. "$T/usable-backup.sh"; usable "$T/rec" >/dev/null) || fail "the backup took a record it should mark unresolved: $bad"
 done
+
+# The backup's record loop, as the guide prints it, against a stub docker that
+# ends each label record with the empty line the real CLI adds: a good volume of
+# this installation gets a .labels record, and lookalike keys or a drive this
+# database does not hold get .unresolved. The same loop counting n lines, not
+# n+1, must fail the good volume.
+awk '/^mv "\$B\/drives.list.tmp" "\$B\/drives.list"$/{f=1} f{print} f&&/^done 3< "\$B\/drives.list"$/{exit}' \
+  "$doc" >"$T/backup.sh"
+grep -q '^done 3< "\$B/drives.list"$' "$T/backup.sh" || fail "no step-4 record loop found in $doc"
+cat >"$T/bstub.sh" <<'EOF2'
+docker() {
+  case "$*" in
+    "run "*) return 0 ;;
+    "volume inspect --format {{len .Labels}} "*) grep -c . "$B/src/${*: -1}" ;;
+    "volume inspect --format "*) cat "$B/src/${*: -1}"; echo ;;
+  esac
+}
+EOF2
+# backup <name> <loop file> <labels>: runs the loop for one volume, wardyn-drive-a.
+backup() {
+  local B="$T/b-$1"
+  mkdir -p "$B/src"
+  printf '%s\n' "$3" >"$B/src/wardyn-drive-a"
+  echo wardyn-drive-a >"$B/drives.list.tmp"
+  B="$B" ids="${4:-$ID}" bash -c 'set -eu; . "$1"; . "$2"' _ "$T/bstub.sh" "$2" >/dev/null
+}
+backup good "$T/backup.sh" "$good" || fail "the backup loop failed on a good volume"
+[ -f "$T/b-good/wardyn-drive-a.labels" ] && [ ! -e "$T/b-good/wardyn-drive-a.unresolved" ] ||
+  fail "the backup marked a good volume unresolved"
+backup lookalike "$T/backup.sh" "$lookalike" || fail "the backup loop failed on a lookalike volume"
+[ -f "$T/b-lookalike/wardyn-drive-a.unresolved" ] || fail "the backup recorded a volume with only lookalike keys"
+backup foreign "$T/backup.sh" "$good" 00000000-0000-4000-8000-000000000000 || fail "the backup loop failed on a foreign drive"
+[ -f "$T/b-foreign/wardyn-drive-a.unresolved" ] || fail "the backup recorded a drive this database does not hold"
+sed 's/-eq "$((n + 1))"/-eq "$n"/' "$T/backup.sh" >"$T/backup-n.sh"
+! cmp -s "$T/backup.sh" "$T/backup-n.sh" || fail "the n+1 count was not found to change"
+backup mutant "$T/backup-n.sh" "$good" || true
+[ ! -f "$T/b-mutant/wardyn-drive-a.labels" ] || fail "the backup counting n lines still recorded the volume: this test checks nothing"
 
 # Mutation: the same loop without the label forwarding must not restore the volume.
 grep -v -- '--label "\$x"' "$T/loop.sh" >"$T/loop-nolabels.sh"
