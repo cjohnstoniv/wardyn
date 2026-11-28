@@ -35,7 +35,9 @@ type RunOutputChunkStore interface {
 	// keep bytes. It reports false, and writes nothing, once the run's final row exists: a
 	// writer that was slower than the finisher never recreates what the final row replaced.
 	// A chunk it writes comes with the run's pending row, in the same transaction, when the run
-	// has no row yet: every stored chunk has the row that recovery and retention go by.
+	// has no row yet: every stored chunk has the row that recovery and retention go by. It also
+	// reports false, writing and trimming nothing, once a recovery's chunk is stored for the run
+	// (RunOutputChunkReplacer): the replica that took the run over owns its chunks from then on.
 	AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica string, b []byte, keep int) (bool, error)
 	// ReadRunOutputChunks returns the last limit bytes of runID's chunks.
 	ReadRunOutputChunks(ctx context.Context, runID uuid.UUID, limit int) (RunOutputChunks, error)
@@ -75,6 +77,11 @@ func (s PG) AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica s
 	}
 	wrote := false
 	err := s.runOutputTx(ctx, runID, false, func(tx pgx.Tx) error {
+		var recovered bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_output_chunks WHERE run_id = $1 AND replica LIKE 'recovered:%')`,
+			runID).Scan(&recovered); err != nil || recovered {
+			return err // a recovery owns the chunks: this append's trim would evict its bytes
+		}
 		var err error
 		wrote, err = appendRunOutputChunk(ctx, tx, runID, replica, b, keep)
 		return err

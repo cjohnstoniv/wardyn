@@ -4,6 +4,7 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -248,5 +249,48 @@ func TestPeerLauncherFromFreshLeaseOnly_PG(t *testing.T) {
 	set(`UPDATE agent_runs SET lost_at = NULL, state = $2, ended_at = now() WHERE id=$1`, run.ID, string(types.RunCompleted))
 	if r := read(run.ID); r.State != store.LauncherNone {
 		t.Fatalf("a terminal run: %+v, want LauncherNone", r)
+	}
+}
+
+// chunkReplicas is runID's chunks' replica column, in seq order.
+func chunkReplicas(t *testing.T, pool *pgxpool.Pool, runID uuid.UUID) []string {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), `SELECT replica FROM run_output_chunks WHERE run_id = $1 ORDER BY seq`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A launcher flush of a whole retained tail, after a recovery's short write, evicts none of the recovery's bytes:
+// the launcher's append answers false and writes and trims nothing.
+func TestPeerLauncherAppendKeepsRecoveredChunks_PG(t *testing.T) {
+	pool, st, _ := holderFixture(t)
+	ctx := t.Context()
+	const keep = 64
+	r, err := st.CreateRun(ctx, newRun(types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := st.AppendRecoveredRunOutputChunk(ctx, r.ID, "b", []byte("r"), keep, true); err != nil || !wrote {
+		t.Fatalf("the adopter's short write: %v %v", wrote, err)
+	}
+	wrote, err := st.AppendRunOutputChunk(ctx, r.ID, "a", bytes.Repeat([]byte("x"), keep), keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrote {
+		t.Fatal("the launcher's full-tail append wrote after a recovery owned the chunks")
+	}
+	ch, err := st.ReadRunOutputChunks(ctx, r.ID, keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reps := chunkReplicas(t, pool, r.ID); string(ch.Bytes) != "r" || !ch.Recovered || len(reps) != 1 || reps[0] != "recovered:b" {
+		t.Fatalf("after the launcher's append: %q recovered=%v on %v, want the recovery's r on recovered:b", ch.Bytes, ch.Recovered, reps)
 	}
 }
