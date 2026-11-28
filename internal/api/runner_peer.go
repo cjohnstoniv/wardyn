@@ -83,9 +83,10 @@ const (
 // peerRefusalWarnEvery is the most often one class's refusals are logged.
 const peerRefusalWarnEvery = time.Minute
 
-// notePeerRefusal counts a refusal and logs at most one Warn per class a minute, with the claimed sender and the
-// count since the last line. No header value, mac or frame byte is logged.
-func (s *Server) notePeerRefusal(ctx context.Context, class, from string) {
+// notePeerRefusal counts a refusal and logs at most one Warn per class a minute, with the count since the last line.
+// Only the class is logged: no header value (not even the claimed sender, which a bad mac leaves unauthenticated),
+// mac or frame byte.
+func (s *Server) notePeerRefusal(ctx context.Context, class string) {
 	now := s.cfg.Now()
 	s.peering.mu.Lock()
 	if s.peering.refused == nil {
@@ -100,7 +101,7 @@ func (s *Server) notePeerRefusal(ctx context.Context, class, from string) {
 	n := s.peering.refused[class]
 	s.peering.refused[class], s.peering.warned[class] = 0, now
 	s.peering.mu.Unlock()
-	slog.WarnContext(ctx, "wardynd: runner peer request refused", slog.String("class", class), slog.String("from", from), slog.Int("refused", n))
+	slog.WarnContext(ctx, "wardynd: runner peer request refused", slog.String("class", class), slog.Int("refused", n))
 }
 
 // mountRunnerPeerRoute mounts the runner peer door, GET /api/v1/internal/runner-peer, only under high availability
@@ -123,18 +124,18 @@ func (s *Server) handleRunnerPeer(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tok, mac, err := remote.ReadPeerToken(r.Header)
 	if err != nil {
-		s.notePeerRefusal(ctx, peerRefusedMissingField, "")
+		s.notePeerRefusal(ctx, peerRefusedMissingField)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	p := s.runnerPeering()
 	if p == nil || len(p.cfg.Key) == 0 || !tok.Verify(p.cfg.Key, mac) {
-		s.notePeerRefusal(ctx, peerRefusedBadMAC, tok.From)
+		s.notePeerRefusal(ctx, peerRefusedBadMAC)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	refuse := func(class string) {
-		s.notePeerRefusal(ctx, class, tok.From)
+		s.notePeerRefusal(ctx, class)
 		w.Header().Set(remote.HeaderPeerRefused, class)
 		w.WriteHeader(http.StatusForbidden)
 	}
@@ -173,6 +174,6 @@ func (s *Server) handleRunnerPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.CloseNow() //nolint:errcheck // the peer may already have closed it
 	_ = hub.ServePeer(ctx, runnerwire.NewWebSocket(c), tok.Runner, tok.Session, tok.Method, func(class string) {
-		s.notePeerRefusal(ctx, class, tok.From)
+		s.notePeerRefusal(ctx, class)
 	})
 }
