@@ -105,13 +105,14 @@ func TestMoveExec_RunnerBoundTables(t *testing.T) {
 			t.Error("the source runner got no notice of the move")
 		}
 	})
-	// The rows a move keeps: each is seeded on the source runner and is still there after commit.
+	// The rows a move keeps: each is seeded on the source runner and is still there after commit. Every seed statement
+	// gets both arguments, so one that needs only the runner still names $1, or Postgres cannot type it.
 	for table, seed := range map[string][]string{
 		"run_proxy_configs": nil,
 		"runner_executions": {`INSERT INTO runner_executions (run_id, runner_id, generation, operation) VALUES ($1, $2, gen_random_uuid(), 'start')`},
-		"runner_inventory_candidates": {`INSERT INTO runner_inventories (runner_id, session_id, owner) VALUES ($2, gen_random_uuid(), 'mover@example.com')`,
+		"runner_inventory_candidates": {`INSERT INTO runner_inventories (runner_id, session_id, owner) SELECT $2::uuid, gen_random_uuid(), 'mover@example.com' WHERE $1::uuid IS NOT NULL`,
 			`INSERT INTO runner_inventory_candidates (runner_id, run_id, run_version, ref, generation) VALUES ($2, $1, 'v1', 'ref-src', gen_random_uuid())`},
-		"runner_inventory_observations": {`INSERT INTO runner_inventories (runner_id, session_id, owner) VALUES ($2, gen_random_uuid(), 'mover@example.com')`,
+		"runner_inventory_observations": {`INSERT INTO runner_inventories (runner_id, session_id, owner) SELECT $2::uuid, gen_random_uuid(), 'mover@example.com' WHERE $1::uuid IS NOT NULL`,
 			`INSERT INTO runner_inventory_observations (runner_id, run_id, assertion) VALUES ($2, $1, '{}'::jsonb)`},
 		"runner_retirements": {`INSERT INTO runner_retirements (run_id, runner_id, obligation_id, ref) VALUES ($1, $2, gen_random_uuid(), 'ref-src')`},
 		"run_node_records": {`INSERT INTO run_node_records (id, run_id, runner_id, action_id, attestation, source, source_id)
