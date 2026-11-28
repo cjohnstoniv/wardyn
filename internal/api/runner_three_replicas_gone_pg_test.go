@@ -11,11 +11,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestThreeReplicasGoneWithinOneCycle_PG: with three replicas on one database, a connected runner's run whose
-// container was removed ends FAILED (gone) within one stale cycle, that is one sweep by each replica after the run's
-// watcher lease went stale, whichever place the holder of the runner's session takes in that round. The other two
-// replicas have peering and a holder row that routes the runner to the holder, and still neither claim the run nor
-// check its sandbox, before the holder's sweep or after it; the run has one run.lost row.
+// TestThreeReplicasGoneWithinOneCycle_PG: deterministic claiming across three replicas. With three replicas on one
+// database, a connected runner's run whose container was reported absent over 30 seconds ago, and whose watcher
+// lease is stale, ends FAILED (gone) in one sweep by each replica, whichever place the holder of the runner's session
+// takes in that round. The other two replicas have peering and a holder row that routes the runner to the holder, and
+// still neither claim the run nor check its sandbox, before the holder's sweep or after it; the run has one run.lost
+// row. It starts past the first absent report and its confirmation, so it does not measure the time from the
+// container's removal to the run's end.
 func TestThreeReplicasGoneWithinOneCycle_PG(t *testing.T) {
 	for holderAt := range 3 {
 		t.Run(fmt.Sprintf("the holder sweeps %d of 3", holderAt+1), func(t *testing.T) {
