@@ -6,6 +6,7 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -264,6 +265,126 @@ func chunkReplicas(t *testing.T, pool *pgxpool.Pool, runID uuid.UUID) []string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// R23f: a live adoption's recovery tail replaces the launcher's chunks, and a later adoption supersedes it.
+func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
+	pool, st, _ := holderFixture(t)
+	ctx := t.Context()
+	const keep = 1 << 20
+	newRunID := func() uuid.UUID {
+		t.Helper()
+		r, err := st.CreateRun(ctx, newRun(types.RunRunning))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.ID
+	}
+	plain := func(run uuid.UUID, replica, b string) bool {
+		t.Helper()
+		wrote, err := st.AppendRunOutputChunk(ctx, run, replica, []byte(b), keep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wrote
+	}
+	recovered := func(run uuid.UUID, replica, b string, first bool) bool {
+		t.Helper()
+		wrote, err := st.AppendRecoveredRunOutputChunk(ctx, run, replica, []byte(b), keep, first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wrote
+	}
+	read := func(run uuid.UUID) store.RunOutputChunks {
+		t.Helper()
+		ch, err := st.ReadRunOutputChunks(ctx, run, keep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ch
+	}
+	other := func(run uuid.UUID, mine string) bool {
+		t.Helper()
+		ok, err := st.RecoveredRunOutputChunks(ctx, run, mine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	run := newRunID()
+	for _, b := range []string{"a1", "a2", "a3"} {
+		if !plain(run, "a", b) {
+			t.Fatalf("the launcher's append %q wrote nothing", b)
+		}
+	}
+	if !recovered(run, "b", "b1", true) {
+		t.Fatal("the adopter's first append wrote nothing")
+	}
+	if ch := read(run); string(ch.Bytes) != "b1" || ch.Truncated || !ch.Recovered {
+		t.Fatalf("after the first recovered append: %q truncated=%v recovered=%v, want only b1, not truncated, recovered", ch.Bytes, ch.Truncated, ch.Recovered)
+	}
+	if plain(run, "a", "a4") {
+		t.Fatal("the launcher's append wrote over a recovery's chunks")
+	}
+	if !recovered(run, "b", "b2", false) {
+		t.Fatal("the adopter's next append wrote nothing")
+	}
+	if ch, reps := read(run), chunkReplicas(t, pool, run); string(ch.Bytes) != "b1b2" || len(reps) != 2 || reps[0] != "recovered:b" || reps[1] != "recovered:b" {
+		t.Fatalf("the adopter's chunks: %q on %v, want b1b2 on recovered:b", ch.Bytes, reps)
+	}
+	if !other(run, "") || other(run, "b") {
+		t.Fatal("RecoveredRunOutputChunks: want true for any recovery and false for b's own")
+	}
+	onlyLauncher := newRunID()
+	plain(onlyLauncher, "a", "a1")
+	if other(onlyLauncher, "") || read(onlyLauncher).Recovered {
+		t.Fatal("a run with only the launcher's chunks reads as recovered")
+	}
+
+	// A later adoption's first append supersedes b, whose next append then writes nothing.
+	if !recovered(run, "c", "c1", true) {
+		t.Fatal("the later adoption's first append wrote nothing")
+	}
+	if recovered(run, "b", "b3", false) {
+		t.Fatal("the superseded adopter's append wrote")
+	}
+	if ch := read(run); string(ch.Bytes) != "c1" {
+		t.Fatalf("after the superseded append: %q, want c1", ch.Bytes)
+	}
+	if !other(run, "b") || other(run, "c") {
+		t.Fatal("RecoveredRunOutputChunks after the supersession: want true for b and false for c")
+	}
+	if !recovered(run, "c", "c2", false) || string(read(run).Bytes) != "c1c2" {
+		t.Fatal("the later adopter's next append did not write")
+	}
+
+	// After the final row every append writes nothing.
+	if err := st.SaveFinalRunOutput(ctx, store.RunOutput{RunID: run, Output: []byte("final"), Source: "stdout"}); err != nil {
+		t.Fatal(err)
+	}
+	if plain(run, "a", "x") || recovered(run, "c", "x", false) || recovered(run, "d", "x", true) {
+		t.Fatal("an append after the final row wrote")
+	}
+
+	// An erased run answers ErrRunOutputErased to every method.
+	erased := newRunID()
+	recovered(erased, "b", "b1", true)
+	if err := st.EraseRunOutputs(ctx, []uuid.UUID{erased}); err != nil {
+		t.Fatal(err)
+	}
+	_, e1 := st.AppendRunOutputChunk(ctx, erased, "a", []byte("x"), keep)
+	_, e2 := st.AppendRecoveredRunOutputChunk(ctx, erased, "b", []byte("x"), keep, false)
+	_, e3 := st.AppendRecoveredRunOutputChunk(ctx, erased, "c", []byte("x"), keep, true)
+	_, e4 := st.RecoveredRunOutputChunks(ctx, erased, "")
+	_, e5 := st.ReadRunOutputChunks(ctx, erased, keep)
+	_, e6 := st.SaveChunkedRunOutput(ctx, erased, "", keep)
+	for i, err := range []error{e1, e2, e3, e4, e5, e6} {
+		if !errors.Is(err, store.ErrRunOutputErased) {
+			t.Fatalf("method %d on an erased run: %v, want ErrRunOutputErased", i+1, err)
+		}
+	}
 }
 
 // A launcher flush of a whole retained tail, after a recovery's short write, evicts none of the recovery's bytes:
