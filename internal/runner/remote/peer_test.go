@@ -1025,7 +1025,7 @@ func TestPeerOutputOpenForwardedToLauncher(t *testing.T) {
 	sink.mu.Lock()
 	sink.pending = true
 	sink.mu.Unlock()
-	if _, n, err := r.openRetry(ctx, 11); err == nil || n < 2 {
+	if _, n, err := r.openRetry(ctx, 11); resetCode(err) != runnerwire.ResetCapacity || n < 2 {
 		t.Fatalf("while the launcher's sink is pending: %v after %d capacity answers, want capacity until 5 s", err, n)
 	}
 	// The last capacity answer may have started an attempt still in flight: let it return while the sink is
@@ -1082,7 +1082,7 @@ func TestPeerOutputOpenForwardedToLauncher(t *testing.T) {
 	r.mu.Lock()
 	r.refuse = "not_live_session"
 	r.mu.Unlock()
-	if _, n, err := r.openRetry(ctx, 12); err == nil || n < 2 || r.dials.Load() < dials+2 {
+	if _, n, err := r.openRetry(ctx, 12); resetCode(err) != runnerwire.ResetCapacity || n < 2 || r.dials.Load() < dials+2 {
 		t.Fatalf("after not_live_session: %v after %d capacity answers, want capacity and a new attempt per retry", err, n)
 	}
 
@@ -1462,6 +1462,7 @@ func TestPeerOutputSinkCheckSlowLeaseDoesNotDelayOthers(t *testing.T) {
 	var y yieldLog
 	opts := Options{OutputLease: lease, OutputYielded: y.yielded, OutputSinkCheck: every}
 	s, ls := newLauncher(ctx, opts, recoverWith(0, "hello world"))
+	stopSinkChecks(t, s)
 	ls.held.Store(false)
 	start := time.Now()
 	bw, yw, sw, fw := newEndBuf(), newEndBuf(), newEndBuf(), newEndBuf()
@@ -1546,6 +1547,7 @@ func TestPeerOutputSinkCheckReachesEverySinkPastSlowSlots(t *testing.T) {
 	}
 	var y yieldLog
 	s, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: y.yielded, OutputSinkCheck: every}, nil)
+	stopSinkChecks(t, s)
 	for i, run := range runs {
 		addSink(t, s, run, "runner:x/"+strconv.Itoa(i), newEndBuf(), "")
 	}
@@ -1583,6 +1585,7 @@ func TestPeerOutputSinkCheckHoldsEightReadsAtMost(t *testing.T) {
 	}
 	var y yieldLog
 	s, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: y.yielded, OutputSinkCheck: every}, nil)
+	stopSinkChecks(t, s)
 	for i, run := range runs {
 		addSink(t, s, run, "runner:x/"+strconv.Itoa(i), newEndBuf(), "")
 	}
@@ -1616,6 +1619,7 @@ func TestPeerOutputSinkCheckDeadlineAtAcquireFreesSlot(t *testing.T) {
 	// The deadline is already past when each pass starts, so its slot select finds both a free slot and a done
 	// context, and takes either; the sinks get their ref directly, so no check loop runs.
 	s, _ := newLauncher(t.Context(), Options{OutputLease: lease, OutputSinkCheck: time.Nanosecond}, nil)
+	stopSinkChecks(t, s)
 	for i := range sinkCheckReads + 2 {
 		sink := &outputSink{writer: newEndBuf(), ref: "runner:x/" + strconv.Itoa(i)}
 		s.mu.Lock()
@@ -1654,7 +1658,9 @@ func TestPeerOutputSinkCheckSlotsSharedAcrossRunners(t *testing.T) {
 	slots := NewSinkCheckReads()
 	var ya, yb yieldLog
 	a, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: ya.yielded, OutputSinkCheck: every, SinkCheckReads: slots}, nil)
+	stopSinkChecks(t, a)
 	b, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: yb.yielded, OutputSinkCheck: every, SinkCheckReads: slots}, nil)
+	stopSinkChecks(t, b)
 	var runs []uuid.UUID
 	for i := range sinkCheckReads {
 		ra, rb := uuid.New(), uuid.New()
