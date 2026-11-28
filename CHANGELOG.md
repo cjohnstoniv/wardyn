@@ -11,6 +11,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Kubernetes: `k8s.runService.enabled` (`WARDYN_K8S_RUN_SERVICE`, default on) turns off each server run's own Service and EndpointSlice. Off, the agent pod starts once its proxy pod is Ready and reaches that pod's IP, as in 0.11.0-rc.3, and the runs Role needs no `services` or `endpointslices` verbs. `WARDYN_K8S_AGENT_SANDBOX_KEEP` needs it on and refuses to boot without it.
+- Helm: `k8s.admissionPolicies.create` decides whether the chart renders the two run Service admission policies and their bindings. Unset, it follows `k8s.rbac.create`. They render only with `k8s.runService.enabled`, and the Kubernetes 1.30 check applies only when they render. When the Service is on and the chart renders no policies, its install notes name the policies the platform team must apply.
+
+### Before you upgrade
+
+- `k8s.rbac.create=false` installs can keep the 0.11.0-rc.3 path by setting `k8s.runService.enabled=false` (`WARDYN_K8S_RUN_SERVICE=off`). The runs Role then needs no `services` or `endpointslices` verbs, and no admission policies are needed. `watch` on `pods` was already in rc.3's Role and stays optional here: without it the pod waits poll.
+  - For a fresh install, or an rc.3 install that never used per-run Services, you can switch them off directly. If you used agent-sandbox keep on rc.3, follow the drain steps for any runs that used a Service.
+  - The drain steps, for an install already running with the Service on (0.11.0-rc.4): end or stop the runs that use a Service, account for kept runs, and let their cleanup finish while the Role still grants the Service verbs. Only then switch it off and remove the verbs. A run's Service has no owner reference, and teardown deletes it. Switching off or removing the verbs first leaves those Services and EndpointSlices behind, and deleting them early can cut off running or kept runs.
+  - A platform team that takes over the policies while the Service stays on applies equivalent policies before the upgrade with `k8s.admissionPolicies.create=false`, which lets Helm remove the chart's copies.
+
 ## [0.11.0-rc.5] — 2026-11-27
 
 ### Added

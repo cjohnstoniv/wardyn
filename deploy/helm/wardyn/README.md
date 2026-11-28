@@ -361,6 +361,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `k8s.enabled`: turns on the wiring below.
   - Renders two `ValidatingAdmissionPolicy` objects with bindings, `<release>-wardyn-keep-service` and `-keep-endpoints`, for the runs namespace. They hold wardynd's creates, updates and deletes to a run's own ClusterIP Service, named for the run, with no selector and no external IPs, and to EndpointSlices labelled for such a Service.
     - They need Kubernetes 1.30+ serving `admissionregistration.k8s.io/v1` and fail closed; the chart refuses to render otherwise. They select wardynd's ServiceAccount only.
+    - They render only with `k8s.runService.enabled` and `k8s.admissionPolicies.create`, below.
   - **Requires `serviceAccount.automount=true`** — the chart refuses to render otherwise (the substrate drives the API server directly via client-go, which needs the pod's own projected ServiceAccount token;
     - `automount=false` is the chart's own default, since a non-k8s wardynd calls no API server at all).
   - The substrate advertises only `[CC1]` until a RuntimeClass is pinned,
@@ -371,6 +372,14 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - Default `true`.
   - Set `false` when a platform team provisions equivalent RBAC out-of-band (e.g. GitOps-managed roles on a managed cluster) and would rather this chart not manage its own copy;
     - you are then responsible for granting `serviceAccount.name` the exact verbs documented below.
+- `k8s.runService.enabled`: give each run its own Service and EndpointSlice (`WARDYN_K8S_RUN_SERVICE`).
+  - Default `true`: the agent pod starts beside its proxy and reaches it at the Service's address.
+  - Set `false` to start the agent pod once its proxy pod is Ready, reaching that pod's IP, as in 0.11.0-rc.3. The runner Role then has no `services` or `endpointslices` rule and the chart renders no run Service admission policy, so an install with `k8s.rbac.create=false` whose GitOps project may not create cluster-scoped objects needs neither. `watch` on `pods` stays optional.
+    - `k8s.agentSandbox.keep.enabled` needs it on; wardynd refuses to boot otherwise.
+    - On an install whose runs already have a Service, end those runs and let their cleanup finish before you turn it off and remove the verbs (CHANGELOG, Before you upgrade).
+- `k8s.admissionPolicies.create`: render the two run Service admission policies and their bindings.
+  - Unset (the default), it follows `k8s.rbac.create`. Set `false` when a platform team applies equivalent policies itself, and apply them before the upgrade that removes the chart's copies. Set `true` to render them with `k8s.rbac.create=false`.
+  - With the Service on and no policies rendered, the install notes name the policies the platform team must apply.
 - `k8s.runsNamespace`: namespace every sandbox (Secret/NetworkPolicies/pods) is created in.
   - **Required with `k8s.enabled=true`** — the chart refuses to render an empty value (it would put the k8s-runner Role, and every run's pods, in the CONTROL-PLANE namespace, where those verbs cover every other workload sharing it);
     - `k8s.allowRunsInReleaseNamespace=true` is the explicit opt-out for a laptop demo.
@@ -463,7 +472,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `pods/exec` get+create — the exec subresource's websocket transport issues GET, SPDY issues POST, and the driver tries websocket first; `pods/log` get, which streams an exec run's output into its tail for `GET /runs/{id}/output`;
 - secrets create/delete/deletecollection and networkpolicies create/list/delete/deletecollection — deliberately **no** `get`, `list` or `watch` on `secrets`:
 - every one of those returns the object's body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
-- `services` create/get/delete and `endpointslices` create/get/update/deletecollection: each run's own Service, no list or watch;
+- `services` create/get/delete and `endpointslices` create/get/update/deletecollection: each run's own Service, no list or watch, and only with `k8s.runService.enabled`;
 - `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run whose pods are both gone, and it is asked for best-effort — a Role without it degrades the sweep rather than killing it;
 - `events` list only, so an image pull reads as "Downloading the image" rather than ContainerCreating — a Role without it keeps the old wording and nothing else changes;
 - `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox —
