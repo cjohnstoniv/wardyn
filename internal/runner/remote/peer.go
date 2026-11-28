@@ -355,6 +355,7 @@ func (h *Hub) ServeHolderMethod(ctx context.Context, conn runnerwire.Conn, runne
 			ws.Close()
 			return nil, errOffline
 		}
+		// HeldHere, not Online: the holder answers only from its own live session, never through the view.
 		if pin.l.current() != pin.p || !pin.l.HeldHere() {
 			ws.Close()
 			return nil, errOffline
@@ -614,6 +615,7 @@ func (s *hubSession) snapshot() (sessionSnap, bool) {
 		return sessionSnap{}, false
 	}
 	defer s.mu.Unlock()
+	// HeldHere, not Online: a snapshot is of a session this replica holds, so another replica's row never makes one.
 	if s.link == nil || s.peer == nil || !s.readyFor(s.id) || s.link.current() != s.peer || !s.link.HeldHere() {
 		return sessionSnap{}, false
 	}
