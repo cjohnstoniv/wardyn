@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -610,9 +611,13 @@ func TestInternalAuthStillRefusesExpired(t *testing.T) {
 
 	param := regexp.MustCompile(`\{[^}]*\}`)
 	tested := map[string]bool{}
-	var routes [][2]string
+	var routes, door [][2]string
 	err = chi.Walk(srv.router, func(method, route string, _ http.Handler, mws ...func(http.Handler) http.Handler) error {
 		if !strings.HasPrefix(route, "/api/v1/internal/") {
+			return nil
+		}
+		if route == "/api/v1/internal/runner-peer" {
+			door = append(door, [2]string{method, route}) // its own mac, never internalAuth: asserted below
 			return nil
 		}
 		for _, mw := range mws {
@@ -633,7 +638,9 @@ func TestInternalAuthStillRefusesExpired(t *testing.T) {
 			t.Fatalf("%s is not among the routes held by internalAuth: %v", route, tested)
 		}
 	}
-	h := panicFails(t, srv.Handler())
+	// everyInternalMount sets the internal listener, so the public handler answers 404 for every internal path:
+	// the routes are requested on the handler that serves them.
+	h := panicFails(t, srv.InternalHandler())
 	for _, mp := range routes {
 		r := httptest.NewRequest(mp[0], mp[1], nil)
 		r.Header.Set("Authorization", "Bearer "+tok)
@@ -643,6 +650,18 @@ func TestInternalAuthStillRefusesExpired(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s with an expired run token = %d %s, want 401", mp[0], mp[1], w.Code, w.Body.String())
 		}
+	}
+	// The peer door reads no run token: an expired one with no peer token is refused 403 with no class.
+	if len(door) != 1 || door[0] != [2]string{http.MethodGet, "/api/v1/internal/runner-peer"} {
+		t.Fatalf("peer door routes walked = %v, want GET /api/v1/internal/runner-peer", door)
+	}
+	dr := httptest.NewRequest(http.MethodGet, door[0][1], nil)
+	dr.Header.Set("Authorization", "Bearer "+tok)
+	dr.Host, dr.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
+	dw := httptest.NewRecorder()
+	h.ServeHTTP(deadlineRecorder{dw}, dr)
+	if dw.Code != http.StatusForbidden || dw.Header().Get(remote.HeaderPeerRefused) != "" {
+		t.Errorf("the peer door with an expired run token = %d class %q, want 403 and no class", dw.Code, dw.Header().Get(remote.HeaderPeerRefused))
 	}
 
 	// The same token is not refused as invalid at the recover door: it answers about the store, not the token.
