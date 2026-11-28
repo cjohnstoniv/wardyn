@@ -4,6 +4,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -590,16 +591,26 @@ func (s *Substrate) setSinkRef(sink *outputSink, ref string) {
 	}
 }
 
-// sinkLoop runs checkSinks every Options.OutputSinkCheck while any sink is under the check.
-func (s *Substrate) sinkLoop() {
-	every := s.opts.OutputSinkCheck
-	if every <= 0 {
-		every = outputSinkCheck
+// sinkCheckEvery is the sink check's period, Options.OutputSinkCheck or outputSinkCheck.
+func (s *Substrate) sinkCheckEvery() time.Duration {
+	if s.opts.OutputSinkCheck > 0 {
+		return s.opts.OutputSinkCheck
 	}
-	t := time.NewTicker(every)
+	return outputSinkCheck
+}
+
+// sinkLoop runs checkSinks every Options.OutputSinkCheck while any sink is under the check. It is the only caller,
+// so two passes never overlap, and a tick that came while a pass ran is skipped.
+func (s *Substrate) sinkLoop() {
+	t := time.NewTicker(s.sinkCheckEvery())
 	defer t.Stop()
 	for range t.C {
-		if s.checkSinks(context.Background()) > 0 {
+		n := s.checkSinks(context.Background())
+		select {
+		case <-t.C: // the pass took the whole interval: skip the tick it left
+		default:
+		}
+		if n > 0 {
 			continue
 		}
 		s.mu.Lock()
@@ -632,11 +643,22 @@ func (s *Substrate) checkedSinksLocked() []checkedSink {
 	return out
 }
 
+// sinkCheckReads bounds the lease reads one sink check has in flight: a slow read delays no other sink, and a
+// pass over many sinks holds at most this many store connections.
+const sinkCheckReads = 8
+
 // checkSinks applies the lease rule to every sink under the check: one the rule does not keep yields. For a sink
 // it keeps on a runner whose session this replica does not hold, it counts the time with nothing attached while the
 // runner reads online, and recovers the output into the same sink past outputStallAfter, when no other process
 // holds the run's lease fresh. A failed read keeps the sink and starts no recovery. It answers how many sinks it
 // read.
+//
+// The reads run concurrently, at most sinkCheckReads at once, under one deadline of one check interval for the
+// whole pass, and each sink is handled as soon as its own read answers. So with any number of sinks a pass ends
+// within one interval. A read not answered by then is cancelled and its sink kept as it was, with no yield, no
+// recovery and no change to its stall count, and is read again at a later pass. A pass takes the sinks in run id
+// order from the first one the last pass did not start, so a sink in a stable set of N gets an inspection within
+// ceil(N / sinkCheckReads) passes, even with every slot held by a slow read.
 func (s *Substrate) checkSinks(ctx context.Context) int {
 	s.mu.Lock()
 	sinks := s.checkedSinksLocked()
@@ -647,21 +669,52 @@ func (s *Substrate) checkSinks(ctx context.Context) int {
 	if l, ok := s.t.(interface{ HeldHere() bool }); ok {
 		held = l.HeldHere()
 	}
-	for _, c := range sinks {
-		lctx, cancel := context.WithTimeout(ctx, callTimeout)
-		keep, sole, err := s.opts.OutputLease(lctx, c.id)
-		cancel()
-		if err != nil {
-			continue
-		}
-		if !keep {
-			s.yieldSink(c.id, c.sink)
-			continue
-		}
-		if c.sink.stalled(held, online, sole, time.Now()) {
-			go s.recoverStalled(c.id, c.sink, c.ref)
-		}
+	slices.SortFunc(sinks, func(a, b checkedSink) int { return bytes.Compare(a.id[:], b.id[:]) })
+	s.mu.Lock()
+	from := s.sinkNext
+	s.mu.Unlock()
+	if i := slices.IndexFunc(sinks, func(c checkedSink) bool { return bytes.Compare(c.id[:], from[:]) >= 0 }); i > 0 {
+		sinks = append(sinks[i:], sinks[:i]...)
 	}
+	pctx, cancel := context.WithTimeout(ctx, s.sinkCheckEvery())
+	defer cancel()
+	slots := make(chan struct{}, sinkCheckReads)
+	var wg sync.WaitGroup
+	next := uuid.Nil
+	for _, c := range sinks {
+		select {
+		case slots <- struct{}{}:
+		case <-pctx.Done():
+		}
+		if pctx.Err() != nil {
+			next = c.id // the pass's deadline: the sinks not yet started are kept, and the next pass starts here
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			keep, sole, err := s.opts.OutputLease(pctx, c.id)
+			if err != nil || pctx.Err() != nil {
+				return // failed, or answered past the deadline: kept as it was
+			}
+			if !keep {
+				s.yieldSink(c.id, c.sink)
+				return
+			}
+			if c.sink.stalled(held, online, sole, time.Now()) {
+				go s.recoverStalled(c.id, c.sink, c.ref)
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-pctx.Done(): // a read that ignores its context does not hold the pass past its deadline
+	}
+	s.mu.Lock()
+	s.sinkNext = next
+	s.mu.Unlock()
 	return len(sinks)
 }
 

@@ -121,6 +121,7 @@ type Substrate struct {
 	outputs  map[uuid.UUID]*outputSink
 	forwards map[uuid.UUID]*outputForward // sink-less output opens on their way to the run's launcher
 	checking bool                         // the sink check loop is running
+	sinkNext uuid.UUID                    // the first sink the last check did not start: the next one starts there
 	resident map[uuid.UUID]leafHashes     // SHA-256 of what DeliverResident delivered; never the value
 	// vmKinds is the machine kind of each VM sandbox this substrate created, so a desktop or a pause is
 	// gated by that kind's caps; a ref missing from it (created before a restart) is gated by either.

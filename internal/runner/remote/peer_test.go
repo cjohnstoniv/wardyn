@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1337,5 +1338,177 @@ func TestPeerOutputSinkYieldsToFreshLease(t *testing.T) {
 	waitUntil(t, "the sink recovers once sole reads true", func() bool { return ls.recovers.Load() == 1 })
 	if !s.ServableOutput(ctx, run) && s.sinkFor(run) != nil {
 		t.Fatal("sole true: the door refuses a kept sink")
+	}
+}
+
+// agedSink is addSink for a sink that has had nothing attached for an hour, so the next check that keeps it with
+// sole set recovers it.
+func agedSink(t *testing.T, s *Substrate, run uuid.UUID, ref string, w *endBuf) *outputSink {
+	t.Helper()
+	sink := &outputSink{writer: w}
+	if _, err := sink.accept(0, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	sink.idleSince = time.Now().Add(-time.Hour)
+	s.mu.Lock()
+	s.outputs[run] = sink
+	s.mu.Unlock()
+	s.setSinkRef(sink, ref)
+	return sink
+}
+
+func (sink *outputSink) idle() time.Time {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.idleSince
+}
+
+// yieldLog records the runs Options.OutputYielded ran for.
+type yieldLog struct {
+	mu   sync.Mutex
+	runs []uuid.UUID
+}
+
+func (y *yieldLog) yielded(run uuid.UUID) {
+	y.mu.Lock()
+	y.runs = append(y.runs, run)
+	y.mu.Unlock()
+}
+
+func (y *yieldLog) has(run uuid.UUID) bool {
+	y.mu.Lock()
+	defer y.mu.Unlock()
+	return slices.Contains(y.runs, run)
+}
+
+// A slow lease read delays no other sink: the reads of one check run at once, under one deadline of one interval.
+// A read that does not answer by then, or that fails, keeps its sink as it was.
+func TestPeerOutputSinkCheckSlowLeaseDoesNotDelayOthers(t *testing.T) {
+	ctx := t.Context()
+	const every = 200 * time.Millisecond
+	blocked, yielding, stalled, failing := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	var active, entered, cancelled atomic.Int32
+	blockedIn := make(chan struct{})
+	var once sync.Once
+	var sawInFlight atomic.Bool
+	lease := func(ctx context.Context, run uuid.UUID) (bool, bool, error) {
+		switch run {
+		case blocked:
+			active.Add(1)
+			entered.Add(1)
+			once.Do(func() { close(blockedIn) })
+			<-ctx.Done()
+			active.Add(-1)
+			cancelled.Add(1)
+			return false, false, ctx.Err()
+		case failing:
+			return false, false, errors.New("store read failed")
+		}
+		// The two healthy reads answer only while the blocked one is in flight, which a serial check never shows.
+		select {
+		case <-blockedIn:
+		case <-ctx.Done():
+			return false, false, ctx.Err()
+		}
+		if run == yielding {
+			sawInFlight.Store(active.Load() > 0)
+			return false, false, nil
+		}
+		return true, true, nil
+	}
+	var y yieldLog
+	opts := Options{OutputLease: lease, OutputYielded: y.yielded, OutputSinkCheck: every}
+	s, ls := newLauncher(ctx, opts, recoverWith(0, "hello world"))
+	ls.held.Store(false)
+	start := time.Now()
+	bw, yw, sw, fw := newEndBuf(), newEndBuf(), newEndBuf(), newEndBuf()
+	blockedSink := addSink(t, s, blocked, "runner:x/blocked", bw, "hello")
+	addSink(t, s, yielding, "runner:x/yielding", yw, "hello")
+	agedSink(t, s, stalled, "runner:x/stalled", sw)
+	failingSink := agedSink(t, s, failing, "runner:x/failing", fw)
+	failingIdle := failingSink.idle()
+
+	waitUntil(t, "the keep=false sink yields and the stalled sink is recovered", func() bool {
+		return y.has(yielding) && s.sinkFor(yielding) == nil && ls.recovers.Load() >= 1
+	})
+	if d := time.Since(start); d > 2*every+every/2 {
+		t.Fatalf("the healthy sinks were handled %v after the check began, want within two passes of %v", d, every)
+	}
+	if !sawInFlight.Load() {
+		t.Fatal("the keep=false sink was read while no slow read was in flight: the check's reads ran one after another")
+	}
+	select {
+	case err := <-yw.end:
+		if !errors.Is(err, errOutputYielded) {
+			t.Fatalf("the yielded sink ended with %v, want errOutputYielded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the yielded sink was never finished")
+	}
+	select {
+	case err := <-sw.end:
+		if err != nil || sw.String() != "hello world" {
+			t.Fatalf("the stalled sink: %q, end %v; want every byte once", sw.String(), err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stalled sink's recovery never ended")
+	}
+
+	// A read past the pass deadline is cancelled, and its sink and the failing one are kept as they were.
+	time.Sleep(2 * every)
+	if cancelled.Load() == 0 {
+		t.Fatal("the blocked read was never cancelled at the pass deadline")
+	}
+	if entered.Load() < 2 {
+		t.Fatalf("the blocked sink was read %d times, want it tried again at the next pass", entered.Load())
+	}
+	if s.sinkFor(blocked) != blockedSink || y.has(blocked) {
+		t.Fatal("the sink whose read did not answer was dropped or yielded")
+	}
+	if s.sinkFor(failing) != failingSink || y.has(failing) || !failingSink.idle().Equal(failingIdle) {
+		t.Fatal("the sink whose read failed was dropped, yielded or had its stall count changed")
+	}
+	if n := ls.recovers.Load(); n != 1 {
+		t.Fatalf("%d recoveries, want only the stalled sink's", n)
+	}
+	select {
+	case err := <-bw.end:
+		t.Fatalf("the blocked sink was finished: %v", err)
+	case err := <-fw.end:
+		t.Fatalf("the failing sink was finished: %v", err)
+	default:
+	}
+}
+
+// With every read slot held by a slow read, the sink a check did not reach is the first the next check reads.
+func TestPeerOutputSinkCheckReachesEverySinkPastSlowSlots(t *testing.T) {
+	ctx := t.Context()
+	const every = 100 * time.Millisecond
+	runs := make([]uuid.UUID, sinkCheckReads+1)
+	for i := range runs {
+		runs[i] = uuid.New()
+	}
+	slices.SortFunc(runs, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	healthy := runs[sinkCheckReads] // after every blocked one in run id order
+	var slowReads atomic.Int32
+	var slowAtYield atomic.Int32
+	lease := func(ctx context.Context, run uuid.UUID) (bool, bool, error) {
+		if run != healthy {
+			slowReads.Add(1)
+			<-ctx.Done()
+			return false, false, ctx.Err()
+		}
+		slowAtYield.Store(slowReads.Load())
+		return false, false, nil
+	}
+	var y yieldLog
+	s, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: y.yielded, OutputSinkCheck: every}, nil)
+	for i, run := range runs {
+		addSink(t, s, run, "runner:x/"+strconv.Itoa(i), newEndBuf(), "")
+	}
+	waitUntil(t, "the sink past the slow slots yields", func() bool { return y.has(healthy) })
+	// The first pass starts the eight slow reads and cannot reach the healthy sink; the second starts with it.
+	if n := slowAtYield.Load(); n > 2*sinkCheckReads {
+		t.Fatalf("the healthy sink was read after %d slow reads, want within two passes (at most %d)", n, 2*sinkCheckReads)
 	}
 }
