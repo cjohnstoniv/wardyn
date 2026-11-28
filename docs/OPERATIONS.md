@@ -527,17 +527,23 @@ fi
 #    written to a file named for this installation before anything changes, and
 #    stays there until step 3b has used it. A restore that stopped part-way
 #    reuses it, and never reads the restored database's lower value in its place.
-#    Run every attempt from this directory. (That database is gone, with no mark
-#    file? The script stops here: see "Revocation order".)
+#    Run every attempt from this directory; only one runs per installation at a
+#    time. (That database is gone, with no mark file? The script stops here:
+#    see "Revocation order".)
+id="project=${COMPOSE_PROJECT_NAME:-} ns=$NS"
+M="$PWD/.wardyn-restore-mark-$(printf '%s' "$id" | cksum | cut -d' ' -f1)"
+mkdir "$M.lock" || { echo "STOP: another restore of this installation holds $M.lock (remove it only if none runs)"; exit 1; }
+trap 'rmdir "$M.lock"' EXIT
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
-M="$PWD/.wardyn-restore-mark-${COMPOSE_PROJECT_NAME:-compose}-$NS"
 if [ -f "$M" ]; then
-  hwm=$(cat "$M"); echo "An unfinished restore of this installation left mark $hwm: using it"
+  { IFS= read -r stored; IFS= read -r hwm; } < "$M"
+  [ "$stored" = "$id" ] || { echo "STOP: $M belongs to another installation"; exit 1; }
+  echo "An unfinished restore of this installation left mark $hwm: using it"
 else
   hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
     "SELECT last_value FROM oidc_revocation_seq")
   case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
-  (set -C; printf '%s\n' "$hwm" > "$M")
+  (set -C; printf '%s\n%s\n' "$id" "$hwm" > "$M")
 fi
 case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 
