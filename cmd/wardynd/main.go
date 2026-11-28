@@ -379,8 +379,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	runnerPeer, peerErr := loadRunnerPeer(bootCtx, f, bootKeys, hopRootsOf(feats.hop.caCertPEM()), *f.controlURL)
 	gtWrite, gtK8sSensor, err := groundtruthTokenDelivery(feats.hop)
-	if err != nil {
+	if err = errors.Join(peerErr, err); err != nil {
 		return err
 	}
 	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
@@ -485,6 +486,7 @@ func run() error {
 		UIDir:                *f.uiDir,
 		ControlPlaneURL:      *f.controlURL,
 		ControlPlaneCAPEM:    feats.hop.caCertPEM(),
+		RunnerPeer:           runnerPeer,
 		RecordingStore:       feats.recStore,
 		OIDC:                 feats.authn,
 

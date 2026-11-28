@@ -38,15 +38,15 @@ import (
 // internalAuthGroundtruth: each authenticates its caller itself. A required route must be mounted by the guard's
 // router; an expected one is allowed without auth when it is mounted.
 var internalRoutesWithoutAuth = map[string]struct{ required bool }{
-	"POST /api/v1/internal/token/recover": {required: true},  // verifies an expired run token itself (RecoveryVerifier)
-	"GET /api/v1/internal/runner-peer":    {required: false}, // the replica peer door: mounted only under HA with the internal listener
+	"POST /api/v1/internal/token/recover": {required: true}, // verifies an expired run token itself (RecoveryVerifier)
+	"GET /api/v1/internal/runner-peer":    {required: true}, // the replica peer door: mounted only under HA with the internal listener
 }
 
 // everyInternalMount switches on every Config field that gates an /api/v1/internal/ mount, so a conditional route
-// cannot hide from the guard's walk. It is empty at this head: the only conditional internal mount gate is
-// Secrets != nil (routes.go), which newAuthzMatrixServer already sets. A later change that gates an internal mount
-// on another Config field adds its switch here.
-func everyInternalMount(*Config) {}
+// cannot hide from the guard's walk. Secrets != nil (routes.go) is already set by newAuthzMatrixServer; the runner
+// peer door is mounted only under HA with the internal listener (peerDoorMount). A later change that gates an
+// internal mount on another Config field adds its switch here.
+func everyInternalMount(c *Config) { peerDoorMount(c) }
 
 const (
 	ruRecoverPath = "/api/v1/internal/token/recover"

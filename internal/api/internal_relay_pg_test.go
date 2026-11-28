@@ -347,7 +347,6 @@ func TestEveryInternalRouteIsClassifiedForRelay(t *testing.T) {
 }
 
 func checkInternalRoutesClassified(t *testing.T, recordings recording.Store) {
-	srv := New(Config{AdminToken: adminToken, Secrets: getErrStore{getErr: secretstore.ErrNotFound}, RecordingStore: recordings})
 	registered := map[string]bool{}
 	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if strings.Contains(route, "/internal/") {
@@ -355,8 +354,13 @@ func checkInternalRoutesClassified(t *testing.T, recordings recording.Store) {
 		}
 		return nil
 	}
-	if err := chi.Walk(srv.router, walk); err != nil {
-		t.Fatal(err)
+	// The runner peer door is mounted only under HA with the internal listener, so both shapes are walked.
+	for _, shape := range []func(*Config){func(*Config) {}, peerDoorMount} {
+		cfg := Config{AdminToken: adminToken, Secrets: getErrStore{getErr: secretstore.ErrNotFound}, RecordingStore: recordings}
+		shape(&cfg)
+		if err := chi.Walk(New(cfg).router, walk); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for route := range registered {
 		if _, ok := relayedInternalRoutes[route]; !ok {

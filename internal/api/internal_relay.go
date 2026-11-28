@@ -69,6 +69,7 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/assistant/events":               false,
 	"GET /api/v1/internal/assistant/tools":                 false,
 	"POST /api/v1/internal/assistant/tools/{name}":         false,
+	"GET /api/v1/internal/runner-peer":                     false, // replica to replica on the internal listener; never through a runner's relay
 }
 
 type relayRunnerKey struct{}

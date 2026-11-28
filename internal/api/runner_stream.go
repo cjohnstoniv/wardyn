@@ -383,6 +383,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 				s.openRunnerLinkWindow(ctx, st, id, session, droppedFor)
 			}
 		}
+		if p := s.runnerPeering(); p != nil {
+			cfg.Peer = p
+		}
 		s.runnerStreams.hub = remote.NewHub(s.cfg.BaseCtx, cfg)
 	})
 	return s.runnerStreams.hub

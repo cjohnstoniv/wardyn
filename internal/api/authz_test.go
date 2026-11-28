@@ -1184,6 +1184,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
 	"POST /api/v1/internal/token/renew":                    {class: classInternal},
 	"POST /api/v1/internal/token/recover":                  {class: classInternal},
+	"GET /api/v1/internal/runner-peer":                     {class: classRunnerStream},
 	"PUT /api/v1/internal/recordings/{runID}":              {class: classInternal},
 	"PUT /api/v1/internal/recordings/{runID}/parts/{part}": {class: classInternal},
 	"PUT /api/v1/internal/scan-results/{runID}":            {class: classInternal},
@@ -1498,6 +1499,8 @@ func assertSameAsMissing404(t *testing.T, srv *Server, method, pattern string, s
 func TestAuthzMatrix(t *testing.T) {
 	srv, ast, aap, rs := newAuthzMatrixServer(t)
 	uiSrv := newAuthzMatrixServerWithUI(t)
+	// HA with the internal listener: the only shape that mounts the runner peer door.
+	haSrv, _, _, _ := newAuthzMatrixServer(t, peerDoorMount)
 
 	const memberSub = "sub-member"
 	const otherSub = "sub-other-member"
@@ -1575,6 +1578,7 @@ func TestAuthzMatrix(t *testing.T) {
 	}
 	walk("no UIDir", srv.router, onlyWithoutUI)
 	walk("UIDir set (the shipped image)", uiSrv.router, nil)
+	walk("HA with the internal listener", haSrv.router, nil)
 	// The two configurations must genuinely differ, or this walked the same
 	// router twice and the union proves nothing more than one walk did.
 	if !discovered["GET /*"] || !discovered["GET /"] {
@@ -1610,6 +1614,24 @@ func TestAuthzMatrix(t *testing.T) {
 			}
 			switch rc.class {
 			case classRunnerStream:
+				if key == "GET /api/v1/internal/runner-peer" {
+					// The door's credential is its Wardyn-Peer-* headers, read before the upgrade: every human credential is a
+					// missing field, 403 with no refusal class. Only the internal listener serves the path.
+					for name, set := range map[string]func(*http.Request){
+						"no credential": func(*http.Request) {},
+						"admin token":   func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+adminToken) },
+						"admin session": func(r *http.Request) { r.AddCookie(adminSess) },
+					} {
+						r := httptest.NewRequest(method, pattern, nil)
+						set(r)
+						w := httptest.NewRecorder()
+						haSrv.InternalHandler().ServeHTTP(w, r)
+						if w.Code != http.StatusForbidden || w.Header().Get("Wardyn-Peer-Refused") != "" {
+							t.Errorf("runner peer door, %s: status = %d, class %q; want 403 and no class", name, w.Code, w.Header().Get("Wardyn-Peer-Refused"))
+						}
+					}
+					break
+				}
 				// Runners are enabled here, but public org URL is absent.
 				// The route refuses before handshake, regardless of bearer.
 				for _, token := range []string{"", adminToken} {

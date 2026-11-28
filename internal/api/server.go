@@ -131,6 +131,10 @@ type Config struct {
 	// RunnerHub supplies durable runner admission and lifecycle callbacks.
 	// The server always supplies OrgURL and Lookup from its own configuration.
 	RunnerHub remote.HubConfig
+	// RunnerPeer, under high availability, is this replica's peer address, the peer key and the internal CA, for
+	// reaching a registered runner whose session another replica holds (WARDYN_PEER_URL). Nil serves only the
+	// runners whose sessions this replica holds.
+	RunnerPeer *remote.PeerConfig
 	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
 	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
 	//

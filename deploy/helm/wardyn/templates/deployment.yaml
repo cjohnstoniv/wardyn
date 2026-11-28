@@ -645,6 +645,17 @@ spec:
             - name: WARDYN_HA
               value: "true"
             {{- end }}
+            # This replica's internal address, where another replica reaches a registered runner whose session this
+            # one holds. The internal listener's certificate names the control-plane URL's host, which the peer
+            # client verifies while it dials the pod IP.
+            {{- if not (hasKey $eff "WARDYN_PEER_URL") }}
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: WARDYN_PEER_URL
+              value: "https://$(POD_IP):8443"
+            {{- end }}
             {{- end }}
             {{- if not (hasKey $eff "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented

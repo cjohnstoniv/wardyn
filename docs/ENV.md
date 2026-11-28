@@ -333,6 +333,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ENVBUILD_CACHE_REPO` | string | **binary: (unset)**; compose: `registry:5000/wardyn/devcontainers` | OCI registry ref for layer cache / daemonless push (flag `-envbuild-cache-repo`); the compose value is the build container's own reach to the registry sidecar. [Details](#wardyn_envbuild_cache_repo) |
 | `WARDYN_CONFINEMENT_MAP` | string | (unset) | per-class substrate/runtime pins, e.g. `CC2=runsc;CC3=kata-qemu` (flag `-confinement-map`) |
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
+| `WARDYN_PEER_URL` | string | (unset) | with `WARDYN_HA`, this replica's internal TLS address, `https://<pod IP>:8443`, where other replicas reach a registered runner whose session this replica holds; unset serves only those runners (flag `-peer-url`). [Details](#wardyn_peer_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) (or `runnerd.json` `proxy_image`) (lock: `lock_security_settings`) |
 | `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd`**: `setup` writes it beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it; `serve` then keeps that image. Unmarked, the registration image and this project's release images are not pins: they follow the organisation's answer at connect (or `runnerd.json` `proxy_image`, a pin) |
@@ -1635,6 +1636,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Chart: rendered as `https://<release>.<ns>.svc.cluster.local:<service.internalPort>`; compose/Desktop: `https://wardynd:8443`; host mode ([`scripts/run-host.sh`](../scripts/run-host.sh)): `https://host.docker.internal:8443`.
 - See [OPERATIONS.md](OPERATIONS.md#control-plane-to-proxy-tls) (flag `-control-plane-url`).
 - **Not the same address the CLI dials** — that is `WARDYN_URL` ([`wardyn` (CLI)](#wardyn-cli) below), which is not this variable under another name (#203).
+
+### `WARDYN_PEER_URL`
+
+- With `WARDYN_HA`, this replica's internal TLS address (`https://<pod IP>:8443`). The Helm chart sets it from the pod IP when `ha.enabled` (flag `-peer-url`).
+- A call for a registered runner whose session another replica holds goes to that replica's internal listener, at `/api/v1/internal/runner-peer`, and is replayed on that session only. A session that moved is refused, never served by another session.
+- Replicas authenticate each other with the install's peer key, secret-store row `wardyn-runner-peer-key`, made at the first high-availability boot. Each request carries a token valid for at most 30 seconds, bound to both replicas, the runner and the session.
+- Replica clocks must agree to within 30 seconds. A peer request whose token the holding replica reads as expired, or as more than 30 seconds ahead, is refused, and the refusal is logged with the class expired.
+- The client checks the holding replica's certificate against this replica's internal CA, by the host of `WARDYN_CONTROL_PLANE_URL`. While a rotation of that CA rolls through the replicas, a call between two replicas on different CAs fails and the runner reads as offline there, until the last replica has restarted.
+- Unset under `WARDYN_HA`, wardynd logs one warning at boot and serves only the runners whose sessions it holds.
 
 ### `WARDYN_INTERNAL_LISTEN`
 

@@ -134,8 +134,10 @@ type Server struct {
 	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
 	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
-	replica         string
-	replicaOnce     sync.Once
+	replica     string
+	replicaOnce sync.Once
+	// peering is the runner peer client and the peer door's refusal counts (runner_peer.go).
+	peering         peerState
 	leaseKeeperOnce sync.Once       // starts attachLeaseKeeper (attach_lease.go)
 	runEvents       runEventHub     // each run's lifecycle event ring (run_events.go)
 	assistantLive   assistantLive   // the assistant's wake-ups and each person's open reads (assistant_session_events.go)

@@ -189,7 +189,7 @@ func (s *stallingSub) ReplaceProxyHashedAt(ctx context.Context, ref string, cfg 
 	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
 }
 
-func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
+func newRunnerLeaseFixture(t *testing.T, shape ...func(*Config)) *runnerLeaseFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	t.Cleanup(cancel)
@@ -222,6 +222,9 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	cfg.RunConfigKey = make([]byte, 32)
 	cfg.ControlPlaneURL = "http://127.0.0.1:8080" // a hop the proxy config loader accepts
+	for _, sh := range shape {
+		sh(&cfg)
+	}
 	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h, leaseEnds: map[uuid.UUID]time.Time{},
 		skew: skew, cancelBase: cancelBase}
 	f.sub = &stallingSub{Fake: f.fake, release: make(chan struct{})}

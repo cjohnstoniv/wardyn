@@ -679,6 +679,7 @@ func (s *Server) routes() chi.Router {
 		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
 		s.mountGatewayIdentityRoute(r) // and its one door gated before internalAuth
 		s.mountTokenRecoverRoute(r)    // no auth middleware: it verifies an expired run token itself
+		s.mountRunnerPeerRoute(r)      // no auth middleware: replica to replica, only under HA with the internal listener
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
 		// SEPARATE auth group from the run-token internal surface above: the
