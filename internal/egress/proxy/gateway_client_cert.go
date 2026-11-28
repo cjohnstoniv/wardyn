@@ -64,6 +64,7 @@ func (p *Proxy) offerGatewayClientCert(cfg *tls.Config, addr string) {
 	if cfg == nil || p.gatewayCert == nil || !p.gatewayCertFor(addr) {
 		return
 	}
+	cfg.ClientSessionCache = nil // never resume: each handshake proves the certificate held now
 	cfg.GetClientCertificate = func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 		cert, err := p.gatewayCert.get(p)
 		if err != nil || cri.SupportsCertificate(cert) != nil {

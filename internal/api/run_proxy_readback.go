@@ -470,7 +470,7 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 	if !ok {
 		return errProxyAloneUnsupported
 	}
-	switch err := stopper.StopProxy(ctx, ref); {
+	switch err := runner.CutEgress(ctx, stopper, ref); {
 	case err == nil:
 		return nil
 	case errors.Is(err, runner.ErrEndUnsupported):
@@ -813,6 +813,14 @@ func (s *Server) handleInternalProxyLoaded(w http.ResponseWriter, r *http.Reques
 	case types.ProxyStartFailed:
 		ctx := context.WithoutCancel(ctx)
 		s.auditReadbackFailure(ctx, ch, s.containProxyStart(ctx, claims.RunID, ch.Start.Generation))
+	}
+	// The active start's proxy says whether it pauses and recovers (#4082); the flag is written both ways, and a
+	// failed write answers 503 so the proxy reports again (the repeat changes nothing else).
+	if rec, ok := s.cfg.Store.(store.RunTokenRecoverer); ok {
+		if err := rec.SetRunProxyPauses(ctx, claims.RunID, proxyReportsPause(body.Switches) && s.recoverySupported()); err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonProxyReportUnrecorded, loggedMsg(ctx, "record whether the run's proxy pauses", err))
+			return
+		}
 	}
 	status := http.StatusOK
 	if ch.Start.State == types.ProxyStartPending {

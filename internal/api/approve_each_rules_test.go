@@ -182,50 +182,6 @@ func TestApplyToolPostureOverridesAutoForApproveEach(t *testing.T) {
 	}
 }
 
-// Wardyn can ask for each call only of a server it reaches through the proxy. A tool of a server
-// that runs in the sandbox is refused for every harness, however the rule got onto the run.
-func TestApproveEachOnLocalMCPRefused(t *testing.T) {
-	local := types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio}}
-	remote := types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportHTTP, URL: "https://mcp.files.test/mcp"}}
-	each := func(tool string) []types.ToolRule {
-		return []types.ToolRule{{Tool: tool, Effect: types.ToolApproveEach}}
-	}
-	const sentence = "Wardyn can ask for each call only of an MCP server it reaches through the proxy; files runs in the sandbox."
-	for _, tc := range []struct {
-		name     string
-		def      types.ComponentDefinition
-		harness  string
-		taskMode string
-		policy   []types.ToolRule
-		own      client.IncludedTool
-		refused  bool
-	}{
-		{"claude, policy rule", local, claudeCodeHarness, "", each("mcp__files__write"), client.IncludedTool{}, true},
-		{"codex, policy rule", local, codexHarness, "", each("mcp__files__write"), client.IncludedTool{}, true},
-		{"claude in a command", local, claudeCodeHarness, "exec", each("mcp__files__write"), client.IncludedTool{}, true},
-		{"claude, the person's own rule", local, claudeCodeHarness, "", nil,
-			client.IncludedTool{ID: claudeCodeHarness, Kind: client.IncludedToolHarness, ToolRules: each("mcp__files__read")}, true},
-		{"another server's tool", local, claudeCodeHarness, "", each("mcp__linear__write"), client.IncludedTool{}, false},
-		{"a remote server", remote, claudeCodeHarness, "", each("mcp__files__write"), client.IncludedTool{}, false},
-		{"a remote server, codex", remote, codexHarness, "", each("mcp__files__write"), client.IncludedTool{}, false},
-	} {
-		comps := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Name: "Files", Definition: tc.def, MCPHarnesses: []string{tc.harness}}}}}
-		req := createRunRequest{}
-		req.TaskMode = tc.taskMode
-		if tc.own.ID != "" {
-			req.Tools = []client.IncludedTool{tc.own}
-		}
-		got := localMCPRulesRefusal(req, types.RunPolicySpec{ToolRules: tc.policy}, comps)
-		if (got != nil) != tc.refused {
-			t.Errorf("%s: refusal %+v, want refused=%v", tc.name, got, tc.refused)
-			continue
-		}
-		if got != nil && (got.body.Reason != reasonRequestFieldUnavailable || got.body.Error != sentence) {
-			t.Errorf("%s: %+v, want %q", tc.name, got.body, sentence)
-		}
-	}
-}
-
 // Codex CLI and a command-started harness take approve_each on a remote server's tool: the broker
 // pauses the call, not the harness. A hold on the same tool is still refused.
 func TestApproveEachHarnessWithoutGateNotRefused(t *testing.T) {
@@ -247,9 +203,6 @@ func TestApproveEachHarnessWithoutGateNotRefused(t *testing.T) {
 	} {
 		if got := inheritedMCPHoldRefusal(req, types.RunPolicySpec{ToolRules: []types.ToolRule{each}}, comps); got != nil {
 			t.Errorf("%s: policy approve_each refused: %+v", name, got.body)
-		}
-		if got := localMCPRulesRefusal(req, types.RunPolicySpec{ToolRules: []types.ToolRule{each}}, comps); got != nil {
-			t.Errorf("%s: policy approve_each on a remote server refused: %+v", name, got.body)
 		}
 		if got := inheritedMCPHoldRefusal(req, types.RunPolicySpec{ToolRules: []types.ToolRule{hold}}, comps); got == nil {
 			t.Errorf("%s: policy hold on the same tool accepted", name)

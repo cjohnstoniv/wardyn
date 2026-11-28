@@ -37,19 +37,30 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // reuse this key.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
-// SweeperLeaderLockKey elects the one replica that runs the sweepers which must
-// run once (approvals, recordings, credentials, the always-egress reconcile and
-// the run pause). Acquired ONCE and held for the process lifetime by
-// SweeperLeader; followers retry on a backoff and take over when the leader's
-// session ends.
+// SweeperLeaderLockKey elected the one replica that ran every sweeper which must
+// run once, in releases before the sweep families. An older replica still takes
+// it exclusively, after a probe (AdvisoryLockHeld), and leads every sweep while
+// it holds it.
+//
+// The legacy rule: every replica of this version that leads a sweep family
+// holds this key in SHARED mode on its election connection (SweeperLeader), from
+// before its first family until after it leads none. So while any family leader
+// exists, an older replica's probe sees the key held and its exclusive try fails,
+// and a replica of this version whose shared try fails knows an older replica
+// leads, and leads nothing. No replica of this version takes it exclusively.
 //
 // HONEST CEILING, as for GroundTruthRotatorLockKey: an advisory lock dies with
 // its SESSION, so a Postgres failover can release it under a still-running
-// leader. Unlike the rotator, this lock IS used for work that needs fencing, so
-// each acquisition bumps the durable epoch in sweeper_leader (0110) and a
-// multi-step operation re-checks its epoch (SweeperLeader.Current) before it
-// writes.
+// leader. Each acquisition bumps the durable epoch in sweeper_leader (0110),
+// which every family acquisition bumps too, and a multi-step operation of an
+// older replica re-checks it before it writes.
 const SweeperLeaderLockKey int64 = 0x5741524459_53574C // ASCII "WARDYSWL"
+
+// SweeperFamilyLockClass is the classid half of each sweep family's two-key
+// advisory lock (SweeperLeader); the object half is crc32 of the family's name.
+// It has no place in LockOrder: it is not a Locker class, and it is only ever
+// tried, on the election connection, never waited for.
+const SweeperFamilyLockClass int32 = 0x57535746 // ASCII "WSWF"
 
 // SingleInstanceLockKey is the RUNTIME half of the one-replica safety control
 // (the Helm chart's `replicas > 1` render refusal is the other half). Taken
@@ -120,6 +131,12 @@ const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 // month must not queue behind (or hold up) an append.
 const AuditPartitionLockKey int64 = 0x5741524459_415054 // ASCII "WARDYAPT"
 
+// PortalIssuerRegistryLockKey serializes every issuer-portal registry decision across replicas: a direct
+// registration, the approval of a held registration, the retirement of an unused issuer binding and the
+// boot-time record of the console issuer. It is taken as a transaction lock (pg_advisory_xact_lock) before
+// any conflict read, so two decisions that each read "no conflict" cannot both commit.
+const PortalIssuerRegistryLockKey int64 = 0x5741524459_504952 // ASCII "WARDYPIR"
+
 // AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey.
 // Since 0056 the trigger takes it on every audit_events insert, including
 // from outside this repo, so a stray open transaction (an operator's psql
@@ -148,6 +165,13 @@ var AuditChainLockTimeout = 5 * time.Second
 // integer, never caller input. SET LOCAL reverts at commit/rollback.
 func AuditChainLockTimeoutSQL() string {
 	return fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", AuditChainLockTimeout.Milliseconds())
+}
+
+// AuditChainLockWaitSQL bounds the chain lock's wait to d, at least 1ms: lock_timeout 0 would mean no bound at all.
+// It answers one statement text for every d, with the bound as its argument, so pgx's statement cache keeps one
+// entry and a contended append still goes in one batch. set_config(..., true) is SET LOCAL.
+func AuditChainLockWaitSQL(d time.Duration) (sql, arg string) {
+	return `SELECT set_config('lock_timeout', $1, true)`, fmt.Sprintf("%dms", max(1, d.Milliseconds()))
 }
 
 // TryAdvisoryLock takes session-level advisory lock key on a connection
@@ -222,6 +246,10 @@ const dedicatedLockReleaseWait = 2 * time.Second
 // concurrent use; it is valid until release, which unlocks and then closes it
 // within dedicatedLockReleaseWait. Unlock comes first so the lock is free when
 // release returns, not when the server notices the socket is gone.
+//
+// It dials with the pool's own settings and sets no TCP keepalives: a holder cut
+// off from the server for a minute must not lose a lock that guards the whole
+// process, such as the single-instance lock, which has no watcher to notice.
 func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64) (conn *pgx.Conn, release func(), ok bool, err error) {
 	conn, err = pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
 	if err != nil {
@@ -243,6 +271,19 @@ func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64
 		conn.Exec(bg, `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort; closing the session drops it anyway
 		conn.Close(bg)                                      //nolint:errcheck // best-effort
 	}, true, nil
+}
+
+// dialDedicated dials the sweeper election's session outside pool, from pool's
+// own connection settings with the lock connections' TCP keepalives
+// (lockConnConfig, setLockKeepalives), so a vanished leader's families are freed
+// in about a minute. TryAdvisoryLockDedicated does not use it.
+func dialDedicated(ctx context.Context, pool *pgxpool.Pool) (*pgx.Conn, error) {
+	conn, err := pgx.ConnectConfig(ctx, lockConnConfig(pool.Config().ConnConfig))
+	if err != nil {
+		return nil, err
+	}
+	setLockKeepalives(ctx, func(sctx context.Context, sql string) error { _, err := conn.Exec(sctx, sql); return err })
+	return conn, nil
 }
 
 // AdvisoryLock is TryAdvisoryLock's BLOCKING sibling: waits for session-level

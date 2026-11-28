@@ -33,6 +33,16 @@
 | **v0.10.0-rc.25** | rc.25: an Azure DevOps token on a cluster run that stops working within 10 minutes of the connection being disabled or capped. | **Shipped (pre-alpha)** — `v0.10.0-rc.25`, 2026-11-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.26** | rc.26, the last candidate: via_org follows current rules on every server, service identity runs end when it stops, resume re-checks the owner, and Azure WireServer is refused. | **Shipped (pre-alpha)** — `v0.10.0-rc.26`, 2026-11-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0** | Developer sandboxes: Linux VM and macOS VM sandboxes (macOS is a preview, off by default), folders from your computer, local model servers, services, desktop controls, governance units with walls, image signatures and audit receipts. | **Shipped (pre-alpha)** — `v0.10.0`, 2026-11-19 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.1** | Support sessions inside another person's run on the owner's terms. Runners can use Azure DevOps through the organisation's proxy. A quicker retry after a first-use egress approval, custom model endpoints without `openid`, and SCIM ownership checks. | **Shipped (pre-alpha)** — `v0.10.1`, 2026-11-21 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.2** | Issuer portals with their own sign-in issuer, and a client-credentials service grant on a custom model endpoint. | **Shipped (pre-alpha)** — `v0.10.2`, 2026-11-22 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.3** | Issuer portals: a portal's people run in its pinned unit without a membership and read their own command output recovered from the run's recording; refused reads are audited. | **Shipped (pre-alpha)** — `v0.10.3`, 2026-11-23 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.4** | Outages: a lost Kubernetes run's owner can copy its work out, and the orphan sweep holds. Security fixes for sponsor changes, runner revives, relay sources, push removals and the Kubernetes API door. | **Shipped (pre-alpha)** — `v0.10.4`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.5** | Faster proxies and Kubernetes waits: a still-valid credential's refresh stalls no request, DNS answers and connections are reused, pods are watched. Security fixes for SCIM group deletes, support reads, the Git offline limit, VM folders and sign-in unbinds. | **Shipped (pre-alpha)** — `v0.10.5`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.1** | rc.1, the first 0.11.0 candidate: the 0.10.4 fixes, `wardyn run forward` with the SSH gateway off, assistant settings and sessions. Multi-approver governance, single-use SSH tickets, startup while the identity provider is down, Walls server routes, and off-by-default 0.11 `features`. | **Shipped (pre-alpha)** — `v0.11.0-rc.1`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.2** | rc.2: agent rules per harness, approval counts per kind of governance change, machine kinds by runner trust class, an optional MDM device certificate for macOS sandboxes, desktop watermarks, outage records, and batched proxy decisions. | **Shipped (pre-alpha)** — `v0.11.0-rc.2`, 2026-11-25 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.3** | rc.3: every 0.10.5 fix carried into the 0.11.0 candidates, and git trusts the run's certificate bundle in container and Kubernetes runs. | **Shipped (pre-alpha)** — `v0.11.0-rc.3`, 2026-11-25 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.4** | rc.4: extra containers beside a run's agent, organisation sites, team drives, machine snapshots, inbound workload federation, run previews, run-history retention, a salted audit hash, and sweeps shared across replicas. | **Shipped (pre-alpha)** — `v0.11.0-rc.4`, 2026-11-26 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.5** | rc.5: scheduled runs, MCP servers in their own sandbox, outage terms, Windows VM sandboxes, browser lockdown, local folder walls, component request rules, Preview URLs, a Linux VM window, and identity narrowing. | **Shipped (pre-alpha)** — `v0.11.0-rc.5`, 2026-11-27 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
@@ -53,7 +63,7 @@ Built, from 0.10.0-rc.1 to rc.13:
 | A governed local-model endpoint for the person's own GPU | Built |
 | Folders on your computer in remote sandboxes | Built |
 | Desktop in the console, Needs you with take-over, clipboard and file-transfer controls, desktop recording, sign-ins inside a desktop | Built |
-| Scheduled runs (`WARDYN_SCHEDULED_RUNS`), several agents in one run (`WARDYN_MULTI_AGENT_TASKS`), in-sandbox MCP servers (`WARDYN_MCP_LOCAL_SERVERS`), kubectl (`WARDYN_KUBECTL_CLI`) | Built, off by default |
+| Scheduled runs (`WARDYN_SCHEDULED_RUNS`), several agents in one run (`WARDYN_MULTI_AGENT_TASKS`), MCP servers in a sandbox of their own (`WARDYN_MCP_OWN_SANDBOX`), kubectl (`WARDYN_KUBECTL_CLI`) | Built, off by default |
 | Team-shared drives, keeping a run's work folder as a drive, services and inbound apps | Built |
 | Session continuity across sign-ins (#1995) and session lifetime (#1996, `WARDYN_OIDC_SESSION_RENEW_CAP`, `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`) | Built |
 
@@ -73,11 +83,19 @@ Not built:
 | Google Cloud CLI access | #1990 |
 | The AI composer | #1993 |
 
+### v0.11
+
+Built, experimental, off by default:
+
+| Item | Status |
+|---|---|
+| SPIRE identity provider (`WARDYN_IDENTITY=spire`, Kubernetes only): run tokens are SPIRE JWT-SVIDs, and each run's proxy pod is attested for its own X.509-SVID. See [SPIRE identity](docs/operations/spire.md) | Built, experimental, off by default |
+
 ### v1.0
 
 | Item | Status |
 |---|---|
-| SPIRE identity provider and OpenBao secret store | Not built; the `identity.Provider` and `secretstore.Store` seams ship |
+| OpenBao secret store | Not built; the `secretstore.Store` seam ships |
 | L3 MCP and tool gateway | Partly built: the per-tool-call decision plane ships. Interception of tool-call egress that bypasses the proxy does not ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
 | Arbitrary-domain L2 TLS interception | Not built; targeted model and registry interception ships, opt-in |
 | Cloud STS federation | Not built |

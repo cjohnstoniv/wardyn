@@ -288,11 +288,50 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			"# api.anthropic.com: Inspected\n",
 			"# pypi.org: Tunnel only\n",
 			"# Inspected: Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.\n",
-			"# Tunnel only: Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.\n",
+			"# Tunnel only: Wardyn passes this traffic through without reading it. It sees only the host name. Wardyn leaves the TLS connection intact, but a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.\n",
 		} {
 			if !strings.Contains(head, want) {
 				t.Errorf("missing %q in:\n%s", want, head)
 			}
+		}
+	})
+	t.Run("a wildcard opened in part is Partly inspected, with what is opened, beside a tunneled sibling", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.Spec.AllowedDomains = []string{"*.corp.example", "build.corp.example", "artifacts.corp.example", "git.corp.example"}
+			v.HostMarks = &sdk.RunPolicyHostMarks{
+				Inspected:  []string{"artifacts.corp.example"},
+				Partial:    map[string][]string{"*.corp.example": {"artifacts.corp.example", "git.corp.example:8443"}, "git.corp.example": {"git.corp.example:8443"}},
+				Terminated: []string{"artifacts.corp.example", "git.corp.example:8443"},
+			}
+		})
+		for _, want := range []string{
+			"# *.corp.example: Partly inspected (opens artifacts.corp.example, git.corp.example:8443)\n",
+			"# build.corp.example: Tunnel only\n",
+			"# artifacts.corp.example: Inspected\n",
+			"# git.corp.example: Partly inspected (opens git.corp.example:8443)\n",
+			"# Partly inspected: Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread.\n",
+			"# Tunnel only: Wardyn passes this traffic through",
+		} {
+			if !strings.Contains(head, want) {
+				t.Errorf("missing %q in:\n%s", want, head)
+			}
+		}
+		if strings.Contains(head, "# *.corp.example: Inspected") {
+			t.Errorf("a wildcard opened in part was marked Inspected:\n%s", head)
+		}
+	})
+	t.Run("a wildcard in an older server's Inspected list is not claimed whole", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.Spec.AllowedDomains = []string{"*.corp.example", "artifacts.corp.example"}
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{"*.corp.example", "artifacts.corp.example"}, Terminated: []string{"artifacts.corp.example"}}
+		})
+		for _, want := range []string{"# *.corp.example: Partly inspected\n", "# artifacts.corp.example: Inspected\n", "# Partly inspected: Wardyn opens only"} {
+			if !strings.Contains(head, want) {
+				t.Errorf("missing %q in:\n%s", want, head)
+			}
+		}
+		if strings.Contains(head, "# *.corp.example: Inspected") {
+			t.Errorf("a wildcard from an older envelope was marked Inspected:\n%s", head)
 		}
 	})
 	t.Run("a host the proxy opens outside the allowlist comes after the allowlist, as Inspected", func(t *testing.T) {
@@ -353,4 +392,32 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			t.Errorf("allow-all header out of order, or lists a terminated host that is not outside:\n%s", head)
 		}
 	})
+}
+
+// A secret that went in as its value is listed after the changes, as comments, so the output stays a policy file.
+func TestRunPolicyHeaderLines_AsValue(t *testing.T) {
+	v := sdk.RunPolicyView{Source: sdk.RunPolicySource{Kind: "inline"}, Complete: true}
+	if got := strings.Join(runPolicyHeaderLines(v, ""), "\n"); strings.Contains(got, runPolicyAsValueHeader) {
+		t.Errorf("no entry, yet the heading is printed:\n%s", got)
+	}
+	v.SecretsAsValue = []sdk.RunPolicySecretAsValue{
+		{Kind: "env_secret", SecretName: "DEPLOY_TOKEN", Host: "api.example.com", Reason: "the host is not an exact entry of the run's allowlist"},
+		{Kind: "file_secret", Host: "git.example.com", Reason: "the host already carries another credential", Delivery: "runner_resident"},
+	}
+	got := strings.Join(runPolicyHeaderLines(v, ""), "\n")
+	want := "Went in as their value (no placeholder):\n" +
+		"  env_secret DEPLOY_TOKEN for api.example.com: the host is not an exact entry of the run's allowlist\n" +
+		"  file_secret (name hidden) for git.example.com, to the runner: the host already carries another credential"
+	if !strings.Contains(got, want) {
+		t.Errorf("header lines:\n%s\nwant to contain:\n%s", got, want)
+	}
+	view := recordedView()
+	view.SecretsAsValue = v.SecretsAsValue
+	out, err := execRunPolicy(t, policyViewServer(t, view, "alice", "alice"), view.RunID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "# Went in as their value (no placeholder):\n#   env_secret DEPLOY_TOKEN for api.example.com: ") {
+		t.Errorf("output:\n%s", out)
+	}
 }

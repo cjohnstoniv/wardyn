@@ -45,7 +45,8 @@ describe("useRunLayout: the Machine tile on a run with a kept machine", () => {
 
   it("does not add it back to a layout saved with it removed, and keeps the marker out of the layout", async () => {
     const { result } = await loadedAs([...SAVED, MACHINE_REMOVED], true);
-    expect(ids(result.current.layout)).toEqual(["terminal", "egress"]);
+    // A live layout saved before the Preview URLs tile gets that tile, which is not what this test asks about.
+    expect(ids(result.current.layout)).toEqual(["terminal", "egress", "previews"]);
   });
 
   it("saves a removal as the marker, and the next load keeps the tile out", async () => {

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 // Workload names the workload a run was launched for: its owner and its name, the key the workloads
@@ -125,4 +126,37 @@ func unescapeOwner(seg string) (string, bool) {
 	}
 	owner := b.String()
 	return owner, owner != "" && escapeOwner(owner) == seg
+}
+
+const (
+	// ControlPlanePath is the path of wardynd's own SPIRE client identity under the trust domain.
+	ControlPlanePath = "/wardyn/control-plane"
+	// ProxyWorkloadAPIAddr is where every run proxy finds the SPIRE agent's Workload API socket when the
+	// spire provider is selected.
+	ProxyWorkloadAPIAddr = "unix:///spiffe-workload-api/spire-agent.sock"
+)
+
+// RunIDFromSPIFFEID is the run of id, a run's SPIFFE ID in trustDomain. It refuses an id in another trust
+// domain and one whose path is not RunPath's.
+func RunIDFromSPIFFEID(id, trustDomain string) (uuid.UUID, error) {
+	_, runID, err := parseRunSPIFFEID(id, trustDomain)
+	return runID, err
+}
+
+// WorkloadFromSPIFFEID is the workload of id, a run's SPIFFE ID in trustDomain: zero for an ad-hoc run.
+// It refuses as RunIDFromSPIFFEID does.
+func WorkloadFromSPIFFEID(id, trustDomain string) (Workload, error) {
+	w, _, err := parseRunSPIFFEID(id, trustDomain)
+	return w, err
+}
+
+func parseRunSPIFFEID(id, trustDomain string) (Workload, uuid.UUID, error) {
+	sid, err := spiffeid.FromString(id)
+	if err != nil {
+		return Workload{}, uuid.Nil, fmt.Errorf("identity: malformed spiffe id %q: %w", id, err)
+	}
+	if sid.TrustDomain().Name() != trustDomain {
+		return Workload{}, uuid.Nil, fmt.Errorf("identity: spiffe id %q is not in trust domain %q", id, trustDomain)
+	}
+	return ParseRunPath(sid.Path())
 }

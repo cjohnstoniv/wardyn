@@ -20,7 +20,14 @@ import (
 // call or a method value handed on, is a site of the census.
 var destructiveRunnerCalls = map[string]bool{
 	"StopSandbox": true, "StopProxy": true, "KillSandbox": true, "EndSandbox": true,
-	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true,
+	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true, "StopLostProxyAt": true,
+}
+
+// cutHelperCalls are the runner's cut helpers (internal/runner/mcp_sandbox.go), each made over one of those
+// methods: a reference to one is a site of its method, so a call moved into a helper keeps its row and guard.
+var cutHelperCalls = map[string]string{
+	"CutEgress": "StopProxy", "CutEgressAt": "StopProxyAt", "FenceEgress": "FenceProxy",
+	"EndSandboxCut": "EndSandbox", "EndSandboxCutAt": "EndSandboxAt", "CutLostEgressAt": "StopLostProxyAt",
 }
 
 // destructiveWrappers are the functions that make one of those calls for their caller. A reference to one is a site
@@ -98,6 +105,13 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/reconcile.go", "boundedTeardown", "teardown"}:        {1, guardChecked},
 	// The idle and max-age stop: the lock's loss is asked before the call, not during it.
 	{"cmd/wardynd/adapters.go", "lifecycleStopper.stop", "StopSandbox"}: {1, "unguarded: K16"},
+	// A move's removal of a sandbox it made that the run never ran on (a failed move's destination), and the move
+	// sweep's of a committed move's source once the run's row names another (moveRefLive): no revive takes either ref.
+	{"internal/api/run_move_exec.go", "Server.moveTeardownDestination", "KillSandbox"}: {1, guardNotReplaceable},
+	{"internal/api/run_move_exec.go", "Server.sweepRunMove", "KillSandbox"}:            {1, guardNotReplaceable},
+	// The end of a runner-held run whose strict outage allowance is spent, after its loss mark, and its stop where
+	// the runner cannot keep an ended sandbox: as the lost-run sweeps' own stops, the mark's lock can be lost after.
+	{"internal/api/run_outage_hold.go", "Server.endStrictRunnerRun", "StopSandbox"}: {1, "unguarded: K11"},
 
 	// The wrappers' callers. Each carries its wrapper's guard; a caller with a stronger guard of its own may name
 	// that instead.
@@ -116,8 +130,10 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_lease.go", "Server.endRun", "endSandbox"}:                                                     {1, "unguarded: K11"},
 	{"internal/api/run_lease.go", "Server.leaseRun", "endSandbox"}:                                                   {1, "unguarded: K11"},
 	{"internal/api/run_lost.go", "Server.stopLostSandbox", "endSandbox"}:                                             {1, "unguarded: K11"},
+	{"internal/api/run_outage_hold.go", "Server.endStrictRunnerRun", "endSandbox"}:                                   {1, "unguarded: K11"},
 	{"internal/api/run_agent_cut.go", "Server.copyBackCut", "cutAgent"}:                                              {1, guardNotReplaceable},
-	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "cutAgent"}:                                 {2, guardNotReplaceable},
+	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "cutAgent"}:                                 {1, guardNotReplaceable},
+	{"internal/api/run_folder_quiesce.go", "Server.quiesceRunnerRun", "cutAgent"}:                                    {1, guardNotReplaceable},
 	{"internal/api/run_contain.go", "Server.containCutItem", "cutAgent"}:                                             {1, guardNotReplaceable},
 	{"internal/api/run_contain_d1.go", "Server.d1LastCut", "cutAgent"}:                                               {1, guardNotReplaceable},
 	{"internal/api/run_kept_stop_forced.go", "Server.forceKeptStop", "cutAgent"}:                                     {1, guardNotReplaceable},
@@ -127,6 +143,13 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_tail_owner.go", "Server.tailFinalize", "finalizeRunEffects"}:                                  {1, "unguarded: K16"},
 	{"internal/api/runner_exits.go", "Server.applyRunnerExit", "finalizeRunEffects"}:                                 {1, "unguarded: K16"},
 	{"internal/api/runs_lifecycle.go", "Server.finalizeRunTailOrdered", "finalizeRunEffects"}:                        {1, "unguarded: K16"},
+}
+
+// releaseHeldSeed's stop of a held run whose task could not be released, in dispatchRun once the readback
+// confirmed: it adds no guard of its own, so it carries its wrapper's, read from stopSandboxOrAudit's row.
+func init() {
+	wrapper := destructiveCallCensus[destructiveSite{"internal/api/runs_lifecycle.go", "Server.stopSandboxOrAudit", "StopSandbox"}]
+	destructiveCallCensus[destructiveSite{"internal/api/run_held_seed.go", "Server.releaseHeldSeed", "stopSandboxOrAudit"}] = destructiveRow{1, wrapper.guard}
 }
 
 // destructiveCallSites counts each function's destructive references in files, keyed by their path.
@@ -150,8 +173,12 @@ func destructiveCallSites(files map[string]*ast.File) map[destructiveSite]int {
 			ast.Inspect(d, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.SelectorExpr:
-					if destructiveRunnerCalls[x.Sel.Name] || destructiveWrappers[x.Sel.Name] {
-						out[destructiveSite{path, fn, x.Sel.Name}]++
+					name := x.Sel.Name
+					if method, ok := cutHelperCalls[name]; ok {
+						name = method
+					}
+					if destructiveRunnerCalls[name] || destructiveWrappers[name] {
+						out[destructiveSite{path, fn, name}]++
 					}
 				case *ast.CallExpr:
 					if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "teardown" {

@@ -142,15 +142,15 @@ func (r *Registry) Persisted() bool {
 	return r.backend != nil
 }
 
-// Generation is the cache key every Masker is derived at: it moves whenever the
-// masked set changes.
-func (r *Registry) Generation() uint64 {
+// RunGeneration is the generation runID's Maskers are derived at: it moves whenever runID's masked set changes
+// (its own values, or the globals every run shares), and never for another run's values.
+func (r *Registry) RunGeneration(runID uuid.UUID) uint64 {
 	if r == nil {
 		return 0
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.gen
+	return r.runGen(runID)
 }
 
 // HasGlobalValues reports whether every value of a committed credential is
@@ -325,11 +325,14 @@ func (r *Registry) RemoveLocal(runID uuid.UUID, value []byte) {
 	if len(vs) == n {
 		return
 	}
-	if len(vs) == 0 {
-		delete(r.perRun, runID)
-	} else {
-		r.perRun[runID] = vs
-	}
 	delete(r.cached, runID)
-	r.gen++
+	if len(vs) == 0 {
+		// The run holds no values now, so its generation entry is left as an evicted run's is: counted, and
+		// bounded by the same fallback (bumpEvicted). Deleting it would lower the run's generation to gen.
+		delete(r.perRun, runID)
+		r.bumpEvicted(runID)
+		return
+	}
+	r.perRun[runID] = vs
+	r.bumpRun(runID)
 }

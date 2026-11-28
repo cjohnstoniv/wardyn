@@ -4,13 +4,19 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { ComponentSaved } from "../../../../lib/types";
+import type { ComponentSaved, HostRule } from "../../../../lib/types";
+import { REQUEST_RULES as R } from "../../components/request-rules-field";
 import { setField } from "../../../../../test/set-field";
 import { CustomComponentDialog, type CustomComponentDialogProps } from "./custom-component-dialog";
 import { aheadByHours } from "../../../../lib/test-clock";
+
+const rulesOn = vi.hoisted(() => ({ on: false as boolean | null }));
+vi.mock("../../../wardyn/model-access-context", () => ({
+  useShellSetupStatus: () => ({ status: rulesOn.on === null ? null : { features: rulesOn.on ? { scheduled_runs: false, component_request_rules: true } : undefined }, refresh: () => {} }),
+}));
 
 // The real components client over a stubbed fetch: the routes, verbs and bodies
 // below are what goes on the wire.
@@ -19,6 +25,7 @@ const json = (status: number, body: unknown) =>
 
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  rulesOn.on = false;
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -65,6 +72,8 @@ const type = async (_user: ReturnType<typeof userEvent.setup>, label: RegExp | s
   setField(screen.getByLabelText(label), text);
 };
 
+const setFieldValue = (label: string, text: string) => setField(screen.getByLabelText(label), text);
+
 describe("CustomComponentDialog: this run only", () => {
   it("adds an inline definition to the run and sends nothing to the server", async () => {
     const { props, user } = open();
@@ -81,6 +90,15 @@ describe("CustomComponentDialog: this run only", () => {
     });
     expect(props.onClose).toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("carries the image a run must use on the inline definition, and leaves it out when blank", async () => {
+    const { props, user } = open();
+    expect(screen.getByLabelText("Image")).toHaveAttribute("placeholder", "ghcr.io/acme/tools:1.2");
+    await type(user, /^Hosts it reaches/, "api.acme.test");
+    await type(user, "Image", "ghcr.io/acme/tools");
+    await user.click(screen.getByRole("button", { name: "Add to this run" }));
+    expect(props.onAttach).toHaveBeenCalledWith({ inline: { hosts: ["api.acme.test"], image: "ghcr.io/acme/tools" } });
   });
 
   it("labels the inline component when it has a name", async () => {
@@ -242,6 +260,22 @@ describe("CustomComponentDialog: save to reuse", () => {
     expect(props.onAttach).not.toHaveBeenCalled();
   });
 
+  it("a refused image shows the server's sentence in the form's own alert, and keeps what was typed", async () => {
+    const msg = 'invalid component: definition.image: "tools:" is not an image reference';
+    fetchMock.mockResolvedValue(json(422, { error: msg, reason: "component_definition_invalid" }));
+    const { props, user } = open();
+    await fill(user);
+    await type(user, "Image", "tools:");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText(msg)).toBeInTheDocument();
+    const field = screen.getByLabelText("Image");
+    expect(field).toHaveValue("tools:");
+    expect(field).not.toHaveAttribute("aria-invalid", "true");
+    expect(calls()[0].body.definition.image).toBe("tools:");
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
   it("a name already in use belongs to the name field", async () => {
     fetchMock.mockResolvedValue(json(409, { error: "you already have a component with that name", reason: "component_name_conflict" }));
     const { user } = open();
@@ -305,5 +339,144 @@ describe("CustomComponentDialog: editing a saved component", () => {
     open({ context: "saved", component: SAVED });
     expect(screen.queryByRole("button", { name: "For this run only" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+});
+
+// The member case of the request rules: the same field as the organisation's editor, in the person's dialog.
+const RULES: HostRule[] = [{ host: "api.acme.test", methods: ["GET", "HEAD"], paths: ["/v1/invoices"], effect: "allow" }];
+const WITH_RULES: ComponentSaved = { ...SAVED, definition: { hosts: ["api.acme.test", "cdn.acme.test"], request_rules: RULES } };
+const ruleGroup = () => screen.getByRole("group", { name: R.LABEL });
+const refuse = (status: number, error: string, reason: string) => json(status, { error, reason });
+
+describe("CustomComponentDialog: request rules", () => {
+  it("A new component for this run has the field after the hosts and before the secrets, and the rule goes inline", async () => {
+    rulesOn.on = true;
+    const { props, user } = open();
+    const hosts = screen.getByLabelText(/^Hosts it reaches/);
+    expect(hosts.compareDocumentPosition(ruleGroup()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ruleGroup().compareDocumentPosition(screen.getByRole("group", { name: "Secrets" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "For this run only" })).toBeInTheDocument();
+    expect(screen.getByText(R.NO_HOST)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: R.ADD })).toBeDisabled();
+
+    await type(user, /^Hosts it reaches/, "api.acme.test\n*.cdn.acme.test");
+    expect(screen.getByText(R.EMPTY)).toBeInTheDocument();
+    expect(screen.getByText("0 of 64 rules")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: R.ADD }));
+    await user.click(screen.getByRole("combobox", { name: R.HOST_OF(1) }));
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["api.acme.test"]);
+    await user.click(screen.getByRole("option", { name: "api.acme.test" }));
+    setFieldValue(R.METHODS_OF(1), "post");
+    await user.click(screen.getByRole("button", { name: "Add to this run" }));
+    expect(props.onAttach).toHaveBeenCalledWith({ inline: { hosts: ["api.acme.test", "*.cdn.acme.test"], request_rules: [{ host: "api.acme.test", methods: ["POST"], effect: "allow" }] } });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("A saved component's refusal names the rule, shows the server's sentence under the field, focuses the input and keeps everything typed", async () => {
+    rulesOn.on = true;
+    fetchMock.mockResolvedValue(refuse(422, 'invalid component: definition.request_rules[0].paths[0]: "v1/invoices" must start with /', "component_definition_invalid"));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    setFieldValue(R.PATHS_OF(1), "v1/invoices");
+    await type(user, /^Name/, "Acme v2");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const sentence = await screen.findByText('request_rules[0].paths[0]: "v1/invoices" must start with /');
+    expect(ruleGroup().contains(sentence)).toBe(true);
+    expect(within(screen.getByRole("group", { name: R.RULE(1) })).getByText(R.REFUSED)).toBeInTheDocument();
+    const paths = screen.getByLabelText(R.PATHS_OF(1));
+    expect(paths).toHaveAttribute("aria-invalid", "true");
+    expect(paths.getAttribute("aria-describedby")).toBe(sentence.id);
+    await waitFor(() => expect(paths).toHaveFocus());
+    expect(paths).toHaveValue("v1/invoices");
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("Acme v2");
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("The off and unread sentences show under the field, nothing typed is lost, and the summary still says the save was refused", async () => {
+    rulesOn.on = true;
+    const off = "This component carries request rules, and request rules are off on this deployment. An admin turns them on with features.component_request_rules.enabled.";
+    const unread = "This component carries request rules, and whether request rules are on could not be read. Try again in a moment.";
+    for (const sentence of [off, unread]) {
+      fetchMock.mockResolvedValue(refuse(422, sentence, "component_request_rules_off"));
+      const { user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+      await user.click(within(within(screen.getByRole("group", { name: R.RULE(1) })).getByRole("group", { name: R.EFFECT_OF(1) })).getByRole("button", { name: R.DENY }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      const shown = await screen.findByText(sentence);
+      expect(ruleGroup().contains(shown)).toBe(true);
+      expect(screen.getAllByText(sentence)).toHaveLength(1);
+      expect(screen.getByText(/can't be saved as written/i)).toBeInTheDocument();
+      expect(screen.queryByText(R.REFUSED)).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("request-rule")).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it("A version conflict stays in the summary, not under the field", async () => {
+    rulesOn.on = true;
+    const msg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again.";
+    fetchMock.mockResolvedValue(refuse(409, msg, "component_version_conflict"));
+    const { user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const shown = await screen.findByText(msg);
+    expect(ruleGroup().contains(shown)).toBe(false);
+    expect(screen.queryByText(R.REFUSED)).not.toBeInTheDocument();
+  });
+
+  it("off, a refusal about a stored rule shows under the remove-only row, takes focus, and keeps everything typed", async () => {
+    const sentence = 'request_rules[0].host: "api.acme.test" is not one of the component\'s hosts named exactly, with no port or port 443';
+    fetchMock.mockResolvedValue(refuse(422, `invalid component: definition.${sentence}`, "component_definition_invalid"));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    await type(user, /^Hosts it reaches/, "cdn.acme.test");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const shown = await screen.findByText(sentence);
+    expect(ruleGroup().contains(shown)).toBe(true);
+    expect(screen.getAllByText(sentence)).toHaveLength(1);
+    await waitFor(() => expect(shown).toHaveFocus());
+    expect(screen.getByLabelText(/^Hosts it reaches/)).toHaveValue("cdn.acme.test");
+    expect(screen.getByRole("button", { name: R.REMOVE_ALL })).toBeInTheDocument();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("until the setup status has answered the field is not shown, and a save sends the stored rules unchanged", async () => {
+    rulesOn.on = null;
+    fetchMock.mockResolvedValue(json(200, { ...WITH_RULES, version: 2 }));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    expect(screen.queryByRole("group", { name: R.LABEL })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(calls()[0].body.definition.request_rules).toEqual(RULES);
+  });
+
+  it("Off, a saved component with rules shows the remove-only row, and Remove rules then Save sends no rules", async () => {
+    fetchMock.mockResolvedValue(json(200, { ...WITH_RULES, version: 2 }));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    expect(screen.getByText("1 rule")).toBeInTheDocument();
+    expect(screen.getByText(R.OFF_CHIP)).toBeInTheDocument();
+    expect(screen.getByText(R.OFF_SENTENCE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: R.ADD })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: R.REMOVE_ALL }));
+    expect(screen.getByText(R.REMOVED)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(calls()).toEqual([
+      { path: `/api/v1/me/components/${SAVED.id}`, method: "PUT", body: { name: "Acme", definition: { hosts: ["api.acme.test", "cdn.acme.test"] }, expected_version: 1 } },
+    ]);
+  });
+
+  it("off, a save with the rules untouched sends them back as stored", async () => {
+    fetchMock.mockResolvedValue(json(200, { ...WITH_RULES, version: 2 }));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(calls()[0].body.definition.request_rules).toEqual(RULES);
+  });
+
+  it("Off, a component with no rules shows no field, and a new one for this run has none", () => {
+    open({ context: "saved", component: SAVED, onAttach: undefined });
+    expect(screen.queryByRole("group", { name: R.LABEL })).not.toBeInTheDocument();
+    cleanup();
+    open();
+    expect(screen.queryByRole("group", { name: R.LABEL })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a setting" })).toBeInTheDocument();
   });
 });

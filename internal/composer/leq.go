@@ -165,8 +165,10 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqToolRules(a.ToolRules, b.ToolRules) &&
 		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
 		leqDesktop(a.Desktop, b.Desktop) &&
+		leqOutage(a.Outage, b.Outage) &&
 		a.Recording.Rank() >= b.Recording.Rank() &&
-		leqDataOut(a.DataOut, b.DataOut)
+		leqDataOut(a.DataOut, b.DataOut) &&
+		a.LocalFolders.AtLeastAsStrict(b.LocalFolders)
 }
 
 // leqDesktop holds when no desktop direction of a is looser than b's (allowed < review < blocked,
@@ -175,6 +177,25 @@ func leqDesktop(a, b *types.DesktopControls) bool {
 	x, y := a.Effective(), b.Effective()
 	opens := func(p, q types.TransferRule) bool { return types.TransferStrictness(p) < types.TransferStrictness(q) }
 	return !opens(x.PasteIn, y.PasteIn) && !opens(x.CopyOut, y.CopyOut) && !opens(x.Upload, y.Upload) && !opens(x.Download, y.Download)
+}
+
+// leqOutage holds when a's outage terms are no looser than b's: no longer an allowance (unset read as the longest a site
+// can set), and strict and "end" kept where b sets them.
+func leqOutage(a, b *types.OutageControls) bool {
+	if b == nil {
+		return true
+	}
+	if a == nil {
+		a = &types.OutageControls{}
+	}
+	longest := func(m int) int {
+		if m <= 0 {
+			return types.OutageAllowanceMaxMinutes
+		}
+		return m
+	}
+	return longest(a.AllowanceMinutes) <= longest(b.AllowanceMinutes) && (a.Strict || !b.Strict) &&
+		(a.Unattended == types.OutageUnattendedEnd || b.Unattended != types.OutageUnattendedEnd)
 }
 
 // leqMounts holds when every mount of a is a (source, target) mount of b, and
@@ -210,7 +231,7 @@ func leqLLMInspection(a, b *types.LLMInspectionSpec) bool {
 
 // leqUIApps holds when every app of a is a (name, port) app of b serving the
 // same path, inbound only where b's is and with callers b's names too (a caller
-// added over b is not a narrowing). An empty a is not within a b that names
+// added over b is not a narrowing), and a desktop wherever b's is. An empty a is not within a b that names
 // apps: an empty ceiling list is no opinion to Clamp (a run may declare any
 // app), and deny_ui_apps is the limit that removes them.
 func leqUIApps(a, b []types.UIApp) bool {
@@ -220,6 +241,7 @@ func leqUIApps(a, b []types.UIApp) bool {
 	for _, app := range a {
 		if !slices.ContainsFunc(b, func(x types.UIApp) bool {
 			return x.Name == app.Name && x.Port == app.Port && x.PathOrRoot() == app.PathOrRoot() &&
+				(app.IsDesktop() || !x.IsDesktop()) &&
 				(!app.Inbound || x.Inbound && !slices.ContainsFunc(app.Callers, func(c string) bool { return !slices.Contains(x.Callers, c) }))
 		}) {
 			return false

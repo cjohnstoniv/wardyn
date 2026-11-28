@@ -93,6 +93,20 @@ const brokerOfflineBound = 30 * time.Minute
 // errBrokerOffline is brokeredToken's answer past brokerOfflineBound.
 var errBrokerOffline = errors.New("this proxy has not renewed its run token with the organisation for 30 minutes, so it adds no Git credential until it does")
 
+// brokerOfflineErr is errBrokerOffline once a runner-side proxy has gone brokerOfflineBound without renewing its
+// run token, and nil otherwise. A refusal wakes the renewer: someone is waiting on the organisation. Called at
+// brokeredToken's top, after each of its waits, and by every caller after its own last wait before the
+// credential goes on (the upstream vet can wait on DNS), so no credential is attached past the bound.
+func (p *Proxy) brokerOfflineErr() error {
+	// The via_org engine runs inside the organisation and has no renewer, so its token source only ever ages;
+	// the bound is for a runner-side proxy that cannot reach the organisation.
+	if p.engine || p.runToken.quiet(time.Now()) < brokerOfflineBound {
+		return nil
+	}
+	p.runToken.wake()
+	return errBrokerOffline
+}
+
 // gitApprovalBudget is the operator's ceiling for ONE brokered-credential
 // acquisition: the first mint call, the approval wait, and every poll inside
 // it (WARDYN_GIT_APPROVAL_TIMEOUT, default defaultGitApprovalTimeout).
@@ -120,12 +134,12 @@ var gitApprovalPollInterval = 2 * time.Second
 // gitServices is the closed set of valid ?service= values / smart-HTTP verbs.
 var gitServices = map[string]bool{"git-upload-pack": true, "git-receive-pack": true}
 
-// gitTokEntry caches one grant's minted broker credential. token/username/
-// expiresAt are guarded by reMu, which ALSO single-flights the mint so
-// concurrent sub-requests don't stampede a double-mint (fatal for a
-// single-use approval-gated grant). Backs both broker lanes (see brokeredToken).
+// gitTokEntry caches one grant's minted broker credential. token/username/expiresAt are guarded by turn, a
+// one-slot semaphore that ALSO single-flights the mint so concurrent sub-requests don't stampede a double-mint
+// (fatal for a single-use approval-gated grant). A caller waits for the turn under its own budget and leaves when
+// its request ends, which a mutex could not offer. Backs both broker lanes (see brokeredToken).
 type gitTokEntry struct {
-	reMu      sync.Mutex
+	turn      chan struct{} // capacity 1: holding it is sending into it
 	token     string
 	username  string
 	expiresAt int64 // unix ms; 0 = no expiry stated by the mint
@@ -214,6 +228,12 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		p.httpError(w, "git upstream vet failed", err, http.StatusBadGateway)
+		return
+	}
+	// The vet can wait on DNS: the credential goes on only while the offline bound still holds.
+	if err := p.brokerOfflineErr(); err != nil {
+		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
+		p.httpError(w, "git credential unavailable", err, http.StatusBadGateway)
 		return
 	}
 
@@ -333,7 +353,7 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 
 // brokeredToken returns a cached (or freshly minted) broker credential for
 // grantID, re-minting only when unset or within brokerRefreshMargin of a
-// STATED expiry. reMu single-flights per grant so concurrent sub-requests
+// STATED expiry. turn single-flights per grant so concurrent sub-requests
 // don't double-mint (fatal for a single-use approval-gated grant, whose
 // second mint 409s ErrAlreadyMinted; a PENDING 409 is waited out here).
 //
@@ -345,33 +365,56 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // the wire, so the mask registered below covers the rendering that leaves the process.
 //
 // Past brokerOfflineBound without a run-token renewal it answers errBrokerOffline, mints nothing and
-// keeps the cache.
+// keeps the cache: checked at the top, again after the wait for the grant's turn, and again after a mint, whose
+// token is cached first so the next renewal serves it without a second mint.
+//
+// The acquisition budget (gitApprovalBudget, or the request's remaining hold time under a via_org engine when that
+// is less) is armed before the wait for the turn, so a caller queued behind another's acquisition spends its own
+// budget waiting, leaves when its ctx ends, and takes only what is left into its own mint. With no budget left a
+// cached token is still served, and a caller that would have to wait or mint is refused at once.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
-	// The via_org engine runs inside the organisation and has no renewer, so its token source only ever ages;
-	// the bound is for a runner-side proxy that cannot reach the organisation.
-	if !p.engine && p.runToken.quiet(time.Now()) >= brokerOfflineBound {
-		// The refusal is what tells the renewer that someone is waiting on the organisation.
-		p.runToken.wake()
-		return "", "", errBrokerOffline
+	if err := p.brokerOfflineErr(); err != nil {
+		return "", "", err
 	}
 	p.gitTokMu.Lock()
 	e, ok := p.gitTokens[grantID]
 	if !ok {
-		e = &gitTokEntry{}
+		e = &gitTokEntry{turn: make(chan struct{}, 1)}
 		p.gitTokens[grantID] = e
 	}
 	p.gitTokMu.Unlock()
 
-	e.reMu.Lock()
-	defer e.reMu.Unlock()
+	// Under a via_org engine the request's remaining hold time bounds the acquisition too: the wait for the
+	// turn, the mint and the approval wait all spend it. A sidecar request carries none.
+	budget := holdFor(ctx, gitApprovalBudget())
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	// A free turn is taken before the ctx is consulted, so a spent budget still reads the cache below.
+	select {
+	case e.turn <- struct{}{}:
+	default:
+		if budget <= 0 {
+			return "", "", fmt.Errorf("waiting for another request's Git credential: %w", context.DeadlineExceeded)
+		}
+		select {
+		case e.turn <- struct{}{}:
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("waiting for another request's Git credential: %w", ctx.Err())
+		}
+	}
+	defer func() { <-e.turn }()
+	// The wait may have crossed the bound.
+	if err := p.brokerOfflineErr(); err != nil {
+		return "", "", err
+	}
 	if e.token != "" && (e.expiresAt == 0 ||
 		time.Now().Before(time.UnixMilli(e.expiresAt).Add(-brokerRefreshMargin))) {
 		return e.token, e.username, nil
 	}
-	// One budget for the whole acquisition below (see gitApprovalBudget), armed
-	// after the cache check so a cache hit costs nothing.
-	ctx, cancel := context.WithTimeout(ctx, gitApprovalBudget())
-	defer cancel()
+	// The mint gets only what the wait left of the budget; none left refuses before asking.
+	if err := ctx.Err(); err != nil {
+		return "", "", fmt.Errorf("getting the Git credential: %w", err)
+	}
 	// Auto-mintable grants re-mint past TTL fine; approval-gated grants are
 	// single-use, so a run outliving the ~1h token TTL fails here (a pre-existing ceiling).
 	tok, user, expMs, err := p.mintGitToken(ctx, grantID)
@@ -390,6 +433,10 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// Residual: only verbatim bytes of those renderings are caught.
 	registerBasicAuthCredential(p.maskKey, wireUser(user), tok)
 	e.token, e.username, e.expiresAt = tok, user, expMs
+	// The mint, and an approval wait inside it, may have crossed the bound too; the token stays cached.
+	if err := p.brokerOfflineErr(); err != nil {
+		return "", "", err
+	}
 	return tok, user, nil
 }
 

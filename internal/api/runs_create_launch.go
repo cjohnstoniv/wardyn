@@ -43,13 +43,15 @@ import (
 // memoizes per request and effectiveCeiling keys on OIDC claims, so the
 // handler's resolution is the only one this run gets.
 type createRunLaunch struct {
-	req           createRunRequest
-	spec          types.RunPolicySpec
-	ceiling       dispatchCeiling
-	gw            grantWiring
-	wsRefs        []types.Workspace
-	driveMounts   []types.DriveMount
-	memberDrives  map[uuid.UUID]string
+	req          createRunRequest
+	spec         types.RunPolicySpec
+	ceiling      dispatchCeiling
+	gw           grantWiring
+	wsRefs       []types.Workspace
+	driveMounts  []types.DriveMount
+	memberDrives map[uuid.UUID]string
+	// portalDrives maps each drive that came through the run's issuer portal to that portal (portalDriveMounts).
+	portalDrives  map[uuid.UUID]uuid.UUID
 	ephemeralDirs []string
 	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
 	// the sandbox's own choice.
@@ -62,6 +64,8 @@ type createRunLaunch struct {
 	overridden bool
 	// provenance: which layer set each value of the run's policy (policy_source.knobs).
 	provenance knobProvenance
+	// localFolderLayers: each local_folders wall's layer (policy_source's in-memory localFolderLayers).
+	localFolderLayers map[string]types.LocalFolderWallLayer
 	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
 	pushSets []types.PushRuleSet
 	// harnessRules are the run's tool rules per included harness (applyHarnessToolRules).
@@ -86,8 +90,8 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	return createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
-		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), portalDrives: portalDriveMounts(f.drives, created.CreatedVia), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, localFolderLayers: f.source.localFolderLayers, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 		signinImageUngranted: f.signinImageUngranted, machine: f.machine,
 	}
@@ -145,7 +149,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED.
-	image, arches, failed := s.resolveCreateRunImage(ctx, l.req, l.created, l.wsRefs)
+	image, arches, failed := s.launchRunImage(ctx, l.req, l.created, l.wsRefs)
 	if failed {
 		return
 	}
@@ -183,6 +187,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// not hold. See user_drives_run.go's own note.
 			Drives:       drives,
 			MemberDrives: memberDrives,
+			PortalDrives: l.portalDrives,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,
@@ -190,7 +195,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			UserMounts:       s.userMountPosture(l.wsRefs),
 			Components:       l.comps.dispatchWith(l.gw.githubAPI),
 			PolicyOverridden: l.overridden,
-			Provenance:       l.provenance,
+			Provenance:       l.provenance, LocalFolderLayers: l.localFolderLayers,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,

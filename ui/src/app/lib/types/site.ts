@@ -10,6 +10,7 @@
 // dispatch/injection time.
 
 import type { RecordingLevel } from "./policy";
+import type { RunnerTrustClass } from "./runners";
 
 // One outbound redirect: requests to `from` are substituted to `to` (from's
 // host dropped from egress, to's host allowed), with an optional token
@@ -37,11 +38,46 @@ export interface RunnerSettings {
   // A new local run is refused on a personal-trust runner. Off by default, and always on the wire
   // (false included); set only by PUT /runners/settings.
   require_managed_device: boolean;
+  // The MDM device CA bundle (PEM) and the URL of its full CRL: a macOS sandbox then needs a device
+  // certificate that chains to it. Both or neither; set only by PUT /runners/settings. Omitted when unset.
+  mdm_device_ca_pem?: string;
+  mdm_device_crl_url?: string;
+  // Machine kinds a new local run may not take on a runner of a trust class (deny-only; a macOS VM still needs a
+  // managed_device runner). Always on the wire, [] when none; set only by PUT /runners/settings.
+  machine_kind_denials?: readonly MachineKindDenial[];
+}
+
+export interface MachineKindDenial {
+  trust_class: RunnerTrustClass;
+  machine_kind: "container" | "linux_vm" | "macos_vm";
+  // The organisation site the denial holds at, by id; left out, it holds at every site.
+  site_id?: string;
+}
+
+// types.AssistantProviderMark (internal/types/assistant.go), the json tags verbatim. No models means the
+// provider's own harness model.
+export interface AssistantProviderMark {
+  readonly provider_id: string;
+  readonly compose: boolean;
+  readonly review: boolean;
+  readonly models: readonly string[];
+}
+
+// types.AssistantSettings (SiteConfig.assistant), the json tags verbatim. Absent is every purpose off.
+export interface AssistantSettings {
+  readonly compose: boolean;
+  readonly review: boolean;
+  readonly run_history_counts: boolean;
+  readonly never_sent_kinds: readonly string[];
+  readonly providers: readonly AssistantProviderMark[];
 }
 
 export interface SiteConfig {
   // Dedicated runner administration owns changes; generic PUT retains this block.
   readonly runners?: RunnerSettings;
+  // types.SiteConfig.Assistant: the organisation's assistant settings. PUT /assistant/settings owns changes;
+  // the generic PUT carries the block forward and refuses a changed one.
+  readonly assistant?: AssistantSettings;
   upstream_proxy_secret_ref?: string;
   // The corporate upstream proxy URL written IN THE CLEAR — topology, not a
   // credential. Must not embed a userinfo (user:pass@); the server 400s that
@@ -139,8 +175,15 @@ export interface SiteConfig {
   recording?: SiteRecording;
   // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
   macos_vm?: SiteMacOSVM;
+  // types.SiteConfig.DesktopWatermark: whether every desktop view must show the viewer's name and the run id.
+  desktop_watermark?: SiteDesktopWatermark;
   // types.SiteConfig.Images: the organisation's image rules.
   images?: SiteImages;
+  // types.SiteConfig.Sessions: how open sessions behave while Wardyn cannot check access.
+  sessions?: SiteSessions;
+  // types.SiteConfig.FeatureSwitches: the features new in 0.11, each off until an admin turns it on. Absent reads
+  // every one off.
+  features?: SiteFeatureSwitches;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -164,6 +207,7 @@ export interface SiteConfig {
   // precisely so health.putSiteConfig can strip it — an untyped key rides
   // invisibly through the GET-spread idiom every writer uses.
   readonly onboarding_completed_at?: string;
+  outage_allowance_minutes?: number;
 }
 
 // types.WithheldScmHost (internal/types/site_config.go), the json tags verbatim.
@@ -185,6 +229,8 @@ export interface ComponentSettings {
   require_vault_for_credentials?: boolean;
   deny_resident_delivery?: boolean;
   autonomy_cap?: "" | "L1" | "L0";
+  /** The organisation's Local MCP servers setting; unset reads on. */
+  local_mcp_servers?: "off" | "on";
 }
 
 // policyref.Contact — who owns a policy and how a person it refuses asks for a
@@ -270,6 +316,42 @@ export interface ModelProvidersRead extends ModelProviders {
   // Whether a bedrock_sso provider can send run identity on this install: only
   // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
   gateway_identity_bedrock_sso: boolean;
+  // Server facts, not stored and not in the ETag. Each provider's service grant
+  // state by provider id, and the removed grants whose secret is still to be
+  // deleted (Go's types.ServiceGrantStatus and types.ServiceGrantCleanup).
+  service_grants?: Record<string, ServiceGrantStatus>;
+  service_grant_cleanups?: ServiceGrantCleanup[];
+}
+
+export interface ServiceGrantStatus {
+  client_id: string;
+  client_secret_ref: string;
+  // ok, failing or not_yet, read from the live replicas' rows with the live digest only.
+  state: string;
+  replicas: ServiceGrantReplicaStatus[];
+}
+
+// One replica's last outcome for a service grant (Go's types.ServiceGrantReplicaStatus).
+export interface ServiceGrantReplicaStatus {
+  host: string;
+  live: boolean;
+  state: string;
+  attempted_at: string;
+  last_ok_at?: string;
+  valid_until?: string;
+  reason?: string;
+  oauth_error?: string;
+  http_status?: number;
+  egress?: string;
+}
+
+// A pending clean-up of a removed grant's secret (Go's types.ServiceGrantCleanup).
+export interface ServiceGrantCleanup {
+  uid: string;
+  provider_id: string;
+  reason: string;
+  since: string;
+  client_secret_ref: string;
 }
 
 // Closed set, server-validated.
@@ -280,7 +362,8 @@ export type ModelProviderKind =
   | "openai_api_key"
   | "bedrock_bearer"
   | "custom_endpoint"
-  | "local_model";
+  | "local_model"
+  | "azure_foundry";
 
 // A provider's opt-in to run identity. audience is the token's aud: what this
 // provider's gateway looks for, and no other address's.
@@ -294,9 +377,9 @@ export interface ModelProviderGatewayIdentity {
 }
 
 // A custom_endpoint's sign-in (Go's types.ProviderOIDC): where each person signs in and as which
-// client. PKCE, openid and offline_access are always on and are not settings.
+// client. PKCE and offline_access are always on and are not settings; openid is on unless require_id_token is false.
 export interface ProviderOIDC {
-  // Required: discovery and the identity token's verification both come from it.
+  // Required: discovery and, unless require_id_token is false, the identity token's verification both come from it.
   issuer: string;
   // Overrides of what discovery names. The editor does not show them; a save carries them through.
   authorize_url?: string;
@@ -304,10 +387,29 @@ export interface ProviderOIDC {
   client_id: string;
   // The name of an operator secret holding the client's secret; absent is a public client.
   client_secret_ref?: string;
-  // Asked for beside openid and offline_access. The server keeps the list as sent, duplicates included.
+  // Asked for beside offline_access and, unless require_id_token is false, openid. The server keeps the list as sent, duplicates included.
   scopes: string[];
   // "console" (also absent) or "none".
   identity_binding?: "console" | "none" | (string & {});
+  // Set through the API or the policy file only: false signs in against an authority that grants no openid
+  // (identity_binding "none" only). Absent is true. The editor shows no control for it and keeps what is stored.
+  require_id_token?: boolean;
+  // Set through the API or the policy file only (Go's types.ProviderServiceGrant): the client credentials a
+  // listed service identity's runs get a token with. The editor shows no control for it and keeps what is stored.
+  service_grant?: ProviderServiceGrant;
+}
+
+// A provider's service grant. The client's secret is never part of it: it is written through its own route.
+export interface ProviderServiceGrant {
+  grant_type: "client_credentials";
+  token_url: string;
+  client_id: string;
+  scope?: string;
+  audience?: string;
+  // client_secret_basic (also absent) or client_secret_post.
+  client_auth?: "client_secret_basic" | "client_secret_post" | (string & {});
+  // The service principals (service:<name>) that may use the grant.
+  service_identities: string[];
 }
 
 // One provider. No credential lives here — each person supplies their own.
@@ -342,6 +444,8 @@ export interface ModelProvider {
   extra_headers?: ProviderHeader[];
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
+  // azure_foundry only: the data-plane endpoint and the one route it serves.
+  azure?: AzureSettings;
   // local_model only: the model allowlist and the caps on each request.
   local?: LocalModelSettings;
   // The agents this provider may serve, with the settings for each.
@@ -377,6 +481,12 @@ export interface BedrockSettings {
   sso_start_url?: string;
   sso_account_id?: string;
   sso_role_name?: string;
+}
+
+/** Go: types.AzureSettings (ModelProvider.azure). */
+export interface AzureSettings {
+  endpoint?: string;
+  route?: "anthropic" | "openai_v1";
 }
 
 // Go's types.ProviderHeader (internal/types/model_provider.go).
@@ -535,6 +645,9 @@ export interface MemberDrivePolicy {
   storage_class?: string;
   // Lets a run keep its work folder as its person's drive. Absent = off; no effect unless enabled.
   keep_main_drive?: boolean;
+  // Lets a person make a team drive shared with their governance unit and the units below it. Absent = off; it also
+  // needs storage.user_drive.team_drives and a Docker deployment.
+  team_drives?: boolean;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.
@@ -639,4 +752,95 @@ export interface SiteMacOSVM {
   kept_machine_idle_days?: number;
   /** Kept machines one person may have. 1 to 4; absent reads 1. */
   max_kept_machines_per_person?: number;
+}
+
+/** Go: types.SiteSessions (SiteConfig.sessions). */
+export interface SiteSessions {
+  /** Seconds an open session keeps going while no check of the person's access answers. 0 to 120; absent reads 30. */
+  unconfirmed_budget_s?: number;
+}
+
+/** Go: types.SiteDesktopWatermark (SiteConfig.desktop_watermark). */
+export interface SiteDesktopWatermark {
+  required?: boolean;
+}
+
+/** Go: types.SiteFeatureSwitches (SiteConfig.features): one key per feature new in 0.11. Absent reads every one off. */
+export interface SiteFeatureSwitches {
+  org_sites?: OrgSitesFeature;
+  windows_vm?: WindowsVMFeature;
+  run_move?: RunMoveFeature;
+  machine_snapshots?: MachineSnapshotsFeature;
+  local_window?: LocalWindowFeature;
+  preview_urls?: PreviewURLsFeature;
+  component_request_rules?: ComponentRequestRulesFeature;
+  org_runner_drives?: OrgRunnerDrivesFeature;
+}
+
+/** Go: types.OrgSitesFeature (features.org_sites). Sites that group runner pools and drives. */
+export interface OrgSitesFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.WindowsVMFeature (features.windows_vm). Windows VM sandboxes from the organisation's own images. */
+export interface WindowsVMFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.RunMoveFeature (features.run_move). Moving a paused run to another machine. */
+export interface RunMoveFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+  /** A run may also move onto a person's own runner. Absent reads off. */
+  to_personal_runners?: boolean;
+  /** The most one move carries, in GiB. Absent or 0 reads the move's default. */
+  max_carried_gib?: number;
+}
+
+/** Go: types.MachineSnapshotsFeature (features.machine_snapshots). Snapshots, forks and warm pools of Linux VM sandboxes. */
+export interface MachineSnapshotsFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+  /** How many booted, unused VMs each runner keeps ready, per image. */
+  warm_pool?: WarmPoolTarget[];
+  /** A VM sleeps this many seconds after its last viewer leaves. Absent or 0: never. */
+  sleep_after_disconnect_sec?: number;
+  /** The snapshots one person may keep. Absent or 0 reads the default. */
+  max_per_person?: number;
+  /** A snapshot nobody used for this many days is deleted. Absent or 0 reads the default. */
+  idle_days?: number;
+}
+
+/** Go: types.WarmPoolTarget (features.machine_snapshots.warm_pool). One image and its count. */
+export interface WarmPoolTarget {
+  image: string;
+  count: number;
+}
+
+/** Go: types.LocalWindowFeature (features.local_window). A window on the person's own computer onto a Linux VM run. */
+export interface LocalWindowFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.PreviewURLsFeature (features.preview_urls). Preview URLs for a run's ports. */
+export interface PreviewURLsFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+  /** The widest a preview may be. Absent reads private. */
+  max_visibility?: "private" | "org" | "public";
+}
+
+/** Go: types.ComponentRequestRulesFeature (features.component_request_rules). Request rules on custom components. */
+export interface ComponentRequestRulesFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.OrgRunnerDrivesFeature (features.org_runner_drives). Drives kept on an organisation Kubernetes runner. */
+export interface OrgRunnerDrivesFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
 }

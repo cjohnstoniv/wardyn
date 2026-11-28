@@ -87,9 +87,19 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, runID uuid.U
 	go p.drain()
 	go p.resizeWorker()
 	go p.tellDropped()
-	// Open the exec now that the reader runs.
+	// Open the exec now that the reader runs. An open cancelled by an eviction or a cut leaves the socket
+	// to whoever ended it: that closer writes its own close frame (4401, a take-over's), and ending the pump
+	// here cancels the reader's context, which tears the connection down before the frame is written.
+	// A displaced open is noted, as for an open session displaced later.
 	go func() {
-		if err := attach(); err != nil {
+		err := attach()
+		switch {
+		case err == nil:
+		case errors.Is(err, errAttachCancelled):
+			if p.holder.evicted.Load() {
+				p.note("attach failed")
+			}
+		default:
 			p.end("attach failed")
 		}
 	}()
@@ -126,11 +136,16 @@ type attachPumpState struct {
 
 // end records why the pump ended and cancels it.
 func (p *attachPumpState) end(reason string) {
+	p.note(reason)
+	p.cancel()
+}
+
+// note records why the pump ended without cancelling it. attachPump returns the first reason recorded.
+func (p *attachPumpState) note(reason string) {
 	select {
 	case p.reasonC <- reason:
 	default:
 	}
-	p.cancel()
 }
 
 // ping is the liveness probe (attachPingInterval): a silent PTY produces no
@@ -363,7 +378,7 @@ func (p *attachPumpState) resizeWorker() {
 			if !p.holder.ready.wait(p.ctx) {
 				return
 			}
-			if !p.holder.canWrite() {
+			if !p.holder.canDeliver() {
 				continue
 			}
 			if err := p.sess.Resize(p.ctx, m.Cols, m.Rows); err != nil {

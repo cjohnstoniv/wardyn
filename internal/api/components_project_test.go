@@ -40,3 +40,53 @@ func TestOrgComponentView_MCPRowIsAnMCPCard(t *testing.T) {
 		}
 	}
 }
+
+// The person's view carries an organisation component's image requirement, and
+// no "image" key when the admin set none.
+func TestOrgComponentView_CarriesTheImageRequirement(t *testing.T) {
+	const image = "ghcr.io/acme/tools:1.2"
+	with := orgComponentView(types.Component{ID: uuid.New(), Name: "Tools", Definition: types.ComponentDefinition{
+		Hosts: []string{"tools.example"}, Image: image,
+	}})
+	if with.Image != image {
+		t.Errorf("Image = %q, want %q", with.Image, image)
+	}
+	if raw := string(mustJSON(with)); !strings.Contains(raw, `"image":"`+image+`"`) {
+		t.Errorf("the view's JSON has no image: %s", raw)
+	}
+	without := orgComponentView(types.Component{ID: uuid.New(), Name: "Plain", Definition: types.ComponentDefinition{Hosts: []string{"plain.example"}}})
+	if without.Image != "" {
+		t.Errorf("Image = %q, want none", without.Image)
+	}
+	if raw := string(mustJSON(without)); strings.Contains(raw, `"image"`) {
+		t.Errorf("the view's JSON has an image key without a requirement: %s", raw)
+	}
+}
+
+// The owning-unit answer withholds an MCP sandbox policy's host paths below the super admin tier, on a copy,
+// and leaves a row with no sandbox policy as stored.
+func TestRedactComponentForRead(t *testing.T) {
+	mounts := []types.WorkspaceMount{{Source: "/srv/host-secret-path", Target: "/data"}}
+	c := types.Component{ID: uuid.New(), Name: "Files", Definition: types.ComponentDefinition{
+		MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
+			Launch:  &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "files-server@1.2.3"}},
+			Sandbox: &types.ComponentMCPSandbox{Policy: types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{WorkspaceMounts: &mounts}}}},
+	}}
+	for _, tier := range []specReadTier{specReadSecurity, specReadMember} {
+		raw := string(mustJSON(redactComponentForRead(c, tier)))
+		// json.Marshal escapes "<" and ">", so look for the marker as it is written on the wire.
+		if strings.Contains(raw, "/srv/host-secret-path") || !strings.Contains(raw, strings.Trim(string(mustJSON(mountSourceWithheld)), `"`)) {
+			t.Errorf("tier %d: %s, want the mount source withheld", tier, raw)
+		}
+	}
+	if got := (*c.Definition.MCP.Sandbox.Policy.Overlay.WorkspaceMounts)[0].Source; got != "/srv/host-secret-path" {
+		t.Errorf("the stored row was changed in place: source %q", got)
+	}
+	if raw := string(mustJSON(redactComponentForRead(c, specReadFull))); !strings.Contains(raw, "/srv/host-secret-path") {
+		t.Errorf("full tier: %s, want the row whole", raw)
+	}
+	plain := types.Component{ID: uuid.New(), Name: "Plain", Definition: types.ComponentDefinition{Hosts: []string{"api.example"}}}
+	if got, want := string(mustJSON(redactComponentForRead(plain, specReadMember))), string(mustJSON(plain)); got != want {
+		t.Errorf("a row with no sandbox policy = %s, want %s", got, want)
+	}
+}

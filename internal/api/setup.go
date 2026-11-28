@@ -161,9 +161,17 @@ type SetupFeatures struct {
 	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
 	// each agent its own task (#1987).
 	MultiAgentTasks bool `json:"multi_agent_tasks"`
-	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
-	// MCP server that runs in the run's sandbox.
+	// MCPLocalServers always reads false: WARDYN_MCP_LOCAL_SERVERS is no longer
+	// read, and an MCP server that starts from a command runs only in a sandbox
+	// of its own (MCPOwnSandbox, LocalMCPServers).
 	MCPLocalServers bool `json:"mcp_local_servers"`
+	// MCPOwnSandbox is WARDYN_MCP_OWN_SANDBOX: MCP servers that start from a
+	// command, each in a sandbox of its own, are turned on for this deployment.
+	MCPOwnSandbox bool `json:"mcp_own_sandbox,omitempty"`
+	// LocalMCPServers is MCPOwnSandbox and the organisation's Local MCP servers
+	// setting, read now: a run may have such a server. Absent when either is off
+	// or when the site config could not be read, which the console reads as off.
+	LocalMCPServers bool `json:"local_mcp_servers,omitempty"`
 	// MacOSVMs is WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off, so the
 	// status of a deployment that leaves it off reads exactly as before.
 	MacOSVMs bool `json:"macos_vms,omitempty"`
@@ -173,14 +181,29 @@ type SetupFeatures struct {
 	// SupportSessions is WARDYN_SUPPORT_SESSIONS: an admin may ask to help inside someone's run. Absent when off,
 	// so the console shows no Request help button.
 	SupportSessions bool `json:"support_sessions,omitempty"`
+	// The site config's features block (site_features.go): each is true only when this release can turn the feature on
+	// and the site config turns it on. Absent when off or when the site config could not be read.
+	OrgSites              bool `json:"org_sites,omitempty"`
+	WindowsVMs            bool `json:"windows_vms,omitempty"`
+	RunMove               bool `json:"run_move,omitempty"`
+	MachineSnapshots      bool `json:"machine_snapshots,omitempty"`
+	LocalWindow           bool `json:"local_window,omitempty"`
+	PreviewURLs           bool `json:"preview_urls,omitempty"`
+	ComponentRequestRules bool `json:"component_request_rules,omitempty"`
+	OrgRunnerDrives       bool `json:"org_runner_drives,omitempty"`
+	// PreviewMaxVisibility is features.preview_urls.max_visibility while preview URLs are on: private (also an absent
+	// value), org or public.
+	PreviewMaxVisibility string `json:"preview_max_visibility,omitempty"`
 }
 
-func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
+func setupFeatures(multiAgentTasks, macWindow, localMCP bool) SetupFeatures {
+	ownSandbox := envEnabled(envMCPOwnSandbox)
 	return SetupFeatures{
 		ScheduledRuns:   envEnabled(envScheduledRuns),
 		KubectlCLI:      kubectlCLIOn(),
 		MultiAgentTasks: multiAgentTasks,
-		MCPLocalServers: envEnabled(envMCPLocalServers),
+		MCPOwnSandbox:   ownSandbox,
+		LocalMCPServers: ownSandbox && localMCP,
 		MacOSVMs:        envEnabled(envMacOSVMs),
 		MacWindow:       macWindow,
 		SupportSessions: envEnabled(envSupportSessions),
@@ -239,6 +262,10 @@ type SetupRunner struct {
 	// netpolCheckedAt is when the k8s canary check that produced the verdict
 	// ran, for the egress-containment row. Never on the wire.
 	netpolCheckedAt time.Time
+	// untaintedPools are the in-process substrate's classes whose pool general pods can reach. Never on the wire.
+	untaintedPools []types.ConfinementClass
+	// anyNodeClasses are the in-process substrate's classes whose RuntimeClass sets no scheduling. Never on the wire.
+	anyNodeClasses []types.ConfinementClass
 }
 
 // SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
@@ -364,14 +391,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			checks = append(checks, chk)
 		}
 		// runner_limits (runners that take no run until limits are set) and credential_delivery (stored
-		// delivery rows the server cannot build). Never Blocking.
-		checks = append(checks, s.runnerPolicyRows(ctx)...)
+		// delivery rows the server cannot build), and default_barrier_unset. Never Blocking.
+		checks = append(checks, s.runnerPolicyRows(ctx, rnr)...)
 		// recording: whether session recording is on, and how to turn it on. Never Blocking.
 		checks = append(checks, s.recordingRows()...)
 		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
 		if chk, ok := s.runnerArchImagesRow(ctx); ok {
 			checks = append(checks, chk)
 		}
+		// k8s_isolated_pool and k8s_class_any_node: where barrier pods and general pods can share nodes. Never Blocking.
+		checks = append(checks, s.classPoolRows(ctx, rnr.untaintedPools, rnr.anyNodeClasses)...)
 		// self_host_runner_grant and defaults_changed: what an upgrade changed on this deployment's own
 		// configuration. Never Blocking. Both need the site config; a failed read leaves them out.
 		if siteCfgOK {
@@ -416,6 +445,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
 		checks = append(checks, chk)
 	}
+	checks = appendSSODiscoveryCheck(checks, s.cfg.OIDC)
 	if chk, ok := governAdminRunsCheck(s.cfg.GovernAdminRuns, s.governAdminRunsExempts("recording"), oidcConfigured); ok {
 		checks = append(checks, chk)
 	}
@@ -486,7 +516,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
-		Features:       setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed()),
+		Features:       siteFeatureFlags(setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed(), localMCPOnRead(siteCfg, siteCfgOK)), siteCfg, siteCfgOK),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
@@ -706,6 +736,8 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 	if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
 		out.netpolCheckedAt = c.NetworkPolicyCheck.At
 	}
+	out.untaintedPools = c.UntaintedPools
+	out.anyNodeClasses = c.AnyNodeClasses
 	return out, k8sNetpolVerdict(out.Driver, c)
 }
 

@@ -71,6 +71,8 @@ type OrgComponentView struct {
 	// may attach it. OwningUnitName is the unit's name.
 	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
 	OwningUnitName string     `json:"owning_unit_name,omitempty"`
+	// Image is the image a run must use to attach the component (#1972), when the admin set one.
+	Image string `json:"image,omitempty"`
 }
 
 // CLIView is the non-secret face of a CLI row: its kind and what it pins.

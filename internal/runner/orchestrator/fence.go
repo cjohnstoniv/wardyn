@@ -11,6 +11,7 @@ import (
 
 var (
 	_ runner.ProxyFencer            = (*Orchestrator)(nil)
+	_ runner.FencedStarter          = (*Orchestrator)(nil)
 	_ runner.ProxyGenerationStopper = (*Orchestrator)(nil)
 	_ runner.ProxyReviverAt         = (*Orchestrator)(nil)
 )
@@ -27,6 +28,20 @@ func (o *Orchestrator) FenceProxy(ctx context.Context, ref string) error {
 		return runner.ErrEndUnsupported
 	}
 	return f.FenceProxy(ctx, ref)
+}
+
+// StartFenced forwards a fenced start to ref's substrate (runner.FencedStarter). A substrate that cannot start a
+// stopped sandbox with no network answers runner.ErrEndUnsupported.
+func (o *Orchestrator) StartFenced(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.FencedStarter)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return f.StartFenced(ctx, ref)
 }
 
 // StopProxyAt forwards a stop that names a policy generation to ref's substrate

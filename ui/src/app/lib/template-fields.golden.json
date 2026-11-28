@@ -36,6 +36,36 @@
       "namespace",
       "name"
     ],
+    "CeilingOverlay": [
+      "allowed_domains",
+      "denied_domains",
+      "allow_all_egress",
+      "refuse_ip_literals",
+      "first_use_approval",
+      "first_use_hold_seconds",
+      "max_holds",
+      "allowed_methods",
+      "host_rules",
+      "min_confinement_class",
+      "eligible_grants",
+      "auto_stop_after_sec",
+      "workspace_mounts",
+      "workspace_repos",
+      "llm_inspection",
+      "ui_apps",
+      "resources",
+      "tool_rules",
+      "git_push_any_branch",
+      "push_rules",
+      "azure_devops_capabilities",
+      "github_capabilities",
+      "harness_inner_walls",
+      "desktop",
+      "outage",
+      "recording",
+      "data_out",
+      "local_folders"
+    ],
     "ComponentCLI": [
       "kind",
       "azure",
@@ -49,7 +79,9 @@
       "secrets",
       "config",
       "cli",
-      "mcp"
+      "mcp",
+      "image",
+      "request_rules"
     ],
     "ComponentDelivery": [
       "mode",
@@ -64,11 +96,20 @@
       "url",
       "transport",
       "launch",
-      "gateway_audience"
+      "gateway_audience",
+      "sandbox"
     ],
     "ComponentMCPLaunch": [
       "command",
       "args"
+    ],
+    "ComponentMCPSandbox": [
+      "policy"
+    ],
+    "ComponentMCPSandboxPolicy": [
+      "mode",
+      "overlay",
+      "spec"
     ],
     "ComponentRef": [
       "id",
@@ -151,12 +192,33 @@
       "intercept_tls",
       "block_min_severity"
     ],
+    "LocalFolderRules": [
+      "deny_remote",
+      "deny_pull",
+      "max_push_mib",
+      "max_pull_mib",
+      "deny"
+    ],
+    "OutageControls": [
+      "allowance_minutes",
+      "strict",
+      "unattended"
+    ],
     "PushRuleOverride": [
       "provider",
       "host",
       "org",
       "deny_paths",
       "require_review_paths"
+    ],
+    "PushRulesOverlay": [
+      "deny_paths",
+      "max_inspect_pack_mib",
+      "require_review_paths",
+      "hold_seconds",
+      "deny_new_executables",
+      "max_file_size_mib",
+      "deny_all"
     ],
     "PushRulesSpec": [
       "deny_paths",
@@ -176,6 +238,23 @@
       "memory_mib",
       "pids_limit",
       "disk_mib"
+    ],
+    "ResourcesOverlay": [
+      "cpu_millis",
+      "memory_mib",
+      "pids_limit",
+      "disk_mib"
+    ],
+    "RunContainer": [
+      "name",
+      "image",
+      "command",
+      "ports",
+      "resources"
+    ],
+    "RunContainerResources": [
+      "cpu_millis",
+      "memory_mib"
     ],
     "RunEgressOverrides": [
       "first_use_approval",
@@ -245,7 +324,8 @@
       "port",
       "path",
       "inbound",
-      "callers"
+      "callers",
+      "kind"
     ],
     "WorkspaceMount": [
       "source",
@@ -503,6 +583,22 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter.",
+      "section": "run_wide"
+    },
+    {
+      "name": "outage",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The site's outage allowance applies. A template can only make the terms stricter: a shorter allowance, the run ended at it, or an unattended run ended in a long outage.",
+      "section": "run_wide"
+    },
+    {
+      "name": "local_folders",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No walls for folders from a person's computer beyond the organisation's. A template can only add walls.",
       "section": "run_wide"
     },
     {
@@ -832,6 +928,11 @@
       "why": "A macOS VM's base is chosen at each launch, with the kind of sandbox."
     },
     {
+      "name": "windows_image",
+      "excluded": "launch",
+      "why": "A Windows VM's image is chosen at each launch, with the kind of sandbox."
+    },
+    {
       "name": "desktop_window",
       "excluded": "launch",
       "why": "A window onto a macOS VM is asked for at each launch by the person at that Mac; a template never opens one for whoever uses it."
@@ -909,6 +1010,15 @@
       "omitted": "unset_optional",
       "empty": "value",
       "meaning": "The command is not kept running: it runs once and the run ends with it. A present service is a choice to keep it running; its restart, port and health check follow the defaults the server fills.",
+      "section": "run_wide"
+    },
+    {
+      "name": "containers",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No extra container runs beside the agent.",
+      "sensitive": true,
       "section": "run_wide"
     },
     {

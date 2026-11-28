@@ -239,6 +239,15 @@ describe("DesktopViewer", () => {
     expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("Invalid, expired, or already-used attach ticket");
   });
 
+  it("a door's refusal gets the denied card with the gateway's words", () => {
+    render(<DesktopViewer boot={{ state: "refused", said: "attaching is not allowed", cause: "denied" }} />);
+    const card = screen.getByRole("region", { name: DESKTOP.linkBlocked });
+    for (const s of [DESKTOP.deniedBody, DESKTOP.deniedWallBody, DESKTOP.deniedSetByBody, DESKTOP.whyEnforcedBody, DESKTOP.deniedCanChangeBody, DESKTOP.gatewaySaid])
+      expect(within(card).getByText(s)).toBeInTheDocument();
+    expect(within(card).queryByText(DESKTOP.linkBody)).toBeNull();
+    expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("attaching is not allowed");
+  });
+
   it("a background watch says so, sends no input, and a re-check's end has its own words and doesn't retry", () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];
@@ -308,6 +317,35 @@ describe("DesktopViewer", () => {
     }
     open().sockets[0].end(4001, "something else");
     expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
+  });
+
+  it("names the kind when a window is open", () => {
+    for (const [kind, title, other] of [
+      ["macos_vm", DESKTOP.windowOpenTitle, DESKTOP.windowOpenTitleLinuxVM],
+      ["linux_vm", DESKTOP.windowOpenTitleLinuxVM, DESKTOP.windowOpenTitle],
+    ] as const) {
+      const sockets: FakeSocket[] = [];
+      render(<DesktopViewer boot={{ ...OPEN, machine_kind: kind }} connect={() => { const s = new FakeSocket(); sockets.push(s); return s; }} small={false} />);
+      sockets[0].end(WINDOW_OPEN);
+      expect(screen.getByText(title)).toBeInTheDocument();
+      expect(screen.queryByText(other)).toBeNull();
+      expect(screen.getByText(DESKTOP.windowOpenBody)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("a Linux VM desktop watched while a window is open says why in its view-only strip, on any screen", () => {
+    for (const small of [false, true]) {
+      const sockets: FakeSocket[] = [];
+      render(<DesktopViewer boot={{ ...OPEN, machine_kind: "linux_vm", view_only: true }} connect={() => { const s = new FakeSocket(); sockets.push(s); return s; }} small={small} />);
+      sockets[0].serve(HANDSHAKE);
+      expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
+      expect(screen.getByText(DESKTOP.viewOnlyBodyWindow)).toBeInTheDocument();
+      expect(screen.queryByText(DESKTOP.viewOnlyBody)).toBeNull();
+      expect(screen.queryByText(DESKTOP.phoneBody)).toBeNull();
+      expect(screen.getByTestId("desktop-canvas")).toHaveAttribute("tabindex", "-1");
+      cleanup();
+    }
   });
 
   it("stops on what the desktop sent, says the viewer's reason, and dials again only on Try again", () => {

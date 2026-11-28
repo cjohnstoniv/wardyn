@@ -297,14 +297,11 @@ func (o *Orchestrator) ProbeSubstrate(ctx context.Context) runner.SubstrateState
 // wired substrate that implements it — the same single fan-out ProbeDrive and
 // ImagePresent take.
 //
-// It does NOT try the next substrate on a refusal, and that is deliberate on
-// the one call here that destroys data: a second attempt would ask a
-// DIFFERENT substrate to delete an object named by a drive the first one
-// already refused, which is how a reclaim aimed at one deployment's storage
-// lands on another's. A drive's backend is scoped to this deployment's
-// dispatch target before the API ever calls this (driveMountFor's
-// backend/target check), so with the one substrate production wires there is
-// nothing to fall through to.
+// It does NOT try the next substrate on a refusal, and that is deliberate on the one call here that destroys data: a
+// second attempt would ask a DIFFERENT substrate to delete an object named by a drive the first one already refused,
+// which is how a reclaim aimed at one deployment's storage lands on another's. A drive's backend is scoped to this
+// deployment's dispatch target before the API ever calls this (driveMountFor's backend/target check), so with the one
+// substrate production wires there is nothing to fall through to.
 func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount) (runner.DriveReclaimOutcome, error) {
 	for _, s := range o.locals() {
 		if dr, ok := s.(runner.DriveReclaimer); ok {
@@ -329,6 +326,20 @@ func (o *Orchestrator) CanManageDrives(ctx context.Context) error {
 		}
 	}
 	return runner.ErrDriveLifecycleUnavailable
+}
+
+// DriveHolder implements runner.DriveHolderChecker by asking the same substrate ReclaimDrive would use: the first
+// local that is a DriveReclaimer. One that cannot answer is ErrDriveHolderUnknown, never "no holder".
+func (o *Orchestrator) DriveHolder(ctx context.Context, mount types.DriveMount) (string, error) {
+	for _, s := range o.locals() {
+		if _, ok := s.(runner.DriveReclaimer); ok {
+			if h, ok := s.(runner.DriveHolderChecker); ok {
+				return h.DriveHolder(ctx, mount)
+			}
+			return "", runner.ErrDriveHolderUnknown
+		}
+	}
+	return "", runner.ErrDriveHolderUnknown
 }
 
 // CheckFit implements runner.FitChecker by delegating to the first wired substrate that
@@ -367,6 +378,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	locals := o.locals()
 	drives := len(locals) > 0
 	managed := len(locals) > 0
+	extras := len(locals) > 0
 	var enforcement types.StorageEnforcement
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
@@ -398,14 +410,18 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.NetworkPolicyCheck = runner.WorseNetPolCheck(caps.NetworkPolicyCheck, cs.NetworkPolicyCheck)
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
 		caps.ExecOutputUncaptured = caps.ExecOutputUncaptured || cs.ExecOutputUncaptured
+		caps.UntaintedPools = append(caps.UntaintedPools, cs.UntaintedPools...)
+		caps.AnyNodeClasses = append(caps.AnyNodeClasses, cs.AnyNodeClasses...)
 		drives = drives && cs.UserDrives
 		managed = managed && cs.ManagedFiles
+		extras = extras && cs.ExtraContainers
 		if i == 0 || ephemeralRank(cs.EphemeralDiskEnforcement) < ephemeralRank(enforcement) {
 			enforcement = cs.EphemeralDiskEnforcement
 		}
 	}
 	caps.UserDrives = drives
 	caps.ManagedFiles = managed
+	caps.ExtraContainers = extras
 	caps.EphemeralDiskEnforcement = enforcement
 	// Strongest last regardless of substrate order.
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Rank() < classes[j].Rank() })
@@ -937,6 +953,37 @@ func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.D
 		}
 	}
 	return total, errors.Join(errs...)
+}
+
+// SweepOrphanedSandboxesHolding is SweepOrphanedSandboxes with a hold (api.SandboxOrphanHolder): a substrate that
+// implements the holding sweep gets held and its held count is summed; any other substrate gets the plain sweep, so
+// server Kubernetes and every runner keep today's behaviour.
+func (o *Orchestrator) SweepOrphanedSandboxesHolding(ctx context.Context, minAge time.Duration, isOrphan, held func(uuid.UUID) bool) (int, int, error) {
+	type holder interface {
+		SweepOrphanedSandboxesHolding(context.Context, time.Duration, func(uuid.UUID) bool, func(uuid.UUID) bool) (int, int, error)
+	}
+	type plain interface {
+		SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error)
+	}
+	var total, heldN int
+	var errs []error
+	for _, s := range o.snapshot() {
+		var n, h int
+		var err error
+		switch sw := s.(type) {
+		case holder:
+			n, h, err = sw.SweepOrphanedSandboxesHolding(ctx, minAge, isOrphan, held)
+		case plain:
+			n, err = sw.SweepOrphanedSandboxes(ctx, minAge, isOrphan)
+		default:
+			continue
+		}
+		total, heldN = total+n, heldN+h
+		if err != nil && !errors.Is(err, runner.ErrRunnerOffline) {
+			errs = append(errs, err)
+		}
+	}
+	return total, heldN, errors.Join(errs...)
 }
 
 // forget drops the in-memory route and, when the sandbox was actually torn

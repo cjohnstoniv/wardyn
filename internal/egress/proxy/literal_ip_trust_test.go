@@ -29,7 +29,7 @@ func literalIPProxy(t *testing.T, allowed ...string) *Proxy {
 	return newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: allowed}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver:        publicResolver{},
 		LocalSubnets:    []*net.IPNet{ownSubnet},
 		ControlPlaneIPs: []net.IP{net.ParseIP("172.18.0.2")},
@@ -85,7 +85,7 @@ func TestTrustsExactLiteralIP_UnconfiguredProxyIsUnchanged(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"172.18.0.5"}}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver: publicResolver{},
 	})
 	if tgt, src, err := p.egressTarget("172.18.0.5", 5432); err != nil || src != ruleSourceEgressRedirect {

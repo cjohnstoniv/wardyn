@@ -175,6 +175,7 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourcePATAPI, denied: ruleSourcePATAPIDenied, mintFailed: "mint git_pat",
+		beforeSend: p.brokerOfflineErr,
 		credential: func(ctx context.Context) (string, string, error) {
 			token, _, err := p.patToken(ctx, grant)
 			if err != nil {
@@ -193,6 +194,9 @@ type apiDoor struct {
 	// upstream is what the door's own errors call the far side; "" is "forge".
 	upstream   string
 	credential func(ctx context.Context) (header, value string, err error)
+	// beforeSend, when set, runs after the upstream vet and before the credential header is set; an error
+	// refuses the request as a failed mint does. The GitHub CLI door checks the Git broker's offline bound here.
+	beforeSend func() error
 	// sign, when set, authorises the built upstream request itself in place of a credential
 	// header (aws_sigv4.go); credential is then nil.
 	sign func(out *http.Request) error
@@ -206,6 +210,14 @@ type apiDoor struct {
 	gateway *GatewayIdentityRoute
 	// approvalID, when set, is the approval a person gave this exact request (kube_api_hold.go).
 	approvalID *uuid.UUID
+}
+
+// checkBeforeSend runs beforeSend when the door sets one.
+func (d apiDoor) checkBeforeSend() error {
+	if d.beforeSend == nil {
+		return nil
+	}
+	return d.beforeSend()
 }
 
 // sendAPIDoor sends a door's request: on the door's own transport (the kube row's CA) after the outbound
@@ -278,6 +290,11 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	if err != nil {
 		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
 		p.httpError(w, "vet "+far+" host", err, http.StatusForbidden)
+		return
+	}
+	if err := d.checkBeforeSend(); err != nil {
+		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
+		p.httpError(w, d.mintFailed, err, http.StatusBadGateway)
 		return
 	}
 	scheme, defaultPort := p.upstreamSchemeFor(host, port)

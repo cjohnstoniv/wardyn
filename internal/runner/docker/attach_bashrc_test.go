@@ -100,6 +100,8 @@ func newAttachHome(t *testing.T) (home, binDir string) {
 // get a plain prompt, not a second agent.
 func TestAttachBashrc_StartsAgentOnceWhenRequested(t *testing.T) {
 	home, binDir := newAttachHome(t)
+	_, finish := attachPrep(t, home)
+	finish() // the attach comes after agent-run --idle's prep, as it does once the sandbox is up
 
 	if got := runAttachShell(t, home, binDir, "WARDYN_INTERACTIVE_START=agent"); got != 1 {
 		t.Fatalf("first attach shell: agent CLI ran %d times, want 1", got)
@@ -164,6 +166,59 @@ func TestAttachBashrc_StartFolderRunWaitsForPrep(t *testing.T) {
 	}
 }
 
+// TestAttachBashrc_AgentWaitsForPrepWithNoRepo: a run with no repo and no start folder still has its
+// agent's setup written by prep (its onboarding state, the MITM CA, the AWS SSO profile). On Kubernetes the
+// agent container starts beside its proxy and waits for it, so the console's first attach can come before
+// that prep; the agent started then came up on Claude Code's first-run theme picker instead of the trust
+// prompt. The attach that starts the agent now waits for prep-done, then starts it once, in the workspace.
+func TestAttachBashrc_AgentWaitsForPrepWithNoRepo(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	workdir, finish := attachPrep(t, home)
+	idle := liveIdle(t)
+	prepped := make(chan struct{})
+	time.AfterFunc(1500*time.Millisecond, func() {
+		finish()
+		close(prepped)
+	})
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_IDLE_PID="+idle)
+	select {
+	case <-prepped:
+	default:
+		t.Fatalf("the shell returned before prep finished; agent starts %v; output: %s", calls, out)
+	}
+	if len(calls) != 1 || calls[0] != workdir {
+		t.Fatalf("agent started in %v, want exactly once in the prepared workspace %s; output: %s", calls, workdir, out)
+	}
+
+	// No agent requested: a run with nothing to prepare still never waits.
+	home2, binDir2 := newAttachHome(t)
+	calls, out = runAttachShellOut(t, home2, binDir2, 5*time.Second, "WARDYN_IDLE_PID="+idle)
+	if len(calls) != 0 || strings.Contains(out, "Preparing") {
+		t.Fatalf("an attach that starts no agent waited or started one (%v); output: %s", calls, out)
+	}
+}
+
+// TestAttachBashrc_NoRepoPrepGoneDoesNotStartAgent: with no repo, an idle process gone before prep-done
+// leaves the agent unstarted too, and the shell does not point at a clone that never existed.
+func TestAttachBashrc_NoRepoPrepGoneDoesNotStartAgent(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatalf("run idle stand-in: %v", err)
+	}
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_IDLE_PID="+strconv.Itoa(dead.Process.Pid))
+	if len(calls) != 0 {
+		t.Fatalf("agent started %v although preparation never finished", calls)
+	}
+	if !strings.Contains(out, "ended without finishing") || strings.Contains(out, "failed clone") {
+		t.Fatalf("the shell did not say preparation ended, or blamed a clone; output: %s", out)
+	}
+}
+
 // TestAttachBashrc_PrepGoneDoesNotStartAgent pins the bound of the wait: it is the idle process still
 // running, not a clock. With that process gone and no prep-done (the clone never finished), the shell
 // says so at once and does not start the agent over a half-cloned tree; a 120 s cap used to do exactly
@@ -197,5 +252,36 @@ func TestAttachBashrc_SlowPrepStillStartsAgentInWorkspace(t *testing.T) {
 		"WARDYN_INTERACTIVE_START=agent", "WARDYN_REPOS=https://example.invalid/r.git", "WARDYN_IDLE_PID="+idle)
 	if len(calls) != 1 || calls[0] != workdir {
 		t.Fatalf("agent started in %v, want exactly once in %s; output: %s", calls, workdir, out)
+	}
+}
+
+// TestPrepWaits_CheckFiveTimesASecond: the two loops that wait for workspace preparation (the attach shell's and the
+// agent runner's) look five times a second, falling back to a whole second where sleep takes whole seconds only.
+func TestPrepWaits_CheckFiveTimesASecond(t *testing.T) {
+	for _, path := range []string{attachBashrcPath, "../../../deploy/images/common/agent-run-lib.sh"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.Contains(line, `.wardyn/prep-done" ]`) || !strings.Contains(line, "kill -0") {
+				continue
+			}
+			found = true
+			if !strings.Contains(line, "do sleep 0.2 2>/dev/null || sleep 1; done") {
+				t.Errorf("%s: the prep wait is %q; want it to sleep 0.2 s, or 1 s where that is refused", path, strings.TrimSpace(line))
+			}
+		}
+		if !found {
+			t.Errorf("%s: no prep wait loop found", path)
+		}
+		if strings.Contains(string(raw), "kill -0") {
+			for _, line := range strings.Split(string(raw), "\n") {
+				if strings.Contains(line, "kill -0") && strings.Contains(line, "do sleep 1; done") {
+					t.Errorf("%s: a kill -0 loop still sleeps a whole second: %q", path, strings.TrimSpace(line))
+				}
+			}
+		}
 	}
 }

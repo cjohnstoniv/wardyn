@@ -43,6 +43,11 @@ export const DESKTOP = {
   whyEnforcedBody: "At the UI gateway, before the desktop is reached",
   whyCanChange: "Can change",
   whyCanChangeBody: "Yes. Open the desktop again from the run page to get a new link.",
+  // Not on the boards: a door refused the desktop (its governance profile), shown on the same card.
+  deniedBody: "Your organisation's rules for this run do not allow this desktop to open.",
+  deniedWallBody: "A limit in the governance profile this run was launched under",
+  deniedSetByBody: "Your organisation's admins",
+  deniedCanChangeBody: "Only by an admin who manages that governance profile.",
   gatewaySaid: "What the gateway said:",
   copyDetails: "Copy details",
   // Sign-ins in a desktop (#2972, board R11-2972-DesktopSignIns). Byte for byte from the board.
@@ -79,6 +84,9 @@ export const DESKTOP = {
   startingMacOS: "The macOS desktop is still starting.", // MV-D15
   // Viewer states and hints not on the boards (run-surfaces review).
   windowOpenTitle: "A window is open on the Mac",
+  windowOpenTitleLinuxVM: "A window onto this Linux VM is open on the person's computer",
+  // The view-only strip of a Linux VM desktop while a window onto it is open on the person's own computer.
+  viewOnlyBodyWindow: "A window is open on the computer of the person who started this run. Typing and clicking here don't reach this desktop.",
   windowOpenBody: "One keyboard at a time: while that window is open, this desktop only watches. Open the desktop again from the run page to watch it.",
   reconnecting: "Reconnecting to the desktop",
   reconnectingBody: "The connection dropped. This tab reconnects on its own.",
@@ -94,4 +102,9 @@ export const DESKTOP = {
   escapeHint: `${TERMINAL.ESCAPE_CHORD} leaves the desktop`,
   canvasLabel: "Remote desktop",
   backToRun: (title: string) => `Back to ${title}`,
+  // The watermark over the picture (#2969): the per-view button when the organisation does not require it, the line that
+  // replaces the button when it does, and the text drawn over the picture.
+  watermarkToggle: "Watermark",
+  watermarkRequired: "Your organisation requires the watermark",
+  watermarkText: (who: string, run: string) => `${who} · ${run}`,
 } as const;

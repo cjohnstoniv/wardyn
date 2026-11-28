@@ -27,6 +27,7 @@ const labelProxyGeneration = "wardyn.proxy.generation"
 
 var (
 	_ runner.ProxyFencer            = (*Driver)(nil)
+	_ runner.FencedStarter          = (*Driver)(nil)
 	_ runner.ProxyGenerationStopper = (*Driver)(nil)
 	_ runner.ProxyReviverAt         = (*Driver)(nil)
 )
@@ -89,6 +90,53 @@ func (d *Driver) agentEndpoints(ctx context.Context, ref string) (nets []string,
 	}
 	slices.Sort(nets)
 	return nets, true, nil
+}
+
+// taskIdleCmd is a task run's main process: the idle script, which holds the container open for the agent's exec.
+func taskIdleCmd() []string { return []string{"sh", "-c", runner.AgentIdleScript} }
+
+// StartFenced starts a stopped agent container again with no network (runner.FencedStarter), for a pass back over the
+// files a lease end kept. It starts only a container whose main process is the task idle script with no entrypoint,
+// so the start runs no agent and no image code; an interactive run's `agent-run --idle` re-runs its workspace prep
+// and is refused. It cuts the container off every network first (FenceProxy), and Docker does not reconnect a
+// container on start (TestFenceProxy_StartAfterFenceStaysCut); an endpoint seen after the start stops the container
+// again and is an error. A running container is refused untouched: only a stopped one is asked for. A virtual machine
+// answers runner.ErrEndUnsupported.
+func (d *Driver) StartFenced(ctx context.Context, ref string) error {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
+		return fmt.Errorf("%w: %w", runner.ErrEndUnsupported, errVMUnsupported)
+	}
+	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("docker: start fenced: inspect %s: %w", ref, err)
+	}
+	c := res.Container
+	if c.State != nil && c.State.Running {
+		return fmt.Errorf("docker: start fenced: %s is running", ref)
+	}
+	if c.Config == nil || len(c.Config.Entrypoint) > 0 || !slices.Equal(c.Config.Cmd, taskIdleCmd()) {
+		return fmt.Errorf("docker: start fenced: %s's main process is not the task idle script", ref)
+	}
+	if err := d.FenceProxy(ctx, ref); err != nil {
+		return err
+	}
+	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("docker: start fenced: start %s: %w", ref, err)
+	}
+	nets, _, err := d.agentEndpoints(ctx, ref)
+	if err == nil && len(nets) == 0 {
+		return nil
+	}
+	timeout := int(stopTimeout.Seconds())
+	if _, serr := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); serr != nil && !isNotFound(serr) {
+		slog.Warn("docker: start fenced: the container did not stop again", "ref", ref, "err", serr)
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("docker: start fenced: %s came back on %s", ref, strings.Join(nets, ", "))
 }
 
 // isNotConnected detects the daemon's "container is not connected to the network" refusal of a disconnect.

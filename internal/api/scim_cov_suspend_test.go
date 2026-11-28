@@ -219,7 +219,7 @@ func TestSCIMCovSuspensionSchedulesThePurgeOnlyWhenConfigured(t *testing.T) {
 	}{
 		{"a configured delay", func(cfg *Config) { cfg.SCIM.PurgeAfter = 48 * time.Hour }, 48 * time.Hour},
 		{"no delay", nil, 0},
-		{"no SCIM configuration", func(cfg *Config) { cfg.SCIM = nil }, 0},
+		{"no SCIM configuration", func(cfg *Config) { cfg.SCIM = nil }, -1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()
@@ -229,7 +229,28 @@ func TestSCIMCovSuspensionSchedulesThePurgeOnlyWhenConfigured(t *testing.T) {
 				shape = append(shape, c.cfg)
 			}
 			e := newSCIMCovEnv(t, st, shape...)
-			if err := e.srv.suspendIdentity(context.Background(), st, ident.ID, scimSlotPrimary); err != nil {
+			err := e.srv.suspendIdentity(context.Background(), st, ident.ID, scimSlotPrimary)
+			if c.want < 0 {
+				// With no SCIM configuration the suspension owns nothing: it fails closed, with no plan, no
+				// ledger row, no session cut, the identity left active, and the purge writes no mark either.
+				if !errors.Is(err, errNoSCIMConfig) {
+					t.Fatalf("err = %v, want errNoSCIMConfig", err)
+				}
+				if len(st.plans) != 0 || len(st.jobs) != 0 || len(st.ledger(ident.ID, store.JobKindSuspend)) != 0 {
+					t.Errorf("plans = %+v, jobs = %+v, want none", st.plans, st.jobs)
+				}
+				if got := st.identity(ident.ID); got.DeactivatedAt != nil || got.PurgeAfter != nil {
+					t.Errorf("identity = %+v, want it left active", got)
+				}
+				if revoked, _ := e.rev.snapshot(); len(revoked) != 0 {
+					t.Errorf("sessions revoked = %v, want none", revoked)
+				}
+				if _, err := e.srv.purgeIdentity(context.Background(), st, ident.ID, scimSweeperSlot, true); !errors.Is(err, errNoSCIMConfig) || len(st.purgeMarks) != 0 {
+					t.Errorf("purge = %v with marks %v, want errNoSCIMConfig and no mark", err, st.purgeMarks)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 			if len(st.plans) != 1 || st.plans[0].PurgeAfter != c.want {
@@ -511,7 +532,7 @@ func TestSCIMCovTeardownRefusals(t *testing.T) {
 			run := st.addRun("sub-pat", types.RunRunning, "sbx")
 			e := newSCIMCovEnv(t, st)
 			c.arm(st)
-			err := e.srv.teardownRun(context.Background(), st, run)
+			err := e.srv.teardownRun(context.Background(), e.srv.scimOrigin(), st, run)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) || !strings.Contains(err.Error(), run.String()) {
 				t.Fatalf("err = %v, want %q naming the run", err, c.wantErr)
 			}
@@ -532,7 +553,7 @@ func TestSCIMCovTeardownRefusals(t *testing.T) {
 	run := st.addRun("sub-pat", types.RunRunning, "sbx")
 	e := newSCIMCovEnv(t, st)
 	st.casLost = 1
-	if err := e.srv.teardownRun(context.Background(), st, run); err != nil {
+	if err := e.srv.teardownRun(context.Background(), e.srv.scimOrigin(), st, run); err != nil {
 		t.Fatal(err)
 	}
 	if st.runState(run) != types.RunKilled || st.callCount("GetRun") < 2 || e.runner.killCount() != 1 {
@@ -690,5 +711,46 @@ func TestSCIMCovSweepOfAnUnboundEmailDeletesByTheExactNameWhenTwoPrincipalsHoldI
 	}
 	if !slices.Equal(left, []string{"fp-one", "fp-two"}) {
 		t.Errorf("keys left = %v, want only the two principals' own", left)
+	}
+}
+
+// A run the suspension killed whose teardown then failed is not spared when a later pass finds the person active
+// again: the kill was applied, so the teardown is retried and the kill counted. A row with no failed attempt, and
+// a live run whose attempt failed before its kill, are spared as before.
+func TestSCIMCovKilledRunWithAFailedTeardownIsNotSpared(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		state    types.RunState
+		failed   bool
+		wantKill int
+	}{
+		{"a killed run whose teardown failed", types.RunKilled, true, 1},
+		{"a killed run's row with no failed attempt", types.RunKilled, false, 0},
+		{"a live run whose attempt failed before its kill", types.RunRunning, true, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := newSCIMCovStore()
+			pat := scimCovPerson(st, "sub-pat")
+			e := newSCIMCovEnv(t, st)
+			ctx := context.Background()
+			run := st.addRun("sub-pat", c.state, "sandbox-1")
+			key := store.JobKey{Step: jobStepKillRun, Target: run.String()}
+			if err := st.EnsureDeprovisionJobs(ctx, pat.ID, store.JobKindSuspend, []store.JobKey{key}); err != nil {
+				t.Fatal(err)
+			}
+			if c.failed {
+				if err := st.FailDeprovisionJob(ctx, pat.ID, store.JobKindSuspend, key, errors.New("teardown failed")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			j := st.ledger(pat.ID, store.JobKindSuspend)[0]
+			if err := e.srv.killPendingRun(ctx, e.srv.scimOrigin(), st, pat.ID, j, run, true); err != nil {
+				t.Fatalf("killPendingRun = %v", err)
+			}
+			j = st.ledger(pat.ID, store.JobKindSuspend)[0]
+			if !j.Done || j.Detail["runs_killed"] != c.wantKill || e.runner.killCount() != c.wantKill {
+				t.Errorf("row done %t, runs_killed %d, %d sandbox kill(s); want done with %d", j.Done, j.Detail["runs_killed"], e.runner.killCount(), c.wantKill)
+			}
+		})
 	}
 }

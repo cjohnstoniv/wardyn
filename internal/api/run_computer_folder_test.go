@@ -860,8 +860,7 @@ func TestFinalizeRunEffects_APassThatCompletesAfterACutOneStopsTheSandbox(t *tes
 }
 
 // A sandbox that cannot be kept with its agent stopped and no egress is stopped after a cut pass
-// back that saved files, and the record says why and what it leaves behind: one on a runner, and
-// one whose substrate cannot stop its proxy alone (Kubernetes in server mode) (#3466).
+// back that saved files, and the record says why and what it leaves behind: one on a runner (#3466).
 func TestFinalizeRunEffects_ASandboxThatCannotBeQuiescedIsStoppedWithTheRecord(t *testing.T) {
 	cases := map[string]struct {
 		setup func(*localFolderStore, *folderSandboxRunner)
@@ -871,9 +870,6 @@ func TestFinalizeRunEffects_ASandboxThatCannotBeQuiescedIsStoppedWithTheRecord(t
 			id := uuid.New()
 			ls.run.RunnerID = &id
 		}, "a sandbox on a runner is not kept"},
-		"its proxy cannot stop alone": {func(_ *localFolderStore, sb *folderSandboxRunner) {
-			sb.proxyErr = runner.ErrEndUnsupported
-		}, "its substrate cannot stop its proxy alone"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -891,6 +887,129 @@ func TestFinalizeRunEffects_ASandboxThatCannotBeQuiescedIsStoppedWithTheRecord(t
 			assertFolderBackTornDown(t, cs, audit, run, sb, "it cannot be kept with its agent stopped and no egress")
 			assertFolderBackTornDown(t, cs, audit, run, sb, "changed files not brought back: 1")
 		})
+	}
+}
+
+// A sandbox whose substrate cannot stop its proxy alone (Kubernetes in server mode) has nothing cutting its
+// agent's egress, so its pass back does not run while the agent still runs: the sandbox is stopped and the
+// record says why.
+func TestFinalizeRunEffects_AServerSandboxThatCannotStopItsProxyRunsNoPassWhileItsAgentRuns(t *testing.T) {
+	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	cs.dispatchTestStore.mu.Lock()
+	cs.run.SandboxRef = "sbx"
+	cs.state = types.RunCompleted
+	cs.dispatchTestStore.mu.Unlock()
+	sb.proxyErr = runner.ErrEndUnsupported
+	agentWrites(t, sb, "a.txt")
+	var passed atomic.Bool
+	sb.onPass = func() { passed.Store(true) }
+	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if passed.Load() {
+		t.Error("a pass back ran while the agent's egress was open")
+	}
+	if n := sb.stopCount(); n != 1 {
+		t.Errorf("StopSandbox succeeded %d times, want 1", n)
+	}
+	st := cs.folderStatus()
+	if st.Back == nil || !strings.Contains(st.Back.Error, "no pass ran") || !strings.Contains(st.Back.Error, "its substrate cannot stop its proxy alone, and its agent still runs") || st.Resume != nil {
+		t.Errorf("back = %+v, resume = %+v; want the record naming the open egress and no resume", st.Back, st.Resume)
+	}
+	if _, err := os.ReadFile(filepath.Join(app, "a.txt")); err == nil {
+		t.Error("a.txt came back to the computer")
+	}
+}
+
+// The same sandbox with its agent already ended still gets its pass (the positive control): the pass back
+// runs as it is, is never kept, and the sandbox is stopped with the record.
+func TestFinalizeRunEffects_AServerSandboxThatCannotStopItsProxyRunsItsPassOnceItsAgentEnded(t *testing.T) {
+	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	cs.dispatchTestStore.mu.Lock()
+	cs.state = types.RunCompleted
+	cs.dispatchTestStore.mu.Unlock()
+	sb.proxyErr = runner.ErrEndUnsupported
+	sb.agentKilled.Store(true)
+	agentWrites(t, sb, "a.txt", "z.txt")
+	sb.block = "z.txt"
+	if _, err := boundedFinalize(t, s, run, time.Second); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb, "its substrate cannot stop its proxy alone")
+	assertFolderBackTornDown(t, cs, audit, run, sb, "it cannot be kept with its agent stopped and no egress")
+	assertFolderBackTornDown(t, cs, audit, run, sb, "changed files not brought back: 1")
+}
+
+// On a runner without the fence the first pass runs with the sandbox's proxy stopped and the agent left
+// running: it has no network, and its sandbox is stopped after the pass.
+func TestFinalizeRunEffects_OnARunnerWithoutTheFenceThePassRunsWithItsProxyStopped(t *testing.T) {
+	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	cs.dispatchTestStore.mu.Lock()
+	cs.run.SandboxRef = "sbx"
+	runnerID := cs.runner.ID
+	cs.run.RunnerID = &runnerID
+	cs.state = types.RunStopped
+	cs.dispatchTestStore.mu.Unlock()
+	agentWrites(t, sb, "a.txt")
+	var egress atomic.Value
+	var killed atomic.Bool
+	sb.onPass = func() {
+		egress.Store(fmt.Sprint(sb.agentEgress()))
+		killed.Store(sb.agentKilled.Load())
+	}
+	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.stop", nil, false, true); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if egress.Load() != errNoEgress.Error() {
+		t.Errorf("agent egress as the pass started = %v, want it refused", egress.Load())
+	}
+	if killed.Load() {
+		t.Error("the agent was killed; want it left running")
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "a.txt")); string(b) != "a.txt by the agent" {
+		t.Errorf("a.txt on the computer = %q, want the agent's", b)
+	}
+	if st := cs.folderStatus(); sb.stopCount() != 1 || st.Resume != nil {
+		t.Errorf("stops = %d, resume = %+v; want the sandbox stopped once and no resume", sb.stopCount(), st.Resume)
+	}
+}
+
+// A proxy stop that fails on a runner without the fence runs no pass.
+func TestFinalizeRunEffects_OnARunnerWithoutTheFenceAFailedProxyStopRunsNoPass(t *testing.T) {
+	s, cs, _, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	cs.dispatchTestStore.mu.Lock()
+	cs.run.SandboxRef = "sbx"
+	runnerID := cs.runner.ID
+	cs.run.RunnerID = &runnerID
+	cs.state = types.RunCompleted
+	cs.dispatchTestStore.mu.Unlock()
+	sb.proxyErr = errors.New("the proxy is wedged")
+	agentWrites(t, sb, "a.txt")
+	var passed atomic.Bool
+	sb.onPass = func() { passed.Store(true) }
+	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if passed.Load() {
+		t.Error("a pass back ran after the proxy's stop failed")
+	}
+	if n := sb.stopCount(); n != 1 {
+		t.Errorf("StopSandbox succeeded %d times, want 1", n)
+	}
+	if st := cs.folderStatus(); st.Back == nil || !strings.Contains(st.Back.Error, "because its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged") {
+		t.Errorf("back = %+v; want the proxy's failure", st.Back)
 	}
 }
 

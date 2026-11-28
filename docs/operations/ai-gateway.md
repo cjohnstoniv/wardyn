@@ -274,7 +274,8 @@ To check it at the gateway:
 - **A gateway that asks only after the handshake gets none.** TLS renegotiation is not supported.
 - **A front that checks against another CA still refuses.** The proxy sends the certificate to a front that only asks when the front names no CA, or names one called the same as Wardyn's, such as another Wardyn install's. If that front then checks against a CA other than this install's, it refuses the connection.
 - **Tested against Go's own TLS server only.** No run against LiteLLM, Portkey, agentgateway, OpenRouter or another named gateway has checked it.
-- **Not SPIRE.** The certificate carries a SPIFFE ID, but Wardyn runs no SPIFFE Workload API and publishes no SPIFFE federation bundle. A gateway that reads a PEM trust bundle can use it. The run token carries the same ID in its `act.sub`. Every identity provider Wardyn ships must issue these IDs: its conformance tests require them.
+- **Not a SPIRE certificate.** The certificate carries a SPIFFE ID and is signed by this gateway CA under every identity provider. Wardyn publishes no SPIFFE federation bundle; a gateway that reads a PEM trust bundle can use it. Every identity provider Wardyn ships must issue these IDs: its conformance tests require them.
+- **The experimental `spire` provider changes nothing here.** Under it ([SPIRE identity](spire.md)) wardynd reads a SPIRE agent's Workload API. Proxy pods mount the socket, which the proxy does not read yet. This certificate, the gateway token and their formats stay as described here. The run token carries the same ID, in `act.sub` under `embedded` and in `sub` under `spire`.
 - **The bundle's address is experimental.** Unlike the key set's, it carries no stability promise.
 - **Rotation.** `wardynd -rotate-gateway-identity-key` rotates the CA with the signing key ([The AI gateway client certificate CA](secrets-and-keys.md#the-ai-gateway-client-certificate-ca)).
 
@@ -292,6 +293,16 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 - On a gateway route, and on any MCP call of a run that has one, the gateway no longer receives the agent's own `request-id`, `x-request-id` or `x-amzn-requestid` headers, so correlate by `gateway_call_id` or `gateway_request_id`.
 - A run's token counts come from the same answers. Compare one call with the gateway's own figure by its call id.
 - An MCP server has a call id. It also gets an identity token when it is an organisation's remote server with `mcp.gateway_audience`, and no token otherwise.
+
+## Why the identity token is per run, not per call
+
+- The gateway identity token names the run and the provider and is reused for up to 10 minutes. The call id travels
+  beside it as `X-Wardyn-Call-Id`, made fresh for every attempt.
+- Minting a token per call, or signing the call id into it, would add a signature to every model call. A gateway
+  that runs `jwtAuth` in `strict` mode already trusts only lines whose token checked. A call id a sandbox forged
+  cannot hide a call: it only fails to match the run's audit row.
+- A gateway that must authorise each call by a signed id would need a new token format, minted per call on that
+  route.
 
 ## Who inspects
 

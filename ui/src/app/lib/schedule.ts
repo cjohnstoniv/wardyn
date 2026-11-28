@@ -9,11 +9,18 @@
 
 import type { SetupStatus } from "./types/setup";
 
-/** What the picker holds. A date and a time are "" until typed; zone is an IANA name. */
+/** How often a schedule repeats, as POST /run-schedules' `every` takes it. */
+export type ScheduleEvery = "daily" | "weekdays" | "weekly";
+
+/**
+ * What the picker holds. A date and a time are "" until typed; zone is an IANA name. With `repeat` set the run is
+ * a repeating schedule: the date is not used, and the first start is the next time the clock comes round.
+ */
 export interface StartChoice {
   date: string;
   time: string;
   zone: string;
+  repeat?: ScheduleEvery;
 }
 
 /** The furthest ahead a start may be: the queue's longest wait. */
@@ -165,3 +172,80 @@ export function todayDate(zone?: string, now: number = Date.now()): string {
   const p = (type: string) => parts.find((x) => x.type === type)?.value ?? "";
   return `${p("year")}-${p("month")}-${p("day")}`;
 }
+
+/** Why a repeating start is not one to send: no time typed yet. The server picks the first start. */
+export const repeatProblem = (choice: StartChoice): StartProblem | null => (/^([01]\d|2[0-3]):[0-5]\d$/.test(choice.time) ? null : "missing");
+
+// The day of the week of a yyyy-mm-dd date, 0 for Sunday.
+const dateWeekday = (date: string): number => {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+};
+
+// The instant time.Date gives for a wall date and time in zone, as the server books a repeating start: the zone's
+// offset at the wall clock read as UTC, then at the instant that offset names. A wall time the clocks skip moves
+// forward by the gap (01:30 on a spring-forward day starts at 02:30); one they repeat starts at the instant this
+// lands on. null for a zone the browser does not know.
+function goDateInstant(date: string, time: string, zone: string): number | null {
+  const wall = wallClock({ date, time, zone });
+  if (wall === null) return null;
+  try {
+    return wall - offsetMs(zone, wall - offsetMs(zone, wall));
+  } catch {
+    return null;
+  }
+}
+
+// The yyyy-mm-dd date `days` calendar days after a yyyy-mm-dd date.
+const addDays = (date: string, days: number): string => {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+};
+
+/**
+ * A repeating choice's first start: the next instant after now its time comes round in its zone, on a weekday
+ * (Monday to Friday) for a weekdays rule, as internal/api/run_schedule_repeat.go's firstSlot finds it. It walks
+ * calendar dates in the zone, as the server does, never 24-hour steps, and starts a wall time the clocks skip or
+ * repeat where the server does. null until a time is typed.
+ */
+export function firstRepeatStart(choice: StartChoice, now: number): number | null {
+  if (repeatProblem(choice)) return null;
+  const today = todayDate(choice.zone, now);
+  for (let d = 0; d <= 8; d++) {
+    const date = addDays(today, d);
+    if (choice.repeat === "weekdays" && [0, 6].includes(dateWeekday(date))) continue;
+    const at = goDateInstant(date, choice.time, choice.zone);
+    if (at !== null && at > now) return at;
+  }
+  return null;
+}
+
+function zoneParts(ms: number, zone: string, opts: Intl.DateTimeFormatOptions): (type: string) => string {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", { timeZone: zone, ...opts }).formatToParts(new Date(ms));
+  } catch {
+    parts = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", ...opts }).formatToParts(new Date(ms));
+  }
+  return (type) => parts.find((x) => x.type === type)?.value ?? "";
+}
+
+/** An instant's date in a zone, as a first start says it: "Mon 30 Nov". */
+export function dayText(ms: number, zone: string): string {
+  const p = zoneParts(ms, zone, { weekday: "short", day: "numeric", month: "short" });
+  return `${p("weekday")} ${p("day")} ${p("month")}`;
+}
+
+/** An instant's date and time in a zone, without the zone's name: "Fri 27 Nov, 09:00". */
+export function dayTimeText(iso: string, zone: string): string {
+  const p = zoneParts(Date.parse(iso), zone, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  return `${p("weekday")} ${p("day")} ${p("month")}, ${p("hour")}:${p("minute")}`;
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+
+/** A weekday's English name, 0 for Sunday, as a weekly schedule's `weekday` counts. */
+export const weekdayName = (day: number): string => WEEKDAYS[((day % 7) + 7) % 7];
+
+/** The weekday an instant falls on in a zone, 0 for Sunday. */
+export const zoneWeekday = (ms: number, zone: string): number => dateWeekday(todayDate(zone, ms));

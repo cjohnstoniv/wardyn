@@ -52,7 +52,7 @@ test.describe("Admin Settings, SCIM provisioning", () => {
     await expect(card(page).getByRole("button", { name: /^SCIM provisioning\s*2 deactivated · 1 unfinished/ })).toBeVisible();
     await expandCard(page, "SCIM provisioning");
     await expect(card(page).getByText("Next token", { exact: true })).toBeVisible();
-    await expect(card(page).getByText(/^Your identity provider is using the next token\./)).toBeVisible();
+    await expect(card(page).getByText(/^The latest update used the next token, but another provisioning job/)).toBeVisible();
     await expect(card(page).getByText("30 days", { exact: true })).toBeVisible();
     await expect(card(page).getByText("Handed to the operator")).toBeVisible();
     await expect(card(page).getByText("ada@example.com").first()).toBeVisible();

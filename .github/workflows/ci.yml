@@ -76,8 +76,8 @@ jobs:
   # branch protection accepts, and it never waits for a runner just to do
   # nothing.
   #
-  # Start order. The account runs 20 jobs at once and a change to Go asks for
-  # about 35, so some wait, and GitHub picks which among the jobs that became
+  # Start order. The account runs 40 jobs at once across all of its runs, and a change to Go asks for
+  # about 35, so when runs overlap some wait, and GitHub picks which among the jobs that became
   # ready together. The long jobs (go, go-lint, ui, ui-e2e, helm-install-test, both
   # conformance jobs, envbuild-integration, test-pg-shard) need only this job.
   # The short ones (gates, notices, the trivy scans) also need `diagrams`, a
@@ -307,6 +307,9 @@ jobs:
       # leaves a near-empty newest entry. The unhashed restore-key keeps a
       # go.mod/go.sum change warm (the build caches are content-addressed, so
       # an older entry is safe to restore).
+      # Marks the job's start: the save step below keeps only the build-cache entries this job used.
+      - name: Mark the cache start
+        run: touch "$RUNNER_TEMP/go-cache-start"
       # The module cache is one entry shared by every job (go-modules saves it).
       - name: Restore the Go module cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -347,6 +350,8 @@ jobs:
           # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
           # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
           GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # Kept for the next step, which runs internal/api's tests as three slices of it (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
         run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
@@ -355,6 +360,9 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: '1'
           # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
           GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # internal/api runs as three slices of the prebuilt binary beside the other packages (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
+          WARDYN_TEST_REPORT_SPLIT_PKG: github.com/cjohnstoniv/wardyn/internal/api
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest
@@ -399,6 +407,15 @@ jobs:
           path: test/reports/go/${{ matrix.suite }}/**
           overwrite: true
           if-no-files-found: error
+      # Go refreshes a cache entry's mtime when it uses one more than an hour old, so a file older than the start
+      # marker is a restored entry this job never read. Only those go; an entry used within its first hour can go too,
+      # which costs a recompile, never a wrong build.
+      - name: Drop the build-cache entries this job did not use
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          du -sh ~/.cache/go-build
+          find ~/.cache/go-build -type f ! -newer "$RUNNER_TEMP/go-cache-start" -delete
+          du -sh ~/.cache/go-build
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -547,41 +564,26 @@ jobs:
             ~/.cache/golangci-lint
           key: go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
-  # The required check. Branch protection requires a context named `build`, and
-  # this is it: green only when every `go` leg passed AND the union of the three
-  # coverage profiles clears the floor. `always()` so a failed leg, or a run a
-  # stop-early job cancelled, still runs this job, which then fails on the
-  # first step; with the default `success()` it would be SKIPPED, and a skipped
-  # required check can read as passing. On a docs- or console-only change (changes.outputs.backend ==
-  # 'false') the legs ran only the guard packages and wrote no profiles, so the
-  # union steps skip; any other value, including a missing one, requires the
-  # union.
-  build:
-    needs: [changes, go, go-lint, image-scope]
-    if: ${{ always() }}
+  # The release ships wardyn-runnerd for macOS and wardyn for Windows and macOS, and no other job builds or vets them
+  # there. They need only the source, so they run beside the go legs instead of after them; `build` needs this job,
+  # so the `build` context and the ci-full-tree marker still hold only when these passed. Skips with the go legs'
+  # docs- or console-only answer (changes.outputs.backend == 'false').
+  cross-os:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - name: Every go leg passed
-        env:
-          LEGS: ${{ needs.go.result }}
-          LINT: ${{ needs.go-lint.result }}
-        run: |
-          [ "$LEGS" = success ] && [ "$LINT" = success ] || { echo "::error::a go leg did not pass (go: $LEGS, go (lint): $LINT); see the go (…) checks"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       # The release ships wardyn-runnerd for macOS; nothing else builds it before a tag.
       - name: Cross-build wardyn-runnerd for macOS
-        if: needs.changes.outputs.backend != 'false'
         run: for a in amd64 arm64; do GOOS=darwin GOARCH=$a CGO_ENABLED=0 go build -tags docker -o /dev/null ./cmd/wardyn-runnerd || exit 1; done
       # The release ships a Windows wardyn; a unix-only symbol in a file with no build tag breaks it silently.
       - name: Cross-build and vet wardyn for Windows
-        if: needs.changes.outputs.backend != 'false'
         run: |
           for a in amd64 arm64; do GOOS=windows GOARCH=$a CGO_ENABLED=0 go build -o /dev/null ./cmd/wardyn || exit 1; done
           GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn/
@@ -593,8 +595,43 @@ jobs:
           GOOS=windows GOARCH=amd64 go vet ./internal/runner/
       # The release ships a macOS wardyn; a Linux-only symbol in a file tagged only !windows breaks its tests there.
       - name: Vet wardyn for macOS
-        if: needs.changes.outputs.backend != 'false'
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./cmd/wardyn/
+
+  # The required check. Branch protection requires a context named `build`, and
+  # this is it: green only when every `go` leg and `cross-os` passed AND the union of the three
+  # coverage profiles clears the floor. `always()` so a failed leg, or a run a
+  # stop-early job cancelled, still runs this job, which then fails on the
+  # first step; with the default `success()` it would be SKIPPED, and a skipped
+  # required check can read as passing. On a docs- or console-only change (changes.outputs.backend ==
+  # 'false') the legs ran only the guard packages and wrote no profiles, so the
+  # union steps skip; any other value, including a missing one, requires the
+  # union.
+  build:
+    needs: [changes, go, go-lint, cross-os, image-scope]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Every go leg passed
+        env:
+          LEGS: ${{ needs.go.result }}
+          LINT: ${{ needs.go-lint.result }}
+        run: |
+          [ "$LEGS" = success ] && [ "$LINT" = success ] || { echo "::error::a go leg did not pass (go: $LEGS, go (lint): $LINT); see the go (…) checks"; exit 1; }
+      # cross-os skips only with the go legs' explicit docs- or console-only answer; any other result but success fails here.
+      - name: The Windows and macOS builds passed
+        env:
+          CROSS: ${{ needs.cross-os.result }}
+          BACKEND: ${{ needs.changes.outputs.backend }}
+        run: |
+          [ "$CROSS" = success ] || { [ "$CROSS" = skipped ] && [ "$BACKEND" = false ]; } || { echo "::error::cross-os did not pass (result: $CROSS); see the cross-os check"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend != 'false'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: needs.changes.outputs.backend != 'false'
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -2446,7 +2483,7 @@ jobs:
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
         run: |
           set -euo pipefail
-          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && (v[2] + 0 > 0 || v[3] + 0 > 0))) }'; }
           for f in "$RUNNER_TEMP/wardyn-macvm" "$RUNNER_TEMP/wardyn-guest-agent" "$RUNNER_TEMP/wardyn-runnerd"; do
             mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
             echo "$f: minos $mins"
@@ -2572,19 +2609,21 @@ jobs:
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
   #
-  # Four shards, each with its OWN Postgres service, so the ~12-minute suite and
+  # Five shards, each with its OWN Postgres service, so the ~12-minute suite and
   # the ~5-minute race proofs stop queueing behind each other. -p 1 stays inside
   # each shard: its packages still share ONE database whose singleton state
   # (site_config) internal/api and test/apie2e both mutate. The shard package
   # lists are the old `make test-report-pg` list split in two; with
-  # `make test-race-pg` they run exactly what the single job ran.
+  # `make test-race-pg` (both race shards together) they run exactly what the single job ran.
   #   api-1, api-2 — the Postgres-gated tests of internal/api and test/apie2e, two
   #           slices balanced by the recorded seconds in test/pg-test-weights.tsv (make
   #           test-report-pg-api; scripts/pg-test-select.sh picks them, the go unit run proves the pick misses none). Each slice
   #           also runs every skip-floor probe. The ~4400 other tests run in `go`.
   #   store — the Postgres-gated tests of store, db, secretstore, broker, recording,
   #           cmd/wardynd, notify, livebus (make test-report-pg-store; same selector and guard)
-  #   race  — `make test-race-pg` (the three -race -p 1 passes)
+  #   race-store, race-api — `make test-race-pg-store` and `make test-race-pg-api`, the two halves of
+  #           `make test-race-pg` (the -race -p 1 passes). The store half imports no internal/api, so it
+  #           takes no api prebuild and runs beside the api half.
   # The required context `test-pg` is the aggregator below, which reports the
   # shards' combined result.
   test-pg-shard:
@@ -2595,8 +2634,8 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # 45: the shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e.
-    timeout-minutes: 45
+    # 60: a shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e. The race shard ran every pass one after another and took 40 to 45 minutes; it is now two shards, race-store and race-api.
+    timeout-minutes: 60
     # fail-fast: one red shard cancels the others, so a red run stops spending
     # about 48 runner-minutes on a result that is already a failure. test-pg
     # still reports: legs cancelled by fail-fast do not cancel the run, so its
@@ -2628,9 +2667,13 @@ jobs:
           # therefore the tests most in need of the detector and the ones no gate
           # was pointing it at. This shard is that gate (F137). It writes no report
           # directory, so it uploads none.
-          - shard: race
+          - shard: race-store
             suite: ''
-            run: make test-race-pg
+            run: make test-race-pg-store
+            superuser: ''
+          - shard: race-api
+            suite: ''
+            run: make test-race-pg-api
             superuser: ''
             prebuild: race
     services:
@@ -2877,6 +2920,12 @@ jobs:
           DOCKER_HOST: unix:///var/run/docker.sock
           IMAGE: wardyn/agent-novnc-signin:trivy-scan
         run: ./scripts/test-image-novnc-signin.sh
+      - name: Browser lockdown image gate against the built image
+        if: env.TRIVY_IMAGE == 'agent-novnc-signin'
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+          IMAGE: wardyn/agent-novnc-signin:trivy-scan
+        run: ./scripts/test-image-browser-lockdown.sh
       # trivy-action's built-in cache (on by default) restores AND saves the
       # vulnerability DB on every event, so each PR run wrote seven PR-scoped
       # entries (issue #470). It is off here; the DB is restored below and saved
@@ -3160,14 +3209,15 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
-    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
+    # 40 dates from when staticcheck ran here: a cold pass was killed at 25. It now has its own job (below); this
+    # limit was left as it was.
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        gate: [govulncheck, staticcheck, licenses, license-headers, gitleaks]
-    steps:
+        # staticcheck runs in the staticcheck job below, one cell per tag set; `gates (staticcheck)` aggregates it.
+        gate: [govulncheck, licenses, license-headers, gitleaks]
+    steps: &gate_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -3201,15 +3251,16 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+            go-gates-${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
       # The gate's own `go run tool@version` dependencies, fetched here so a network
       # stall fails fast under this name instead of eating the job timeout. The
       # measured cold fetch of one tool is at most 67 s (licenses); 4 min is 3x, rounded up.
       - name: Fetch gate tools
         timeout-minutes: 4
-        run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+        run: scripts/fetch-gate-tools.sh ${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}
       # See go-lint: staticcheck's whole-tree pass.
       - name: Add swap for the memory peak
-        if: matrix.gate == 'staticcheck'
+        if: startsWith(matrix.gate, 'staticcheck')
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -3219,6 +3270,10 @@ jobs:
           free -m
       # vmstat as in the go job: staticcheck's whole-tree load is a memory peak of its own.
       - name: make ${{ matrix.gate }}
+        env:
+          # The -tags docker pass filled RAM and the 8 GB swap and was killed (143) three times running.
+          # A soft limit makes staticcheck collect harder before that; empty (unset) for the other gates.
+          GOMEMLIMIT: ${{ startsWith(matrix.gate, 'staticcheck') && '12GiB' || '' }}
         run: |
           vmstat -t 15 &
           vm=$!
@@ -3234,6 +3289,34 @@ jobs:
             ~/.cache/staticcheck
           key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # staticcheck's three whole-tree passes (tagless, -tags docker, -tags docker,k8s), one runner each: in one job they
+  # outgrew a hosted runner's memory, swapped and passed the time limit. The steps are the gates job's. A pass takes
+  # 23 to 30 minutes on a warm cache and has run past 40 on a cold one, so the limit is 60.
+  staticcheck:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [staticcheck-tagless, staticcheck-docker, staticcheck-k8s]
+    steps: *gate_steps
+
+  # The required context `gates (staticcheck)`: it passes only when every staticcheck pass did. A failed, cancelled or
+  # skipped pass fails it.
+  gates-staticcheck:
+    name: gates (staticcheck)
+    needs: staticcheck
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Every staticcheck pass passed
+        env:
+          PASSES: ${{ needs.staticcheck.result }}
+        run: |
+          [ "$PASSES" = success ] || { echo "::error::a staticcheck pass did not pass (result: $PASSES); see the staticcheck (…) checks"; exit 1; }
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
     runs-on: ubuntu-26.04
@@ -3258,7 +3341,17 @@ jobs:
             # ^origin/main: commits already on main passed main's own gate (every PR
             # commit is checked; a push exempts only GitHub's merges). Without it a
             # release PR that merges main re-judges GitHub's merge commits (the 0.8.2 cut).
-            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main"
+            # ^origin/release/*: a release line's commits are left out of this strict pass, so a
+            # train into main that carries a patch line does not re-judge GitHub's merges of that
+            # line's release PRs. The loop after it checks the commits the PR carries from each
+            # line the way release-branch-checks.yml does (GitHub's own merges exempt), so an
+            # unsigned commit pushed straight to a release branch still reds the PR.
+            RELEASE_LINES=$(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*')
+            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main $(printf '^%s ' $RELEASE_LINES)"
+            for line in $RELEASE_LINES; do
+              carried=$(git merge-base "$PR_HEAD" "$line" || true)
+              [ -z "$carried" ] || make dco DCO_RANGE="$carried ^origin/main ^$BASE" DCO_ALLOW_GITHUB_MERGES=1
+            done
           elif [ -n "$BASE" ]; then
             # merge_group: the queue's own merge commits are committed by GitHub
             # and carry no Signed-off-by — exempt only those.
@@ -3282,22 +3375,75 @@ jobs:
           fi
       # A forward-port (release/X.Y -> main) must not delete content that exists only
       # on main (scripts/forward-port-check.sh; an intended removal is listed in
-      # scripts/forward-port-check.d/<version>.allow). Skipped on every other pull request.
+      # scripts/forward-port-check.d/<version>.allow). Two routes, into main or release/**:
+      # a chore/forward-port-* branch, and a train/* head that carries 0.10.x patch lines in
+      # as tag merges (a first-parent merge whose second parent is a v0.10.* tag), each of
+      # which is checked on its own with BASE = its first parent and HEAD = the merge. This is
+      # Check (1) only: the arrival rule, the version tests, the file-state check and the
+      # destination/BASE/HEAD-bound .arrive rows are owed with forward-port.sh (L0-C), before
+      # release/0.11 exists. The train route reads <version>.allow from the tag merge and
+      # requires it to be unchanged at the PR head, so the exception a merge used is visible
+      # in the final tree. A v0.10.* tag merged anywhere but on the first parent is refused,
+      # and so is a .gitattributes change on the train (attributes are read from the base).
+      # Skipped on every other pull request.
       - name: Forward-port keeps main's content
-        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && startsWith(github.head_ref, 'chore/forward-port-') }}
+        if: ${{ github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'release/')) && (startsWith(github.head_ref, 'chore/forward-port-') || startsWith(github.head_ref, 'train/')) }}
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          # Git reads the diff attribute from the base, never from the PR's own tree.
+          GIT_ATTR_SOURCE: ${{ github.event.pull_request.base.sha }}
         run: |
-          V="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' <<<"$HEAD_REF" | head -1)"
-          [ -n "$V" ] || { echo "no version in the branch name $HEAD_REF" >&2; exit 1; }
-          # main's copy of the check, never the port's own: a port could edit the check.
-          git show "$BASE_SHA:scripts/forward-port-check.sh" >"$RUNNER_TEMP/fpc.sh"
-          PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$BASE_SHA")"
-          [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
-          # Merge-base, not the base tip: main may have moved since the branch was cut.
-          bash "$RUNNER_TEMP/fpc.sh" --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
+          # The base's copy of the check, never the PR's own: a port could edit the check.
+          fpc() { git show "$BASE_SHA:scripts/forward-port-check.sh" >"$RUNNER_TEMP/fpc.sh"; }
+          case "$HEAD_REF" in
+            chore/forward-port-*)
+              V="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' <<<"$HEAD_REF" | head -1)"
+              [ -n "$V" ] || { echo "no version in the branch name $HEAD_REF" >&2; exit 1; }
+              fpc
+              PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$BASE_SHA")"
+              [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
+              # Merge-base, not the base tip: the base may have moved since the branch was cut.
+              bash "$RUNNER_TEMP/fpc.sh" --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
+              ;;
+            *)
+              if git diff --name-only "$BASE_SHA...$PR_HEAD" | grep -qE '(^|/)\.gitattributes$'; then
+                echo "a train/* head may not change a .gitattributes: it can mark a file -diff and hide a loss" >&2; exit 1
+              fi
+              MERGES="$(git rev-list --first-parent --merges "$BASE_SHA..$PR_HEAD")"
+              n=0; CHECKED=" "; CHECKED2=""
+              for M in $MERGES; do
+                T="$({ git tag --list 'v0.10.*' --points-at "$M^2" | grep -xE 'v0\.10\.[0-9]+' || true; } | head -1)"
+                [ -n "$T" ] || continue
+                n=$((n + 1)); V="${T#v}"; CHECKED="$CHECKED$T "; CHECKED2="$CHECKED2 $M"
+                [ "$n" -gt 1 ] || fpc
+                echo "tag merge $M (v$V) on $HEAD_REF"
+                PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$M^1")"
+                [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
+                ALLOW="$RUNNER_TEMP/allow-$M"; mkdir -p "$ALLOW"
+                git show "$M:scripts/forward-port-check.d/$V.allow" >"$ALLOW/$V.allow" 2>/dev/null || rm -f "$ALLOW/$V.allow"
+                if ! git diff --quiet "$M" "$PR_HEAD" -- "scripts/forward-port-check.d/$V.allow"; then
+                  echo "scripts/forward-port-check.d/$V.allow differs between the tag merge $M and the PR head" >&2; exit 1
+                fi
+                bash "$RUNNER_TEMP/fpc.sh" --version "$V" --allow-dir "$ALLOW" "$PREV" "$M^1" "$M"
+              done
+              # A tag that reached the head any other way (a side branch, a sub-train) has no merge to
+              # check. Not counted: one a checked tag merge brings in (below its second parent, not
+              # already in its first), or one already inside a published 0.11+ tag: an annotated
+              # v0.1[1-9].N or -rc.N tag merged into the head (an earlier rc's train).
+              for T in $(git tag --merged "$PR_HEAD" --no-merged "$BASE_SHA" -l 'v0.10.*' | { grep -xE 'v0\.10\.[0-9]+' || true; }); do
+                case "$CHECKED" in *" $T "*) continue ;; esac
+                for P in $CHECKED2; do
+                  if git merge-base --is-ancestor "$T^{commit}" "$P^2" && ! git merge-base --is-ancestor "$T^{commit}" "$P^1"; then continue 2; fi
+                done
+                PUB="$(git for-each-ref --format='%(objecttype) %(refname:short)' --merged "$PR_HEAD" --contains "$T" 'refs/tags/v0.1[1-9].*' | { grep -E '^tag v0\.1[1-9]\.[0-9]+(-rc\.[0-9]+)?$' || true; })"
+                [ -z "$PUB" ] || continue
+                echo "$T is in $HEAD_REF but not through a first-parent tag merge: merge it on the train's first parent" >&2; exit 1
+              done
+              [ "$n" -gt 0 ] || echo "no v0.10.* tag merge in $BASE_SHA..$PR_HEAD: nothing to check"
+              ;;
+          esac
 
   # ── stop a red pull request run early ─────────────────────────────────────
   # When a cheap, deterministic gate fails, the heavy jobs of the same run
@@ -3439,8 +3585,8 @@ jobs:
   # A train/* or prep/* pull request merges a whole wave, and a nightly suite has
   # gone red on a train whose pull request CI was green. On those heads
   # train-gate passes only when train-suites (the nightly's candidate scope)
-  # passed. On any other head, and on push, train-suites skips and train-gate
-  # passes at once, so the one name can be required everywhere. A fork's
+  # and mixed-version passed. On any other head, and on push, both skip and
+  # train-gate passes at once, so the one name can be required everywhere. A fork's
   # train/* branch never runs train-suites, so train-gate stays red there.
   #
   # train-suites dispatches the nightly rather than calling it: GitHub checks a
@@ -3449,8 +3595,9 @@ jobs:
   # run. A dispatched run takes the nightly's own permissions, and a newer
   # dispatch on the same ref cancels it (the nightly's concurrency group), as a
   # newer push cancels this run. The job holds one runner while it waits.
-  # publish=false: a train is not a release candidate, so the nightly's
-  # buildx-smoke still builds but skips its image push and attest steps.
+  # publish: false unless the head commit carries the lead's `Candidate: v<version>` line (scripts/ci-candidate-marker.sh). Then the
+  # dispatched nightly stages and attests the images that green-by-tree.sh and release.yml's promote need, so no second
+  # candidate nightly is dispatched by hand.
   train-suites:
     if: >-
       github.event_name == 'pull_request' &&
@@ -3463,6 +3610,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       # The nightly checks out the branch, so its run is the head's only while
       # the branch has not moved; a run on another sha is never taken.
       - name: Dispatch the nightly's candidate scope on this head and wait for it
@@ -3471,25 +3620,43 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          [ -x scripts/ci-candidate-marker.sh ] || { echo "::error::the head predates the candidate marker; merge its base first"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::checked out $(git rev-parse HEAD), not the head $HEAD_SHA"; exit 1; }
+          publish="$(./scripts/ci-candidate-marker.sh)"
+          echo "candidate marker: publish=$publish (scripts/ci-candidate-marker.sh)"
           since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
-          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false
+          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish="$publish" -f dispatch_id="$DISPATCH_ID"
           id=
           for _ in $(seq 40); do
             id="$(gh run list --workflow nightly.yml --branch "$HEAD_REF" --event workflow_dispatch --limit 20 \
-              --json databaseId,headSha,createdAt | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since")"
+              --json databaseId,headSha,createdAt,displayTitle | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since" "$DISPATCH_ID")"
             [ -z "$id" ] || break
             sleep 15
           done
-          [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
+          [ -n "$id" ] || { echo "::error::no dispatched nightly run [$DISPATCH_ID] appeared on $HEAD_SHA"; exit 1; }
           echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
           # The wait polls rather than `gh run watch` and gives up after ten
           # failed reads in a row (see ci-wait-run.sh).
           ./scripts/ci-wait-run.sh "$id"
 
+  # mixed-version calls the workflow rather than dispatching it: a called
+  # workflow runs from the pull request head, so it works before its file is on
+  # main, which a dispatch does not. It needs only contents: read, so the
+  # caller's token covers it. Same train-head condition as train-suites.
+  mixed-version:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
+    uses: ./.github/workflows/mixed-version.yml
+    permissions:
+      contents: read
+
   train-gate:
-    needs: train-suites
+    needs: [train-suites, mixed-version]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -3499,14 +3666,16 @@ jobs:
           EVENT: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
           SUITES: ${{ needs.train-suites.result }}
+          MIXED: ${{ needs.mixed-version.result }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             case "$HEAD_REF" in
               train/*|prep/*)
-                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; } ;;
+                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; }
+                [ "$MIXED" = success ] || { echo "::error::mixed-version did not pass (result: $MIXED)"; exit 1; } ;;
             esac
           fi
-          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES"
+          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES, mixed-version $MIXED"
 
   # ── every flaky e2e test gets an issue ─────────────────────────────────────
   # scripts/run-ui-e2e.sh lists each test that passed only on a retry in
@@ -3609,6 +3778,7 @@ jobs:
       - trivy-agent-novnc-signin
       - notices
       - gates
+      - staticcheck
       - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
@@ -3733,13 +3903,17 @@ jobs:
   # created before this run's. A family this run did not save, because its job
   # failed or its entry already existed, keeps its older entry.
   go-cache-prune:
-    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates, staticcheck]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
+      contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Delete the Go cache entries this run superseded
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3749,11 +3923,7 @@ jobs:
         run: |
           set -euo pipefail
           caches="$(gh api --paginate "repos/$GH_REPO/actions/caches?ref=refs/heads/main&key=go&per_page=100" --jq '.actions_caches[]')"
-          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" '
-            def fam: .key | sub("-[0-9]+$"; "") | sub("-[0-9a-f]{64}$"; "") | sub("-(Linux|Windows|macOS)$"; "");
-            (map(select((.key | endswith($r)) or ($mod != "" and .key == $mod))) | map({key: fam, value: .created_at}) | from_entries) as $fresh
-            | .[] | select(fam as $f | $fresh[$f] != null and .created_at < $fresh[$f])
-            | "\(.id)\t\(.key)"')"
+          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" -f scripts/ci-go-cache-prune.jq)"
           [ -n "$stale" ] || { echo "no superseded Go cache entry"; exit 0; }
           while IFS=$'\t' read -r id key; do
             echo "deleting $key"

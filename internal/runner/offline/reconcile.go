@@ -141,6 +141,9 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return m.refuseAction(ctx, a, refusal(errors.New("containment-only identity refuses this action")))
 	}
 	if a.Kind == types.RunnerActionRecoverContainment {
+		if r.LocalContain != nil {
+			return m.refuseAction(ctx, a, refusal(errors.New("a local operator contained this run on its runner; only ending the run clears it")))
+		}
 		res, err := m.recoverContainment(a, r)
 		if refused := (actionRefusal{}); errors.As(err, &refused) {
 			// Refused, not failed: a plain error would fail Pending on every fresh session.

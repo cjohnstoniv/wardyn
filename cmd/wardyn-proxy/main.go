@@ -80,6 +80,9 @@ func main() {
 	if *narrow {
 		os.Exit(runNarrow(os.Stdin, os.Stdout))
 	}
+	// The move helper's modes, whose flags are in move_helper.go: wardynd's Kubernetes driver reads and writes a moved
+	// run's files with them. It exits when one is named.
+	exitIfMoveHelper()
 
 	if *egressCanary != "" {
 		conn, err := net.DialTimeout("tcp", *egressCanary, egressCanaryTimeout)
@@ -319,7 +322,7 @@ const cgroupMemoryHeadroom = 0.8
 // and be OOM-killed rather than collect harder — and killing this sidecar takes
 // the run's only network path with it. That matters because outbound content
 // inspection buffers a request body and the extractor expands it several times
-// over (F074; see maxConcurrentScans in internal/egress/proxy). A soft limit
+// over (F074; see scanOverhead in internal/egress/proxy). A soft limit
 // makes the GC work harder first, which is the whole point.
 //
 // Best effort and silent about a miss: an operator-set GOMEMLIMIT wins (the

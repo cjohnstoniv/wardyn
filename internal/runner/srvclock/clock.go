@@ -66,3 +66,12 @@ func (c *Clock) TokenRemaining(renewed time.Time) (time.Duration, error) {
 	remaining, err := c.Remaining(renewed.Add(identity.RunTokenLapseAfter))
 	return min(remaining, identity.RunTokenLapseAfter), err
 }
+
+// AllowanceRemaining is TokenRemaining over another span from the renewal stamp, never more than span.
+func (c *Clock) AllowanceRemaining(renewed time.Time, span time.Duration) (time.Duration, error) {
+	if renewed.IsZero() {
+		return 0, errors.New("offline lease has no renewal stamp")
+	}
+	remaining, err := c.Remaining(renewed.Add(span))
+	return min(remaining, span), err
+}

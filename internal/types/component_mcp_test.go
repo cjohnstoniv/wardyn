@@ -9,7 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -214,5 +216,95 @@ func TestComponentMCP_GatewayAudience(t *testing.T) {
 	local.MCP.GatewayAudience = "gw"
 	if err := local.Validate(proxy.ValidDomainEntry, false); err == nil || !strings.HasPrefix(err.Error(), "mcp.gateway_audience") {
 		t.Errorf("a stdio server: want an mcp.gateway_audience refusal, got %v", err)
+	}
+}
+
+// TestComponentMCP_Sandbox: the sandbox block is a stdio server's alone; its mode is one of the three, an
+// overlay rides narrower and a spec own; a spec leaves empty what an MCP sandbox cannot have; and neither
+// carries a hold rule.
+func TestComponentMCP_Sandbox(t *testing.T) {
+	with := func(d types.ComponentDefinition, p types.ComponentMCPSandboxPolicy) types.ComponentDefinition {
+		d.MCP.Sandbox = &types.ComponentMCPSandbox{Policy: p}
+		return d
+	}
+	stdio := func() types.ComponentDefinition { return localMCP("npx", "@example/mcp-server@1.4.2") }
+	hosts := []string{"docs.example.com"}
+	hold := []types.HostRuleSet{{Rules: []types.HostRule{{Host: "docs.example.com", Effect: types.HostRuleAllow}, {Host: "x.example.com", Effect: types.HostRuleHold}}}}
+	allowDeny := []types.HostRuleSet{{Rules: []types.HostRule{{Host: "docs.example.com", Effect: types.HostRuleAllow}, {Host: "x.example.com", Effect: types.HostRuleDeny}}}}
+	ok := map[string]types.ComponentDefinition{
+		"no block":                 stdio(),
+		"same":                     with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxSame}),
+		"narrower, overlay":        with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{AllowedDomains: &hosts}}),
+		"own, egress spec":         with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: &types.RunPolicySpec{AllowedDomains: hosts}}),
+		"own, allow and deny":      with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: &types.RunPolicySpec{HostRules: allowDeny}}),
+		"narrower, allow and deny": with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{HostRules: &allowDeny}}),
+	}
+	for name, d := range ok {
+		if err := d.Validate(proxy.ValidDomainEntry, true); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	bad := map[string]struct {
+		def  types.ComponentDefinition
+		want string
+	}{
+		"on a remote server": {with(mcpDef("https://mcp.linear.app/mcp", "mcp.linear.app"), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxSame}), "mcp.sandbox: "},
+		"empty mode":         {with(stdio(), types.ComponentMCPSandboxPolicy{}), "mcp.sandbox.policy.mode: "},
+		"unknown mode":       {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: "wider"}), "mcp.sandbox.policy.mode: "},
+		"overlay on same":    {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxSame, Overlay: &types.CeilingOverlay{}}), "mcp.sandbox.policy.overlay: "},
+		"overlay on own":     {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Overlay: &types.CeilingOverlay{}}), "mcp.sandbox.policy.overlay: "},
+		"spec on narrower":   {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Spec: &types.RunPolicySpec{}}), "mcp.sandbox.policy.spec: "},
+		"spec, hold rule": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn,
+			Spec: &types.RunPolicySpec{HostRules: hold}}), "mcp.sandbox.policy.spec.host_rules[0].rules[1].effect: "},
+		"overlay, hold rule": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower,
+			Overlay: &types.CeilingOverlay{HostRules: &hold}}), "mcp.sandbox.policy.overlay.host_rules[0].rules[1].effect: "},
+		"overlay, raw secret values": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower,
+			Overlay: &types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"s3cr3t-value"}}}}),
+			"mcp.sandbox.policy.overlay.llm_inspection.workspace_secret_values may not be set on a policy write "},
+	}
+	for name, tc := range bad {
+		err := tc.def.Validate(proxy.ValidDomainEntry, true)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want an error starting %q", name, err, tc.want)
+		}
+	}
+}
+
+// TestComponentMCP_SandboxSpecAlwaysEmptyKnobs: each of the twelve knobs an MCP sandbox cannot have (no
+// harness, terminal, desktop or repository) is refused in an own spec, by its field path.
+func TestComponentMCP_SandboxSpecAlwaysEmptyKnobs(t *testing.T) {
+	for knob, set := range map[string]func(*types.RunPolicySpec){
+		"workspace_mounts": func(s *types.RunPolicySpec) {
+			s.WorkspaceMounts = []types.WorkspaceMount{{Source: "/src", Target: "/work"}}
+		},
+		"workspace_repos":           func(s *types.RunPolicySpec) { s.WorkspaceRepos = []types.WorkspaceRepo{{Repo: "acme/api"}} },
+		"llm_inspection":            func(s *types.RunPolicySpec) { s.LLMInspection = &types.LLMInspectionSpec{} },
+		"ui_apps":                   func(s *types.RunPolicySpec) { s.UIApps = []types.UIApp{{Name: "app", Port: 3000}} },
+		"tool_rules":                func(s *types.RunPolicySpec) { s.ToolRules = []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}} },
+		"git_push_any_branch":       func(s *types.RunPolicySpec) { s.GitPushAnyBranch = true },
+		"push_rules":                func(s *types.RunPolicySpec) { s.PushRules = &types.PushRulesSpec{} },
+		"azure_devops_capabilities": func(s *types.RunPolicySpec) { s.AzureDevOpsCapabilities = []adoscope.Capability{"code_read"} },
+		"github_capabilities":       func(s *types.RunPolicySpec) { s.GitHubCapabilities = []ghscope.Capability{"contents_read"} },
+		"harness_inner_walls":       func(s *types.RunPolicySpec) { s.HarnessInnerWalls = &types.HarnessInnerWalls{} },
+		"desktop":                   func(s *types.RunPolicySpec) { s.Desktop = &types.DesktopControls{} },
+		"recording":                 func(s *types.RunPolicySpec) { s.Recording = "terminal" },
+	} {
+		spec := &types.RunPolicySpec{AllowedDomains: []string{"docs.example.com"}}
+		set(spec)
+		d := localMCP("npx", "@example/mcp-server@1.4.2")
+		d.MCP.Sandbox = &types.ComponentMCPSandbox{Policy: types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: spec}}
+		want := "mcp.sandbox.policy.spec." + knob + ": an MCP sandbox has no harness, terminal, desktop or repository, so this stays empty"
+		if err := d.Validate(proxy.ValidDomainEntry, true); err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", knob, err, want)
+		}
+	}
+}
+
+// TestValidComponentEnvName: the exported rule is the component rule.
+func TestValidComponentEnvName(t *testing.T) {
+	for name, ok := range map[string]bool{"FILES_ROOT": true, "ANTHROPIC_API_KEY": true, "WARDYN_X": false, "LD_PRELOAD": false, "lower": false} {
+		if err := types.ValidComponentEnvName(name); (err == nil) != ok {
+			t.Errorf("%s: %v, want ok %v", name, err, ok)
+		}
 	}
 }

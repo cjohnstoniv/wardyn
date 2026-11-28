@@ -102,7 +102,8 @@ func (s *Server) handleSetComponentOwningUnit(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "read component", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, saved)
+	// A security admin who is not the author reads the answer, and never sends it back as a component body.
+	writeJSON(w, http.StatusOK, redactComponentForRead(saved, s.specReadTierFor(r.Context())))
 }
 
 // componentPinTarget reads what a pin write needs before it decides, or writes the refusal and returns
@@ -139,7 +140,7 @@ func (s *Server) holdComponentOwningUnit(w http.ResponseWriter, r *http.Request,
 		payload: componentOwningUnitChange{ComponentID: id, UnitID: unit},
 		before:  owningUnitState(from, false), after: owningUnitState(unit, false),
 		changed:   []string{"owning_unit_id"},
-		baseState: owningUnitState(from, false)})
+		baseState: owningUnitState(from, false), review: pinReview()})
 }
 
 // setComponentOwningUnitQ is a direct pin write on q, under the graph lock and the target lock a held

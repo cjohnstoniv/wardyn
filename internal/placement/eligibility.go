@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // CredentialOrigin is control-plane provenance for one actual dispatch field.
@@ -73,6 +74,20 @@ type LocalPlan struct {
 	// RequireManagedDevice is the organisation's runners.require_managed_device: a plan judged at a
 	// personal runner is refused (managedDeviceRefusal). Off by default.
 	RequireManagedDevice bool
+	// MachineKind is the run's machine kind ("" a container), judged by machineKindRefusal at every door.
+	MachineKind types.MachineKind
+	// MachineKindDenials is the organisation's runners.machine_kind_denials. It is set where a new run is
+	// judged (create, the queue's start, dispatch), never at revive, so a running run keeps its runner.
+	// A door that judges a new run and leaves it unset skips the list: TestLocalEligibilityDoors_
+	// ClassifiedForMachineKindDenials lists every door.
+	MachineKindDenials []types.MachineKindDenial
+	// MacOSHostGateLater is set only at create, where the managed-Mac gate runs in a later step and answers
+	// a macOS VM off a managed_device runner with its own reason. Unset, the trust floor is judged here.
+	MacOSHostGateLater bool
+	// SiteID and SiteName are the organisation site of the candidate runner's pool, set where the denials
+	// are and only while sites are on. Nil, a denial keyed to a site holds nowhere for this plan.
+	SiteID   *uuid.UUID
+	SiteName string
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -108,6 +123,9 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 		return runner.SandboxSpec{}, refuse(ReasonPlacementCredential, fields[0], "unclassified dispatch field")
 	}
 	if r := managedDeviceRefusal(p); r != nil {
+		return runner.SandboxSpec{}, r
+	}
+	if r := machineKindRefusal(p); r != nil {
 		return runner.SandboxSpec{}, r
 	}
 	if p.TrustedOutput {

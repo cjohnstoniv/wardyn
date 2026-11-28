@@ -16,11 +16,16 @@ func TestEvaluate(t *testing.T) {
 	}{
 		{"nothing", Inputs{}, nil},
 		{"resident grant", Inputs{ResidentGrants: 1}, []Reason{ResidentGrant}},
+		{"git token", Inputs{GitTokenResident: true}, []Reason{GitToken}},
 		{"takeover", Inputs{TakeoverHappened: true}, []Reason{Takeover}},
 		{"sign-in store", Inputs{SigninBegun: true}, []Reason{SigninStore}},
+		{"recent credential", Inputs{RecentCredential: true}, []Reason{RecentCredential}},
+		{"harness login", Inputs{HarnessLogin: true}, []Reason{HarnessLogin}},
+		{"support session", Inputs{SupportSession: true}, []Reason{SupportSession}},
 		{"unreadable fails closed", Inputs{Unreadable: true}, []Reason{Unknown}},
-		{"all", Inputs{ResidentGrants: 2, TakeoverHappened: true, SigninBegun: true, Unreadable: true},
-			[]Reason{Unknown, ResidentGrant, Takeover, SigninStore}},
+		{"all", Inputs{ResidentGrants: 2, GitTokenResident: true, TakeoverHappened: true, SigninBegun: true,
+			RecentCredential: true, HarnessLogin: true, SupportSession: true, Unreadable: true},
+			[]Reason{Unknown, ResidentGrant, GitToken, Takeover, SigninStore, RecentCredential, HarnessLogin, SupportSession}},
 	} {
 		present, got := Evaluate(tc.in)
 		if present != (len(tc.want) > 0) || !slices.Equal(got, tc.want) {

@@ -87,13 +87,13 @@ func TestHubGoawayThenReconnectDeliversTheNewPerRunLimits(t *testing.T) {
 		}})
 	defer hub.Close()
 	online, resumed := make(chan *runnerwire.Peer, 2), make(chan bool, 2)
-	heard := make(chan [2]int64, 4)
+	heard, served := make(chan [2]int64, 4), make(chan error, 2)
 	hooks := sessionHooks(online, resumed)
 	hooks.PerRunLimits = func(cpu, mem int64) { heard <- [2]int64{cpu, mem} }
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {
 			org, run := runnerwire.Loopback()
-			go func() { _ = hub.Serve(ctx, org, row.ID) }()
+			go func() { served <- hub.Serve(ctx, org, row.ID) }()
 			return run, nil
 		}})
 	if err != nil {
@@ -113,6 +113,10 @@ func TestHubGoawayThenReconnectDeliversTheNewPerRunLimits(t *testing.T) {
 	if err := awaitValue(t, ctx, done); !errors.Is(err, runnerwire.ErrGoaway) {
 		t.Fatalf("GOAWAY control: %v", err)
 	}
+	// The runner hears the GOAWAY before the hub's Serve has let go of the session slot, and a connection
+	// that finds the slot held is refused. A runner waits its reconnect delay first; the test waits for
+	// the first Serve to return.
+	awaitValue(t, ctx, served)
 	go func() { done <- client.Connect(ctx) }()
 	awaitValue(t, ctx, online)
 	if got := awaitValue(t, ctx, heard); got != [2]int64{4000, 8192} {

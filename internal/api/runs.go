@@ -172,6 +172,11 @@ func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID 
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
 	}
+	// The portal was revoked between the drive check and the insert: as every request of a revoked portal is answered.
+	if errors.Is(err, store.ErrPortalRevoked) {
+		writePortalRevoked(w)
+		return
+	}
 	if refusal := insertRoomRefusal(err, pool); refusal != nil {
 		refusal.write(s, w, r)
 		return
@@ -457,8 +462,8 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
-	service, _ := frozenRunService(req.Service)          // serviceRefusal has already held it valid
-	imageInput := createDigestInput(req, f.carriedImage) // what the digest rule was asked about, for a revive to ask again
+	service, _ := frozenRunService(req.Service)                               // serviceRefusal has already held it valid
+	imageInput := f.windowsImageInput(createDigestInput(req, f.carriedImage)) // what the digest rule was asked about, for a revive to ask again
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -475,10 +480,12 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		RunnerTarget:     in.runnerTarget,
 		Interactive:      req.Interactive,
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
+		Image:            f.windowsRef,          // a Windows VM run's registered ref, which its insert takes a seat by; "" otherwise
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,
 		ImageInput:       &imageInput,
 		ImageAdmission:   f.admission,
+		Containers:       f.containers,
 		Shape:            storedRunShape(req),
 		CorrelationID:    correlationID(req.CorrelationID),
 		Service:          service,
@@ -504,10 +511,11 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		BreakGlass:      breakGlassReason(ctx) != "",
 		CreatedVia:      createdVia(ctx),
 		CreatedViaActor: createdViaActor(ctx),
+		PortalDrives:    runMountsPortalDrive(f.drives),
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
-		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
+		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor, SiteID: placed.SiteID,
 		// What it holds on that runner: the CPU and memory it gets and its main drive (runner limits).
 		Reserved: f.place.reserved(f.mainDrive),
 	}
@@ -618,6 +626,8 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
 	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
 	stampImageAdmission(createData, f.admission)
+	s.stampRunContainers(ctx, createData, f.containers)
+	stampWindowsLicence(createData, f.windowsLaunch)
 	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	return createData

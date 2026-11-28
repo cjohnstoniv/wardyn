@@ -85,13 +85,20 @@ func (s *Server) loadRunProxyConfig(ctx context.Context, runID uuid.UUID) ([]byt
 }
 
 // dropRunProxyConfig deletes runID's config, for a run that has gone terminal.
-// A failure is returned for the caller's audit row; the purge retries it.
+// A failure is returned for the caller's audit row; the purge retries it. A
+// sealed sandbox spec kept after the config is gone is logged, not returned:
+// it is no failed containment step, and the purge deletes it too.
 func (s *Server) dropRunProxyConfig(ctx context.Context, runID uuid.UUID) error {
 	st, ok := s.cfg.Store.(store.RunProxyConfigs)
 	if !ok {
 		return nil
 	}
-	return st.DeleteRunProxyConfig(ctx, runID)
+	err := st.DeleteRunProxyConfig(ctx, runID)
+	if errors.Is(err, store.ErrRunSandboxSpecKept) {
+		slog.ErrorContext(ctx, "wardynd: run proxy config dropped, its sealed sandbox spec kept", slog.String("run_id", runID.String()), slog.Any("error", err))
+		return nil
+	}
+	return err
 }
 
 // purgeTerminalRunProxyConfigs deletes the config of every terminal run: the

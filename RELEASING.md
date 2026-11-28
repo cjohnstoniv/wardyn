@@ -10,11 +10,12 @@
 
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
-  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (not required; a matrix job: `1/2`, `2/2`),
+  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `cross-os`, `build`, `diagrams`, `ui`, `ui-e2e` (not required; a matrix job: `1/2`, `2/2`),
   - `macos` (not required) and `macos-xcode-27` (not required),
   - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`,
   - `conformance-k8s-agent-sandbox` (not required),
-  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
+  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race-store`, `race-api`), `test-pg`, `gates` (a matrix job: `govulncheck`, `licenses`, `license-headers`, `gitleaks`),
+  - `staticcheck` (a matrix job: `staticcheck-tagless`, `staticcheck-docker`, `staticcheck-k8s`), `gates-staticcheck` (the required `gates (staticcheck)`), `dco`, `ci-ran`, `train-suites`, `mixed-version`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
   - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
@@ -45,7 +46,7 @@
     - with every required status check green in it;
     - plus the newest dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every watched job green.
   - A newer red nightly is not rescued by an older green one: re-dispatching the nightly is the deliberate recovery.
-  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
+  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks, and the Go cache warm when `WARDYN_RELEASE_GO_CACHE` is set) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
   - If no run qualifies, `preflight-green` fails loudly naming what is missing.
   - When the only CI run on the tree is a release PR whose merge tree differs from its head,
     - rebase the PR head onto the base tip so the merge adds nothing,
@@ -207,7 +208,8 @@ crash or a usage limit resumes with the same command:
    forced: a rejected push means `release/X.Y` moved, so it stops),
    - the annotated tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere but the commit just verified is refused by name),
    - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false` (with the pre-release and latest flags `PRERELEASE` picks) on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
-   - The forward-port commands are printed, never run. The last, before the push, is [`scripts/forward-port-check.sh`](scripts/forward-port-check.sh), which fails when the port deletes a line only `main` has; the `dco` job runs it on every `chore/forward-port-*` pull request into `main`.
+   - The forward-port commands are printed, never run. The last, before the push, is [`scripts/forward-port-check.sh`](scripts/forward-port-check.sh); it fails when the port deletes a line only `main` has.
+   - The `dco` job runs it on every `chore/forward-port-*` pull request, and on a `train/*` one for each `v0.10.*` tag merge on its first parent, into `main` or `release/**`. The train check is this one only.
    - A removal the port makes on purpose is listed in `scripts/forward-port-check.d/X.Y.Z.allow`, committed with the port: one `path<TAB>exact removed line<TAB>reason` per line, budget sums included. An entry the port does not need, or with no real reason, fails; so does a port that edits the script or another version's file.
    - After a final release, rehearse the runner compatibility walk against it once: `WARDYN_TEST_DOCKER=1
      WARDYN_COMPAT_RELEASED=vX.Y.Z scripts/runner-compat-walk.sh` on a native Docker engine, or a nightly on `main`.
@@ -414,6 +416,9 @@ crash or a usage limit resumes with the same command:
 6. **Publish the GitHub Release** for the tag, with that version's CHANGELOG section as the body. `release-assets` already made a draft, so edit it.
    - A final: `gh release edit vX.Y.Z --draft=false --prerelease=false --latest --notes-file <body>`. `make release-patch` runs this; `PRERELEASE=auto|true|false` picks (default `auto`). Keep `auto`: from 0.10.0 on, `verify-release` fails a wrong pick.
    - An `X.Y.Z-rc.N` gets `--prerelease`; a final with a newer final tag gets `--latest=false`.
+   - `:latest` on the agent images is not yours to move. The float-latest job in release.yml points it at the highest published final across every line, so a patch to an older line leaves it on the newer line's final. `verify-release` fails when it, or the Latest label, names anything else.
+
+   A failed or cancelled float-latest job stops release-patch.sh at its run watch; rerun only that job. Run verify-release for an older line only after the newer line's Release is published. Never rerun or dispatch release.yml on a tag before v0.10.4: its images and promote jobs still move `:latest` to that tag.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
    - Release assets live outside git history, so clones stay small.

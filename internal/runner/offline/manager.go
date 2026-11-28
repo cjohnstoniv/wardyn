@@ -6,12 +6,10 @@ package offline
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"sync"
 	"time"
 
@@ -22,7 +20,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/google/uuid"
-	"golang.org/x/sys/unix"
 )
 
 // Manager contains only local containment and evidence state. It cannot mint
@@ -80,6 +77,8 @@ type Manager struct {
 	replayTicks <-chan time.Time
 	replaySend  func(context.Context, []runnerwire.Event) error
 	replayTick  func()
+	// latch is the local containment latch's bookkeeping (contain.go); guarded by mu.
+	latch latchState
 }
 
 // Options are the manager's substrate-specific behaviours.
@@ -96,6 +95,10 @@ type deadline struct {
 	tokenAt, endsAt     time.Time
 	receipt             time.Time
 	tokenLeft, endsLeft time.Duration
+	// cleanupOnly marks a Docker restart's provisional deadline (ProvisionalDeadlines): it defers
+	// containment until the saved LapseBy and nothing else. Every other check reads the run as lapsed
+	// (expired) until the org's next lease replaces it.
+	cleanupOnly bool
 }
 
 // by is when d lapses: its receipt plus the sooner of its legs.
@@ -107,9 +110,9 @@ func (d deadline) by() time.Time {
 	return d.receipt.Add(left)
 }
 
-// New recovers local state. Run must start before connecting: a restart cannot
-// reconstruct a monotonic deadline, so existing proxies are contained until
-// an authenticated fresh lease establishes one.
+// New recovers local state. Run must start before connecting. A restart cannot reconstruct a monotonic
+// deadline, so a run's proxy is contained until ProvisionalDeadlines gives it one or an authenticated
+// fresh lease does.
 // eraseOutput deletes one run's retained output; the manager calls it only for
 // an org-erased (asserted) run's quarantined evidence at its retention ceiling.
 func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error), eraseOutput func(uuid.UUID) error) (*Manager, error) {
@@ -147,7 +150,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, errors.New("unsafe runner lifecycle lock")
 	}
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if err := flockExclusive(lock); err != nil {
 		lock.Close()
 		root.Close()
 		return nil, errors.New("runner lifecycle directory is already active")
@@ -158,6 +161,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, err
 	}
+	m.applyContainRequests(context.Background())
 	return m, nil
 }
 
@@ -271,10 +275,16 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	if l.RunID == uuid.Nil {
 		return errors.New("runner lease lacks run identity")
 	}
+	if m.dropLatchedLease(ctx, l) {
+		return nil // dropped: no deadline is extended and the session stays up (a refusal would end it)
+	}
 	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (!r.LeaseAfter.IsZero() && !l.TokenRenewedAt.After(r.LeaseAfter)) {
 		return errors.New("containment-only identity cannot receive a lease")
 	}
-	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
+	if l.OutageAllowanceS != 0 && (l.OutageAllowanceS < 1800 || l.OutageAllowanceS > 86400) {
+		return errors.New("runner lease outage allowance is outside 30 minutes to 24 hours")
+	}
+	tokenLeft, err := m.leaseTokenLeft(l)
 	if err != nil {
 		return err
 	}
@@ -310,6 +320,25 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 		return m.save()
 	}
 	return nil
+}
+
+// outageRecoveryLimit is how long after its expiry a run token may still be recovered: the control plane's
+// store.RecoveryLimit (24 h), kept here because the runner does not import the store.
+const outageRecoveryLimit = 24 * time.Hour
+
+// leaseTokenLeft is how long l lets the run's proxy keep its network without a newer lease (#4082). An older proxy, or
+// a lease from an older server, keeps today's deadline: it cannot recover, so a longer one gains it nothing. A pausing
+// proxy under strict terms stops at its allowance. Any other pausing proxy pauses by itself, so the runner keeps it to
+// the last moment a recovery could succeed (expiry + outageRecoveryLimit + the stamp margin), as a backstop.
+func (m *Manager) leaseTokenLeft(l runnerwire.Lease) (time.Duration, error) {
+	switch {
+	case !l.ProxyPauses:
+		return m.clock.TokenRemaining(l.TokenRenewedAt)
+	case l.OutageStrict:
+		return m.clock.AllowanceRemaining(l.TokenRenewedAt, time.Duration(l.OutageAllowanceS)*time.Second)
+	default:
+		return m.clock.AllowanceRemaining(l.TokenRenewedAt, identity.RunTokenTTL+outageRecoveryLimit+5*time.Minute)
+	}
 }
 
 // BeforeCreate commits a creation intent before any substrate side effect.
@@ -410,16 +439,27 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 	// create captured output says so here, before its sandbox is used.
 	r.OutputCapture = spec.ExecOutput != nil
 	r.MachineKind = spec.MachineKind.Normalize()
+	r.CreateDone = true
 	m.state.Runs[spec.RunID] = r
 	m.publishActivity()
 	return m.save()
 }
 
+// expired is every check but containment's: no deadline, a Docker restart's cleanup-only deadline, or one
+// that has passed.
 func (m *Manager) expired(id uuid.UUID) bool {
 	d, ok := m.deadlines[id]
-	if !ok {
-		return true
-	}
+	return !ok || d.cleanupOnly || m.past(d)
+}
+
+// lapsed is CheckLapses' read: like expired, but a cleanup-only deadline holds until it passes.
+func (m *Manager) lapsed(id uuid.UUID) bool {
+	d, ok := m.deadlines[id]
+	return !ok || m.past(d)
+}
+
+// past reports d over, timed on the monotonic clock from its receipt.
+func (m *Manager) past(d deadline) bool {
 	elapsed := m.since(d.receipt)
 	return elapsed < 0 || elapsed >= d.tokenLeft || (!d.endsAt.IsZero() && elapsed >= d.endsLeft)
 }
@@ -434,7 +474,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || r.LocalContain != nil || m.lapsed(id)
 		selectedBy := ""
 		if expired {
 			selectedBy = m.selectedBy(id, r)
@@ -500,148 +540,6 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// forgetLeftContainLogs drops the containment log of each run that is gone or retired: it left the loop
-// without a success, so nothing will log it again.
-func (m *Manager) forgetLeftContainLogs() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id := range m.containLogs {
-		if r, ok := m.state.Runs[id]; !ok || r.Retired {
-			delete(m.containLogs, id)
-		}
-	}
-}
-
-// errContainmentSuperseded is a containment pass whose run changed under it (a concurrent exec or start):
-// nothing was confirmed, and the next tick decides again on the current state. It is logged at WARN, not
-// ERROR, and names what changed and why the run was selected.
-type errContainmentSuperseded struct {
-	run                 uuid.UUID
-	changed, selectedBy string
-}
-
-func (e errContainmentSuperseded) Error() string {
-	return fmt.Sprintf("contain run %s: mutation changed during containment (%s changed; selected by %s)", e.run, e.changed, e.selectedBy)
-}
-
-// errContain is one run's failed containment attempt, kept typed so the containment loop logs it per run
-// (logContainFailure). Its text and its Unwrap are those of fmt.Errorf("contain run %s: %w").
-type errContain struct {
-	run uuid.UUID
-	err error
-}
-
-func (e errContain) Error() string { return fmt.Sprintf("contain run %s: %v", e.run, e.err) }
-func (e errContain) Unwrap() error { return e.err }
-
-// containSummaryEvery spaces out the repeats of one run's identical containment failure.
-const containSummaryEvery = time.Minute
-
-// containTextsPerRun bounds the error texts remembered for one run; past it the run starts over, so a
-// text that carries a changing value cannot grow the map.
-const containTextsPerRun = 16
-
-// containLog is one logged failure text of one run, and its repeats not logged since.
-type containLog struct {
-	next     time.Time
-	repeated int
-}
-
-// logContainFailure logs one run's failed containment attempt at ERROR: a text not yet seen for the run
-// at once; a seen one, however the texts interleave, as one summary line at most once per
-// containSummaryEvery, saying how many went unlogged. A success logs at once (CheckLapses). Only the line
-// is spaced out: every attempt still runs, and still fails its pass.
-func (m *Manager) logContainFailure(ctx context.Context, c errContain) {
-	m.mu.Lock()
-	now, text := m.now(), c.err.Error()
-	if m.containLogs == nil {
-		m.containLogs = map[uuid.UUID]map[string]*containLog{}
-	}
-	texts := m.containLogs[c.run]
-	if texts == nil || (texts[text] == nil && len(texts) >= containTextsPerRun) {
-		texts = map[string]*containLog{}
-		m.containLogs[c.run] = texts
-	}
-	l := texts[text]
-	log, repeated := true, 0
-	switch {
-	case l == nil:
-		texts[text] = &containLog{next: now.Add(containSummaryEvery)}
-	case now.Before(l.next):
-		l.repeated++
-		log = false
-	default:
-		repeated, l.repeated, l.next = l.repeated, 0, now.Add(containSummaryEvery)
-	}
-	m.mu.Unlock()
-	if log {
-		slog.ErrorContext(ctx, "runner containment will retry", "run_id", c.run, "error", c, "repeated", repeated)
-	}
-}
-
-// changedContainmentField is the first thing sameContainmentTarget saw differ.
-func changedContainmentField(a, b localRun) string {
-	switch {
-	case a.Ref != b.Ref:
-		return "ref"
-	case a.Generation != b.Generation:
-		return "generation"
-	}
-	return "mutation_failure"
-}
-
-// selectedBy names the CheckLapses condition that matched, in that condition's order. The caller holds m.mu.
-func (m *Manager) selectedBy(id uuid.UUID, r localRun) string {
-	switch {
-	case m.state.Revoked:
-		return "revoked"
-	case r.FailedCreation:
-		return "failed_creation"
-	case r.Containment != nil && !r.Containment.Contained:
-		return "containment_open"
-	case r.Quarantine != nil && r.ProxyStoppedAt == nil:
-		return "quarantine"
-	case r.MutationFailure != nil && !r.MutationFailure.Contained:
-		return "mutation_failure_open"
-	case r.ProxyExited != nil && r.ProxyStoppedAt == nil:
-		return "proxy_exited"
-	}
-	if _, held := m.deadlines[id]; !held {
-		return "no_deadline_held"
-	}
-	return "lease_lapsed"
-}
-
-// logContainmentErrors logs a tick's errors: a superseded pass at WARN, one line each, a run's failed
-// containment per run (logContainFailure), and everything else at ERROR as one line, through logRetry.
-func (m *Manager) logContainmentErrors(ctx context.Context, err error) {
-	var other []error
-	var walk func(error)
-	walk = func(e error) {
-		if multi, ok := e.(interface{ Unwrap() []error }); ok {
-			for _, inner := range multi.Unwrap() {
-				walk(inner)
-			}
-			return
-		}
-		var sup errContainmentSuperseded
-		if errors.As(e, &sup) {
-			slog.WarnContext(ctx, "runner containment superseded, re-checking", "run_id", sup.run, "changed", sup.changed, "selected_by", sup.selectedBy)
-			return
-		}
-		var c errContain
-		if errors.As(e, &c) {
-			m.logContainFailure(ctx, c)
-			return
-		}
-		other = append(other, e)
-	}
-	walk(err)
-	if len(other) > 0 {
-		m.logRetry(ctx, slog.LevelError, "runner containment will retry", errors.Join(other...))
-	}
-}
-
 // Run owns containment independently of connection cancellation and replay IO.
 // The caller supplies daemon lifetime, retaining it across reconnect attempts.
 func (m *Manager) Run(ctx context.Context) error {
@@ -669,7 +567,11 @@ func (m *Manager) Run(ctx context.Context) error {
 		if tick != nil {
 			tick(safety)
 		}
-		err := errors.Join(m.observeProxiesDue(safety), m.CheckLapses(safety), m.eraseAssertedEvidence())
+		m.applyContainRequests(safety)
+		observed := m.observeProxiesDue(safety)
+		lapses := m.CheckLapses(safety)
+		m.writeContainReceipts(lapses)
+		err := errors.Join(observed, lapses, m.eraseAssertedEvidence())
 		done()
 		if err != nil {
 			m.logContainmentErrors(ctx, err)
@@ -767,26 +669,53 @@ func (m *Manager) SetOptions(o Options) error {
 	return nil
 }
 
-// ProvisionalDeadlines gives each held run with no deadline and no obligation a provisional cleanup
-// deadline: the sooner of restart + RunTokenTTL and its last lease's LapseBy, but never before restart
-// + restartReadyGrace. The org's next lease replaces it.
+// ProvisionalDeadlines gives each held run with no deadline and no obligation a provisional deadline after a
+// restart. The org's next lease replaces it.
+//   - Self-lapsing proxies (k8s): a cleanup bound, the sooner of restart + RunTokenTTL and the last lease's
+//     LapseBy, but never before restart + restartReadyGrace.
+//   - Otherwise (Docker): exactly the last lease's LapseBy, never more than RunTokenLapseAfter after the
+//     restart and with no grace, so a runnerd restarting in a loop still stops each proxy at its LapseBy. It
+//     defers containment only (cleanupOnly), and only for a run whose create finished and that carries no
+//     containment, failure or hold; any other run, and one with no LapseBy or past it, gets none and is
+//     contained at once.
+//   - A pausing proxy's last lease (Lease.ProxyPauses) keeps its LapseBy uncapped by the token's lifetime: the
+//     sooner bound would stop a proxy that pauses and recovers by itself an hour into an outage.
 func (m *Manager) ProvisionalDeadlines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.selfLapse {
-		return
-	}
 	now := m.now()
 	for id, r := range m.state.Runs {
 		if _, ok := m.deadlines[id]; ok || r.Retired || r.Ref == "" || r.ProxyExited != nil || r.ProxyStoppedAt != nil {
 			continue
 		}
+		if !m.selfLapse {
+			left := min(r.LapseBy.Sub(now), identity.RunTokenLapseAfter)
+			if r.Lease.ProxyPauses {
+				left = r.LapseBy.Sub(now)
+			}
+			if restartKeepable(r) && left > 0 {
+				m.deadlines[id] = deadline{receipt: now, tokenLeft: left, cleanupOnly: true}
+			}
+			continue
+		}
 		left := identity.RunTokenTTL
-		if !r.LapseBy.IsZero() {
+		switch {
+		case !r.LapseBy.IsZero() && r.Lease.ProxyPauses:
+			left = max(r.LapseBy.Sub(now), restartReadyGrace)
+		case !r.LapseBy.IsZero():
 			left = min(left, max(r.LapseBy.Sub(now), restartReadyGrace))
 		}
 		m.deadlines[id] = deadline{receipt: now, tokenLeft: left}
 	}
+}
+
+// restartKeepable reports whether a Docker restart may keep r's proxy until its LapseBy: a finished create
+// with a saved lapse time, a lease no containment superseded, and no marker that asks for containment.
+func restartKeepable(r localRun) bool {
+	superseded := !r.LeaseAfter.IsZero() && !r.Lease.TokenRenewedAt.After(r.LeaseAfter)
+	return r.CreateDone && !r.LapseBy.IsZero() && !superseded && !r.ContainmentOnly && !r.FailedCreation &&
+		r.Quarantine == nil && r.Containment == nil && r.MutationFailure == nil && r.ContainmentPending == nil &&
+		r.TeardownUnconfirmed == nil
 }
 
 // proxyObserveInterval is the k8s runner's pod-list cadence (design K1 §6.2 P1).
@@ -918,70 +847,4 @@ func (m *Manager) pendingLogDue(id uuid.UUID) bool {
 	}
 	m.pendingLogged[id] = now
 	return true
-}
-
-// LoadEvidence returns a run's substrate evidence record (nil when none).
-func (m *Manager) LoadEvidence(runID uuid.UUID) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return slices.Clone(m.state.Runs[runID].Substrate), nil
-}
-
-// SaveEvidence writes a run's substrate evidence record with the state's atomic write and fsync. A
-// run the runner holds no record of (a lost identity met by the sweep) gets a containment-only
-// record, which CheckLapses contains.
-func (m *Manager) SaveEvidence(runID uuid.UUID, b []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if runID == uuid.Nil {
-		return errors.New("evidence for no run")
-	}
-	r, ok := m.state.Runs[runID]
-	if !ok {
-		ref := m.expectedRef(runID)
-		if ref == "" {
-			return errors.New("evidence for a run with no recoverable reference")
-		}
-		r = localRun{RunID: runID, Ref: ref, ContainmentOnly: true, Lease: runnerwire.Lease{RunID: runID}}
-	}
-	before := m.state.Runs[runID]
-	r.Substrate = slices.Clone(b)
-	m.state.Runs[runID] = r
-	if err := m.save(); err != nil {
-		if ok {
-			m.state.Runs[runID] = before
-		} else {
-			delete(m.state.Runs, runID)
-		}
-		return err
-	}
-	return nil
-}
-
-// SinkRunIDs lists the runs whose decision sink is registered again at startup: those holding a
-// substrate evidence record that are neither retired nor erased, so a spool is never reopened.
-func (m *Manager) SinkRunIDs() []uuid.UUID {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var ids []uuid.UUID
-	for _, id := range m.runIDs() {
-		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired && !r.EvidenceErased {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
-// EvidenceRunIDs lists the unretired runs holding a substrate evidence record, for the relay's
-// fence replay: a fence is dropped with the run's offline state at retirement.
-func (m *Manager) EvidenceRunIDs() []uuid.UUID {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var ids []uuid.UUID
-	for _, id := range m.runIDs() {
-		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired {
-			ids = append(ids, id)
-		}
-	}
-	return ids
 }

@@ -44,7 +44,7 @@ func laptopProxy(t *testing.T, upstream string, granted, relayed, exclusionUnkno
 		o.RunnerLocalModels = []string{laptopModelBase}
 	}
 	buf := &bytes.Buffer{}
-	o.Sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	o.Sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	return newProxy(o), buf
 }
 

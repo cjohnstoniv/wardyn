@@ -119,6 +119,10 @@ type Config struct {
 	// work folder is a kept drive is kept and can be revived, and such a run reaches its proxy through its own Service
 	// (agentsandbox_keep.go).
 	AgentSandboxKeep bool
+	// RunServiceOff is WARDYN_K8S_RUN_SERVICE=off (server mode; default on): no run gets its own Service or
+	// EndpointSlice, so the runs Role needs neither. The agent pod starts after its proxy pod is Ready and pins that
+	// pod's IP, as a runner's does. Keep needs the Service (checkAgentSandboxKeep). The zero value keeps the Service.
+	RunServiceOff bool
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
 	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
 	// production; an error refuses the run.
@@ -129,12 +133,17 @@ type Config struct {
 	// WarmPriorityClass is WARDYN_K8S_WARM_PRIORITY_CLASS: the PriorityClass placeholders take, so any run evicts
 	// them. Empty keeps the deployment placement's.
 	WarmPriorityClass string
+	// SPIFFE is the SPIRE Workload API mount for proxy pods (config.go); zero mounts nothing.
+	SPIFFE SPIFFEMount
 
 	// Runner mode (wardyn-runnerd, design K1 §3). Only runnerd sets these; with RunnerID empty every
 	// one is ignored and server mode is unchanged.
 	//
 	// RunnerID labels every object runner.LabelRunnerID; the sweep and label teardown select by it.
 	RunnerID string
+	// Drives lets a runner (RunnerID set) mount a drive an administrator keeps on it: a pre-provisioned claim
+	// (k8s_pvc_static) in the namespace the run is created in (refuseRunnerDrives). Off, a runner refuses every drive.
+	Drives bool
 	// ControlPlaneRelay returns the relay Service ClusterIP for a run's control-plane URL; the proxy
 	// pod's hostAliases map the URL's host to it. It refuses a URL whose port is not the relay's.
 	ControlPlaneRelay func(*url.URL) (string, error)
@@ -240,6 +249,12 @@ type Driver struct {
 	dynamic dynamic.Interface
 	// placement is cfg.SandboxPlacement, parsed and validated once at construction.
 	placement Placement
+	// untaintedPools are the pinned classes whose nodes the runner's own placement may also use (boot's
+	// readUntaintedPools); Classes reports them for the setup status. Set once at boot.
+	untaintedPools []types.ConfinementClass
+	// anyNodeClasses are the pinned classes whose RuntimeClass sets no scheduling, so their pods run on any
+	// node with the runtime (boot's checkClassPlacement); Classes reports them for the setup status.
+	anyNodeClasses []types.ConfinementClass
 	// nodeCache is the last node list, shared by every fit check (fit_nodes.go).
 	nodeCache nodeCache
 
@@ -296,8 +311,13 @@ type Driver struct {
 	runNamespaces sync.Map
 	// runLocks serialise each run's evidence read-modify-write (runner mode).
 	runLocks sync.Map
+	// redrawing holds each run replacing a fenced proxy draw (proxy_redraw.go), from its first retire until
+	// the proxy step returns: the 30 s observation leaves such a run out (redrawUnderTick).
+	redrawing sync.Map
 	// brackets routes a creating pod's start-wait reads through its bracket (runner mode).
 	brackets sync.Map
+	// podWatch rings the pod waits when their pods change (podwatch.go). Nil until New sets it: every wait then polls.
+	podWatch *podWatch
 	// hardDeny is Config.HardDeny with the substrate's own apiserver added (runner mode).
 	hardDeny *HardDeny
 	// now is the wall clock evidence bounds and stamps read; a test seam.
@@ -325,16 +345,20 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	// One pod watch per runs namespace, started now: the boot log then says whether its waits ring or poll.
+	d.podWatch = newPodWatch(cs)
+	for _, ns := range d.cfg.Namespaces {
+		d.podWatch.start(ns)
+	}
 	d.startCanaryRecheck()
 	d.startWarmPools()
 	return d, nil
 }
 
-// clientQPS and clientBurst replace client-go's 5/10 default, which one
-// readiness poll consumes on its own: two overlapping starts would starve
-// every other pod and Secret call. Fixed, not configurable — nothing sets a knob.
-// ponytail: a shared pod informer replaces the Get polls if ~45 concurrent
-// task runs per replica ever saturate this.
+// clientQPS and clientBurst replace client-go's 5/10 default. The pod waits ring on one pod watch per
+// runs namespace and read on a change (podwatch.go), so a waiting pod no longer spends a request every
+// 200 ms. Without `watch` on pods they poll, and this limit is what bounds them. Fixed, not
+// configurable: nothing sets a knob.
 const (
 	clientQPS   = 50
 	clientBurst = 100
@@ -354,6 +378,9 @@ func newClientset(restCfg *rest.Config) (*kubernetes.Clientset, error) {
 // synthetic rest.Config — only its Host field matters, for the canary's
 // dial target).
 func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.Config, cfg Config) (*Driver, error) {
+	if cfg.AgentSandboxKeep && cfg.RunServiceOff {
+		return nil, errKeepNeedsRunService
+	}
 	cfg.withDefaults()
 	if cfg.ProxyImage == "" {
 		return nil, errProxyImageUnset
@@ -391,6 +418,12 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 		}
 	}
 	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, dynamic: dyn, placement: placement, apiserverHostPort: hostPort, now: time.Now}
+	selectors, anyNode, err := d.checkClassPlacement(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.untaintedPools = d.readUntaintedPools(ctx, selectors)
+	d.anyNodeClasses = anyNode
 
 	// The canary runs in every namespace: each is where some run's NetworkPolicies must hold.
 	// NetworkPolicy reads as enforced only when every namespace proved it.
@@ -502,6 +535,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		NetworkPolicyAcknowledged: netPol.acknowledged(),
 		// The live verdict for health, with the time of the check that produced it.
 		NetworkPolicyCheck: d.netPolCheck(),
+		UntaintedPools:     d.untaintedPools,
+		AnyNodeClasses:     d.anyNodeClasses,
 		// Exec (exec.go's recordCmd) wraps the ephemeral-container argv with
 		// wardyn-rec via the masked brokered proxy upload — the only path
 		// this substrate supports, since mounts (and shared-volume delivery)
@@ -524,6 +559,9 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// point, in place and unreplaceable before any container starts. True
 		// only while that path exists, for UserDrives' reason.
 		ManagedFiles: true,
+		// Runs SandboxSpec.Containers in the agent pod (extra_containers.go). True only while that path
+		// exists; TestCreateSandbox_ExtraContainersShape pins the two together.
+		ExtraContainers: true,
 		// A run's disk_mib becomes the agent container's
 		// resources.limits[ephemeral-storage]; the kubelet enforces it by
 		// EVICTING the pod (measured periodically; the write is never

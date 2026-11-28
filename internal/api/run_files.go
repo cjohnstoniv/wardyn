@@ -220,7 +220,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := s.getRunAuthorized(w, r, id)
-	if !ok {
+	if !ok || windowsVMDoorRefusal(run, "file listing").write(s, w, r) {
 		return
 	}
 	if s.cfg.Runner == nil {

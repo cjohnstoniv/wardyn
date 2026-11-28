@@ -80,6 +80,9 @@ var RedactableActions = map[string]bool{
 	"policy.create": true, "policy.update": true, "policy.delete": true,
 	"preset.create": true, "preset.update": true,
 	"workload.apply": true, "workload.policy_pin.set": true, "workload.launch_refused": true, "workload.delete": true,
+	"model_provider.service_grant.mint": true, "model_provider.service_grant.secret_write": true,
+	"model_provider.service_grant.secret_delete": true,
+	"runners.mdm_device.set":                     true,
 }
 
 // Failure is one failed check: the bundle's checkpoint index, the seq it concerns, and why.
@@ -334,8 +337,12 @@ func (r *Report) checkEvent(i int, st Statement, c Checkpoint, ev Event, linked 
 		} else {
 			er.Withheld = true
 		}
-	} else if ev.Row.RowHash != nil && RowHash(ev.Row) != *ev.Row.RowHash {
-		r.fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
+	} else if ev.Row.RowHash != nil {
+		if h, err := RowHashOf(ev.Row); err != nil {
+			r.fail(i, seq, ReasonFormat, "%v", err)
+		} else if h != *ev.Row.RowHash {
+			r.fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
+		}
 	}
 	er.OK = len(r.Failures) == evBefore && res.Signed && res.Inclusion && !er.Withheld
 	return er

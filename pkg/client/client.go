@@ -17,7 +17,7 @@
 //   - runs (/api/v1/runs):               CreateRun, CreateRunWith, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, EditRunEgress, ExecRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
-//     OpenMacWindow, GetMacWindow, GetRunMachine, and a help session on a run (/api/v1/runs/{id}/support): RequestSupport,
+//     OpenMacWindow, GetMacWindow, OpenLocalWindow, GetRunMachine, and a help session on a run (/api/v1/runs/{id}/support): RequestSupport,
 //     SupportStatus, AcceptSupport, DeclineSupport, EndSupport
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetPolicyDocument, GetDefaultPolicy, ListPolicies,
@@ -35,7 +35,7 @@
 //     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult, PutSiteConfigClearing
 //   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
-//     sign-in and credential doors are NOT wrapped
+//     sign-in, credential and service-grant doors are NOT wrapped
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
 //     CreateMyDrive, DeleteMyDrive, DeleteMyDriveResult (/api/v1/me/drives)
@@ -53,7 +53,9 @@
 //     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder,
 //     UnitModelUsage
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
-//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
+//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange, GetGovernanceChangeImpact,
+//     ApproveGovernanceChangeWithReason, TakeBackGovernanceApproval
+//   - approval counts (/api/v1/governance/approval-counts): GetApprovalCounts, PutApprovalCounts
 //   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
 //     RequestImage, ApproveGovernanceRequest, RejectGovernanceRequest
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -98,6 +100,9 @@
 //
 //   - /api/v1/user-types     — the org's user types (0.8)
 //   - /api/v1/key-domains    — which declared key domain wraps a person's next principal key (0.8.6). Security tier
+//   - /api/v1/agent-rules    — the organisation's rules for each agent harness: list, replace and delete.
+//     Security tier, held for a second security admin when the second-person switch is on, and authored
+//     in the console's Policies screen
 //   - /api/v1/approval-notify — each approval notification channel's delivery health (0.8.6).
 //     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
@@ -106,6 +111,12 @@
 //     self-service half, wrapped only for CreateAPIToken and RevokeAPIToken (listing stays unwrapped)
 //   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
 //     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
+//   - /api/v1/inbound-federation, /api/v1/inbound-trusts — inbound federation's switch and trusts (security tier);
+//     a sponsor's view of an identity's trusts sits under /api/v1/me
+//   - /api/v1/inbound        — POST /exchange: an organization's own provider token swapped for a short-lived inbound
+//     token, with no Wardyn credential
+//   - /api/v1/service-grant-cleanups — POST /{uid}/retry (admin): one more try at deleting the secret of a service
+//     grant removed from a model provider. Admin maintenance, like the service-grant routes under /api/v1/model-providers
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
@@ -114,14 +125,21 @@
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
+//   - /api/v1/run-schedules  — repeating scheduled runs: drive with raw HTTP; a CLI is a follow-up
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
+//   - /api/v1/org-sites      — organisation sites (0.11), with PUT and DELETE /api/v1/runner-pools/{id}/site and
+//     /api/v1/drives/{id}/site: which place each pool and admin drive is at, and each site's default pool
+//   - /api/v1/windows-licence-pools, /api/v1/windows-images — the Windows VM licence
+//     pools, their holders and seats (admin), and the registered Windows images
+//     (admin or security admin)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
 //   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.
-//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens
+//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens,
+//     windows-images
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
 //   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a
@@ -140,8 +158,12 @@
 //     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
 //     remove one from a group. Authenticated by its own bearer
 //     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
+//   - /api/v1/assistant      — the assistant: its settings (super admin) and a person's
+//     sessions (preview, start, messages, edits, the event stream, end). A console
+//     surface whose session streams to the person's browser
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
+//   - /api/v1/walls          — the Walls view's topology and live stream, and /api/v1/runs/{id}/walls: the 3D view's reads, a console surface rather than tooling
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller
@@ -380,6 +402,9 @@ type AuditFilter struct {
 	Actor        string // exact principal, e.g. "alice@corp.example" — "everything X did"
 	ActorType    string // "human" | "agent" | "system"
 	Outcome      string // "success" | "denied" | "failure"
+	// Order "desc" reads a run's trail newest window first, newest event first, as ?order=desc does; empty keeps
+	// the default, oldest first. It narrows nothing.
+	Order string
 }
 
 // queryValues renders f as the query params the server's parseAuditFilter
@@ -403,6 +428,9 @@ func (f AuditFilter) queryValues() url.Values {
 	}
 	if f.Outcome != "" {
 		q.Set("outcome", f.Outcome)
+	}
+	if f.Order != "" {
+		q.Set("order", f.Order)
 	}
 	return q
 }

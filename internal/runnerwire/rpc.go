@@ -73,6 +73,10 @@ const (
 	MethodLocalAttach       = "local_attach"
 	MethodLocalAttachMode   = "local_attach_mode"
 	MethodLocalAttachTeeAck = "local_attach_tee_ack"
+	// MethodLocalWindow opens a local_window stream that splices the CLI holding a window nonce on the
+	// runner's local socket to a Linux VM run's display (LocalWindowArgs). It is sent only to a runner
+	// advertising Caps.LocalWindow.
+	MethodLocalWindow = "local_window"
 	// MethodWorkloadStatus patches the status of one WardynWorkload custom resource from the org's
 	// answer (WorkloadStatusArgs). It is sent only to a runner that reported a workload.
 	MethodWorkloadStatus = "workload_status"
@@ -95,10 +99,36 @@ const (
 	// MethodNarrowProxy adds hosts to a Kubernetes sandbox's proxy deny list in place (NarrowProxyArgs, answered with
 	// NarrowProxyResult); an empty Deny reads the list. Sent only to a runner whose caps carry ProxyNarrow.
 	MethodNarrowProxy = "narrow_proxy"
+	// The snapshot calls (runner.Snapshotter, SnapshotArgs answered with SnapshotReply) are sent only to a
+	// runner whose caps carry Snapshots: a cut that returns while its copy runs, then exactly one of
+	// commit_snapshot or abort_snapshot for it; delete_snapshot and list_snapshots act on its kept layers.
+	MethodSnapshotSandbox = "snapshot_sandbox"
+	MethodCommitSnapshot  = "commit_snapshot"
+	MethodAbortSnapshot   = "abort_snapshot"
+	MethodDeleteSnapshot  = "delete_snapshot"
+	MethodListSnapshots   = "list_snapshots"
+	// MethodMoveExport, MethodMoveImport and MethodMoveUnbound carry a paused run's files to another placement
+	// (move.go). They are sent only to a runner whose caps carry MoveState; an older runner would refuse them
+	// as unknown calls.
+	MethodMoveExport  = "move_export"
+	MethodMoveImport  = "move_import"
+	MethodMoveUnbound = "move_unbound"
 )
 
-// KeptMachineOpDelete is kept_machine's one op.
-const KeptMachineOpDelete = "delete"
+// kept_machine's ops. KeptMachineOpDelete removes a machine whatever its deadline says: a person's or an
+// operator's decision. KeptMachineOpDeleteExpired is the organisation's expiry-driven delete: under the machine's
+// lock the Mac reads its own record and removes the folder only if the deadline there has passed with no
+// session holding the machine, else it refuses and removes nothing. A runner that predates it refuses the
+// op as unknown, which is why the organisation sends it only to a runner whose caps carry
+// MacVMCaps.KeptConditionalDelete.
+const (
+	KeptMachineOpDelete        = "delete"
+	KeptMachineOpDeleteExpired = "delete_expired"
+)
+
+// KeptMachineByExpiry is the By of a delete the organisation starts because the machine's deadline has
+// passed; it is sent with KeptMachineOpDeleteExpired. Every other By is a person's or an operator's decision.
+const KeptMachineByExpiry = "expiry"
 
 // KeptMachineArgs is kept_machine's input. By says who asked, for the runner's log: the owner, an admin,
 // erasure, expiry or a revoked runner.
@@ -473,6 +503,16 @@ type LocalAttachArgs struct {
 	Nonce   string               `json:"nonce"`
 	Options runner.AttachOptions `json:"options"`
 	Tee     bool                 `json:"tee,omitempty"`
+}
+
+// LocalWindowArgs asks the runner to show ref's display to the CLI that holds Nonce (a window nonce
+// granted on the runner's local socket). GrantID names the organisation's grant for this one open, and
+// Title is the window's title. It carries no clipboard rules: the runner passes no cut text either way.
+type LocalWindowArgs struct {
+	Ref     string    `json:"ref"`
+	Nonce   string    `json:"nonce"`
+	GrantID uuid.UUID `json:"grant_id"`
+	Title   string    `json:"title,omitempty"`
 }
 
 // LocalAttachModeArgs sets the writer or observer mode of the session whose pty_tee stream is Stream.

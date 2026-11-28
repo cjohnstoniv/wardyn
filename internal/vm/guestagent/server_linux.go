@@ -203,6 +203,10 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			res.SignIns = SignInsNone
 		}
 	}
+	if err := s.scrubLastInit(in); err != nil {
+		http.Error(w, "the last sandbox's files: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	for _, f := range in.Files {
 		if err := s.writeFile(f); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -361,6 +365,9 @@ func (s *Server) writeFile(f File) error {
 	}
 	if strings.Contains(f.Path, "..") {
 		return fmt.Errorf("managed file %q has \"..\" in its path", f.Path)
+	}
+	if err := ceilingParents(filepath.Dir(f.Path)); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
 		return err

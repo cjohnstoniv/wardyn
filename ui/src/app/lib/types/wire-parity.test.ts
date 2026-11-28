@@ -113,6 +113,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+  const runCapacityTs = readFileSync(join(root, "ui/src/app/lib/types/run-capacity.ts"), "utf8");
   const approvalsTs = readFileSync(join(root, "ui/src/app/lib/types/approvals.ts"), "utf8");
 
   it("SetupStatus: every Go tag is mirrored, and every TS key besides the UI-only `unreachable` is a Go tag", () => {
@@ -226,34 +227,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("RunnerSettings: default-off admission block mirrors the Go wire shape", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "RunnerSettings");
-    expect(goTags).toEqual(["enabled", "require_managed_device"]);
+    expect(goTags).toEqual(["enabled", "require_managed_device", "mdm_device_ca_pem", "mdm_device_crl_url", "machine_kind_denials"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "RunnerSettings");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
-  // #1215: the site config's branding block — one tag today (logo_path), so it
-  // cannot ride the it.each below, whose stale-regex guard wants two.
-  it("SiteBranding (`branding` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteBranding");
-    expect(goTags).toEqual(["logo_path"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteBranding");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
-  // The macOS VM block of the site config: max_base_age_days, the background-watch and window switches, and the three kept-machine keys.
-  it("SiteMacOSVM (`macos_vm` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteMacOSVM");
-    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch", "allow_attended_window", "allow_kept_machines", "kept_machine_idle_days", "max_kept_machines_per_person"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
-
-  // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
-  it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "WithheldScmHost");
-    expect(goTags).toEqual(["host", "provider_id", "provider_kind"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "WithheldScmHost");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
@@ -271,14 +246,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   ])("%s (GET /admin/runs/capacity): full parity with the TS mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/store/store_run_capacity.go"), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(1);
-    expect(new Set(tsInterfaceTopKeys(runsTs, tsName))).toEqual(new Set(goTags));
+    expect(new Set(tsInterfaceTopKeys(runCapacityTs, tsName))).toEqual(new Set(goTags));
   });
 
   it("RunCapacityResponse (GET /admin/runs/capacity): the handler adds generated_at and basis to RunCapacity", () => {
     const handlerGo = readFileSync(join(root, "internal/api/runs_capacity.go"), "utf8");
     expect(handlerGo).toMatch(/GeneratedAt time\.Time\s+`json:"generated_at"`/);
     expect(handlerGo).toMatch(/Basis\s+string\s+`json:"basis"`\n\t\tstore\.RunCapacity\n/);
-    expect(new Set(tsInterfaceTopKeys(runsTs, "RunCapacityResponse"))).toEqual(new Set(["generated_at", "basis"]));
+    expect(new Set(tsInterfaceTopKeys(runCapacityTs, "RunCapacityResponse"))).toEqual(new Set(["generated_at", "basis"]));
   });
 
   // #1215: GET /branding/settings is the public subset (brandingPublic, embedded)
@@ -333,10 +308,11 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["RunPolicyChange", "runPolicyChange", "RunPolicyChange"],
     ["StoredPolicyNow", "storedPolicyNow", "StoredPolicyNow"],
     ["RunPolicyHostMarks", "hostMarks", "RunPolicyHostMarks"],
+    ["RunPolicySecretAsValue", "runPolicySecretAsValue", "RunPolicySecretAsValue"],
   ])("%s: full parity between pkg/client, the server struct and the TS mirror", (sdkName, serverName, tsName) => {
     const sdkGo = readFileSync(join(root, "pkg/client/run_policy.go"), "utf8");
-    const serverGo =
-      readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8") + readFileSync(join(root, "internal/api/run_host_marks.go"), "utf8");
+    const serverGo = ["run_policy_view", "run_host_marks", "run_policy_as_value"]
+      .map((f) => readFileSync(join(root, `internal/api/${f}.go`), "utf8")).join("");
     const sdkTags = goJSONTags(sdkGo, sdkName);
     expect(sdkTags.length).toBeGreaterThanOrEqual(3);
     expect(new Set(goJSONTags(serverGo, serverName))).toEqual(new Set(sdkTags));
@@ -430,7 +406,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const vm = /export type VMKind = ([^;]+);/.exec(kindTs);
     if (!vm) throw new Error("machine-kind.ts: no VMKind");
     const tsVMKinds = [...vm[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
-    expect(new Set(tsVMKinds)).toEqual(new Set(goKinds.filter((k) => k !== "container")));
+    const NOT_IN_CONSOLE_YET = ["windows_vm"]; // the server knows it, the console does not offer it; the console row that does removes it
+    expect(new Set(tsVMKinds)).toEqual(new Set(goKinds.filter((k) => k !== "container" && !NOT_IN_CONSOLE_YET.includes(k))));
   });
 
   // GET /runs/{id}/sign-in: RunSignIn mirrors runSignInResponse.

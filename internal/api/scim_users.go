@@ -76,7 +76,20 @@ func (s *Server) scimIdentity(w http.ResponseWriter, r *http.Request) (scimStore
 		s.scimServerError(w, r, "read the user", err)
 		return nil, store.PrincipalIdentity{}, false
 	}
+	if !s.scimOwns(ident) {
+		writeSCIMError(w, notFound)
+		return nil, store.PrincipalIdentity{}, false
+	}
 	return st, ident, true
+}
+
+// scimOwns reports whether an identity row belongs to the identity provider this SCIM endpoint serves:
+// the configured issuer and, as scimMatch finds a row by tenant, the configured tenant. A row with no
+// tenant recorded stays reachable under its issuer. A row of another issuer or tenant is, to every
+// by-id route, a user that does not exist.
+func (s *Server) scimOwns(ident store.PrincipalIdentity) bool {
+	cfg := s.cfg.SCIM
+	return ident.Issuer == cfg.Issuer && (cfg.Tenant == "" || ident.TenantID == "" || ident.TenantID == cfg.Tenant)
 }
 
 func (s *Server) scimServerError(w http.ResponseWriter, r *http.Request, what string, err error) {
@@ -170,6 +183,19 @@ func emailValues(in []scim.Email) []string {
 	return out
 }
 
+// primaryEmail is the address a User's emails name as the person's own: the one marked primary, else the first.
+func primaryEmail(in []scim.Email) string {
+	for _, e := range in {
+		if e.Primary {
+			return e.Value
+		}
+	}
+	if len(in) > 0 {
+		return in[0].Value
+	}
+	return ""
+}
+
 // scimMatch finds the identity a SCIM user stands for: the row holding its object id, then the row
 // of the person set up as entra:<tenant>:<oid>, then, as a removal-only link, the one row with no
 // object id seen under one of its names. More than one such row links nothing, and neither does a
@@ -256,7 +282,7 @@ func (s *Server) handleSCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	upd := store.IdentityUpdate{ExternalID: oid, UserName: u.UserName, Emails: emailValues(u.Emails)}
+	upd := store.IdentityUpdate{ExternalID: oid, UserName: u.UserName, Emails: emailValues(u.Emails), PrimaryEmail: primaryEmail(u.Emails)}
 	ident, found, err := s.scimMatch(ctx, st, oid, scimNames(u.UserName, upd.Emails))
 	created := false
 	switch {
@@ -329,7 +355,8 @@ func (s *Server) handleSCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 			case scim.AttrUserName:
 				ch.userName = v
 			case scim.AttrEmail:
-				ch.emails = append(ch.emails, v)
+				// Operations apply in order: the last address set is the person's own.
+				ch.emails, ch.primaryEmail = append(ch.emails, v), v
 			case scim.AttrExternalID:
 				ch.externalID = v
 			}
@@ -352,7 +379,7 @@ func (s *Server) handleSCIMPutUser(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, perr)
 		return
 	}
-	ch := scimChange{userName: u.UserName, emails: emailValues(u.Emails), externalID: u.ExternalID}
+	ch := scimChange{userName: u.UserName, emails: emailValues(u.Emails), primaryEmail: primaryEmail(u.Emails), externalID: u.ExternalID}
 	if u.ActiveSet {
 		ch.active = &u.Active
 	}
@@ -361,10 +388,11 @@ func (s *Server) handleSCIMPutUser(w http.ResponseWriter, r *http.Request) {
 
 // scimChange is what a PATCH or a PUT asks of one identity: the attributes Wardyn acts on.
 type scimChange struct {
-	active     *bool
-	userName   string
-	emails     []string
-	externalID string
+	active       *bool
+	userName     string
+	emails       []string
+	primaryEmail string // the address the request names as the person's own; "" when it names none
+	externalID   string
 }
 
 // externalIDAllowed reports whether the requested externalId leaves the identity's binding as it is.
@@ -410,7 +438,7 @@ func (s *Server) applySCIMChange(w http.ResponseWriter, r *http.Request, st scim
 		s.scimServerError(w, r, "read the user", err)
 		return
 	}
-	upd := store.IdentityUpdate{UserName: ch.userName, Emails: ch.emails, Reactivate: reactivate}
+	upd := store.IdentityUpdate{UserName: ch.userName, Emails: ch.emails, PrimaryEmail: ch.primaryEmail, Reactivate: reactivate}
 	if ch.externalID != "" && ident.ScimExternalID == "" {
 		upd.ExternalID, _ = normalizeExternalID(ch.externalID)
 	}
@@ -434,7 +462,7 @@ func (s *Server) applySCIMChange(w http.ResponseWriter, r *http.Request, st scim
 	}
 	after, _ := st.IdentityAliasValues(ctx, ident.ID)
 	reactivated := reactivate && ident.DeactivatedAt != nil && updated.DeactivatedAt == nil
-	if reactivated || updated.ScimUserName != ident.ScimUserName || updated.ScimExternalID != ident.ScimExternalID || !slices.Equal(before, after) {
+	if reactivated || updated.ScimUserName != ident.ScimUserName || updated.ScimExternalID != ident.ScimExternalID || updated.EmailLower != ident.EmailLower || !slices.Equal(before, after) {
 		op := "projection"
 		if reactivated {
 			op = "reactivate"

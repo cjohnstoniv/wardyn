@@ -52,10 +52,12 @@
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
   An end asked for right after a sign-in began can be refused while the sign-in is still starting, for up to 6 minutes; ask for it again.
+- An end that cannot stop the display still closes it within about 5 seconds, while the end is retried.
 - `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
   refused begin leaves the agent running. End stays open.
-- A limit set during a sign-in stops new entry. An open display stays until it
-  ends, and the agent comes back at End or within 30 minutes. If the end cannot
+- A run that declares a desktop under a profile with `deny_interactive` is created with a warning, in Review too: its desktop does not open while the profile denies interactive sessions.
+- A limit set during a sign-in stops new entry. An open display stays until the
+  sign-in ends, and the agent comes back at End or within 30 minutes. If the end cannot
   finish, Wardyn ends the run after 3 failed retries.
 - The person's browser is a different uid in the same sandbox, not a
   sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
@@ -76,10 +78,14 @@
 
 - The relay filters a desktop's clipboard by the run's [`desktop`](POLICIES.md#desktop--desktopcontrols) rules:
   paste in allowed and copy out blocked unless the policy says otherwise.
-- The desktop is the app declared as `"name": "novnc"`. Every WebSocket of that app is RFB or it closes. The relay
-  follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
-- Only that app and the sign-in display (`_signin`) are filtered. A member may declare the same desktop server under another name, so a ceiling that
-  blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
+- The desktop is the app declared as `"name": "novnc"`, and any app declared with `"kind": "desktop"` whatever its
+  name. Every WebSocket of such an app is RFB or it closes. The relay follows the RFB stream inside it and drops a
+  blocked `ClientCutText` or `ServerCutText`.
+- Only those apps and the sign-in display (`_signin`) are filtered. A desktop declared under another name without the
+  kind relays unfiltered, so declare the kind on it, or on the ceiling's entry for it (a policy under that ceiling
+  keeps the kind).
+- An SSH port forward to the VNC port is outside the relay. A ceiling that blocks copy out should list its `ui_apps`:
+  a policy under a ceiling with no list may declare any app.
 - The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
   a run built to get data out.
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
@@ -93,6 +99,12 @@
 - Every other app's sockets relay unfiltered, as before.
 - It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
   sandbox serves can still show text.
+
+## The desktop watermark
+
+- It shows the viewer's email, or their principal, and the run id over the picture only: in the live desktop, a background watch and the recording replay.
+- An admin can require it with `desktop_watermark.required` in site config (Settings → Desktop watermark). Otherwise each viewer may turn it on for one view; the choice is not stored.
+- It deters a casual screen capture. It does not stop one: anyone who can see the screen can still photograph it.
 
 ## The desktop of a Linux VM run
 
@@ -109,6 +121,15 @@
   as the `novnc` app. No clipboard flows today: QEMU's VNC passes cut text only to a guest clipboard agent
   (`qemu-vdagent`), and the VM has none. The rules take effect once one exists.
 - The filter is not a boundary against a run built to get data out: the run controls what its screen shows.
+
+## The sandbox browser lockdown
+
+- With `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run carries a Chromium policy the agent cannot change: no extension but those the organisation allows. It binds every Chromium build in the sandbox that reads `/etc/chromium/policies` and is started the normal way, whoever starts it. It does not bind Google Chrome, Chrome for Testing or Firefox.
+- The agent drives its browser through `wardyn-signin cdp --agent [--session ID]`, a socket only its uid can open, never a port.
+- `wardyn-signin browser` takes only `--headless` and start URLs, in every deployment, and starts Chromium with a fixed environment.
+- A browser the agent starts itself can still open a debugging port on the sandbox's own loopback. Nothing outside the sandbox reaches it except Wardyn's ticketed forwarders. An agent that can run its own code can start a browser that ignores the policy file, so the run's network policy stays the wall.
+- A Linux VM guest refuses the policy when a directory above it is not root-owned or is writable by others. A Linux VM guest that allows unprivileged user namespaces lets a process mount over the policy directory in a namespace of its own. Set `user.max_user_namespaces=0` in the guest image to close that.
+- Who is refused, and the Kubernetes limit: [`WARDYN_BROWSER_LOCKDOWN`](ENV.md#wardyn_browser_lockdown) and [`WARDYN_BROWSER_POLICY_FILE`](ENV.md#wardyn_browser_policy_file).
 
 ## Diagnosing a blocked request
 
@@ -281,6 +302,7 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 - The command starts once, after the workspace is prepared, in the run's terminal session (attach shows its output); it stops with the run and is not restarted if it exits. A revive starts it again.
 - With no launcher, the gateway waits up to 20s for the port of a run whose startup is a command, before the 502 below. The wait counts from when the app is opened, so an open during a long workspace preparation can still show the error.
 - A harness prompt seed gets the 502 at once.
+- With `WARDYN_START_AFTER_READBACK=on`, the startup command waits in the sandbox until the run's proxy confirms its policy, then starts. This needs a Wardyn agent image from 0.11.0 or later; with an older image the run fails with a hint to rebuild it. On a VM the form is still failed before the machine is created.
 
 ## 3. Open an app
 
@@ -467,6 +489,7 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 ### Call it with a token
 
 - Mint an **inbound token** in the console: yourself with `POST /api/v1/me/tokens`, or for a service identity you sponsor with `POST /api/v1/me/service-identities/{name}/tokens`, sending `{"kind":"inbound"}`. See [API tokens](operations/api-tokens.md#inbound-tokens).
+- A machine with a token from its own organization's identity provider can swap it for a service identity's inbound token instead: see [Inbound federation](operations/inbound-federation.md).
 - A person mints their own inbound token in the console under Settings → Your API tokens: choose **Calling inbound ports** for Use. It is shown once.
 - Send it as the one bearer this listener takes. `inbound_url_template` in `/healthz` under `ui_sandbox` gives the address, with `{run}` and `{app}` to fill in; `$UI` below is the part before `/r/`.
 
@@ -506,6 +529,52 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 - Denials share the `auth.fail` rate bound, so a flood of refusals writes fewer rows than requests. A refused re-check of a session is its usual `ui.authorize` denial.
 - A busy run writes up to 50 `inbound.allow` rows a second, in bursts of up to 100, so filter them when reading the run's trail.
   - One caller writes at most the same over all the runs they call.
+
+### Preview URLs
+
+A preview opens a port a run is already listening on, in its own browser tab, without a `ui_apps` entry. The gateway presents it as the app `__preview-<port>`.
+
+- Previews are off until `features.preview_urls.enabled` is true in site config. They need the UI gateway (`WARDYN_UI_SANDBOX_LISTEN`); turning them on without it is refused `400` `site_config_invalid`.
+- In the console, an administrator sets this under Settings, in Connections, on the Preview URLs card.
+- `features.preview_urls.max_visibility` is the widest a preview can be: `private` (the default) or `org`. `org` needs host mode (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`).
+- Revoking a preview, lowering the ceiling or switching previews off ends its open connections within a minute. Lowering the ceiling or switching off also revokes every preview above it, each recorded as `preview.revoke`.
+
+#### Create, open and revoke
+
+- A console person the run's entry rule admits creates one with `PUT /api/v1/runs/{id}/previews/{port}`: the run's creator, or a super admin on a run no person owns. The body is `{"visibility": "private"|"org", "ttl_seconds": N}`.
+  - An absent `visibility` is `private`. `ttl_seconds` runs from 3600 to 604800 and defaults to 86400.
+  - The same call with the same visibility extends the preview. Another visibility revokes it and stores a new one.
+- `GET /api/v1/runs/{id}/previews` lists the live previews and `DELETE /api/v1/runs/{id}/previews/{port}` revokes one. The run's creator and a security admin may call both, with previews on or off.
+- `POST /api/v1/runs/{id}/previews/{port}/ticket` mints the single-use ticket that opens one, answering `{ticket, expires_in_seconds}`. It goes through the same bind and enter hand-off as [Open an app](#3-open-an-app), with the app `__preview-<port>`.
+- In the console, the run page has a Preview URLs tile for the run's creator and for a security admin, once previews are on and while the run has not ended. Nobody else sees it, a service identity's sponsor included.
+  - The creator lists, creates, opens and revokes. A security admin who is not the creator lists and revokes, and opens Organisation rows only.
+  - A background run's tile says it has no web application gateway.
+- An Organisation preview's Copy link is the console route `/previews/<run-id>/<port>`. It mints that ticket and enters in the same tab.
+
+#### Who can open one
+
+- A private preview admits whoever the run's entry rule admits at the ticket route: its creator. A role alone never admits anyone, a super admin included.
+- An Organisation preview also admits any other person signed in to the console, a security admin included. The ticket records `caller` as `owner` or `preview:org` in `preview.open`.
+- A person a preview does not admit, a preview that has ended and a missing run all get the foreign-run `404` `run_not_found` from the ticket route.
+- A preview on the gateway's own address refuses a visitor it does not admit with `403` `not_authorized`, and one that has ended or been revoked with `403` `revoked`.
+
+#### What a preview needs
+
+- The port is from 1024 to 65535, other than 3128, which the run's proxy uses. A declared web app's port is opened as that app, not as a preview.
+- The run is running and not kept, and is not a background task. Its profile does not set `deny_ui_apps` or `deny_interactive`.
+- The run's `data_out` rule allows content out. A rule that keeps content in refuses with `403` `preview_data_out`.
+- The relay probes the port and never starts anything. A port with no listener answers `502` `preview_not_listening`, and a paused run answers `409` `preview_run_paused`.
+- A support session's door never opens a preview. A helper who is a console person can still open an Organisation row as themselves.
+
+#### Activity and recording
+
+- Viewing a preview does not keep its run awake and does not wake a paused run. Work the run does to answer a request counts as the run's own activity.
+- Content inside a preview is not recorded, as for relayed apps. Wardyn records that a preview was created, opened, denied and revoked (see [`preview.open`](AUDIT-ACTIONS.md)), never what was sent or shown.
+
+#### Where the UI origin sits
+
+- The console's own cookies carry no `Domain` attribute, so a preview's origin never receives them.
+- A page on a sibling subdomain can still set a cookie for the parent domain, as for any relayed app. Keep nothing whose non-HttpOnly cookies matter on the registrable domain the UI origin shares, as described under [Bounds](#bounds).
 
 ## 4. Deployment
 
@@ -678,6 +747,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
   - So is a support helper's: each new request is re-checked before it is relayed, and one already open, a WebSocket or a long response, is re-checked every 30 seconds and closed once the grant stops.
 - **A support helper.** A super admin whose [support request](ENV.md#wardyn_support_sessions) the run's owner accepted with the web apps or desktop door ticked opens the run's apps, governed.
   - Web apps opens a declared app that is not a desktop. Desktop opens the `novnc` app and a Linux VM's desktop. A door the owner left unticked is `403` `support_door_not_granted` when the ticket is asked for. A ticket used after its grant ended, ran out or lost that door is `403` `ui_gateway_ticket_run_mismatch` at the enter.
+  - An app of kind desktop under another name needs both doors.
   - It needs per-run hosts. On one shared host the ticket mint answers `403` `inbound_needs_host_mode`.
   - The profile's `deny_ui_apps` and `deny_interactive` and the run's `data_out` apply. The helper never has a super admin's exemption.
   - The cookie ends with the grant, and each re-check asks the grant again: a revoke or an expiry ends the session, and a grant that cannot be read fails closed (`503`).
@@ -788,15 +858,17 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - This relay puts a sandbox's UI in a **browser**.
 - Two questions follow it
   around: what about a native IDE, and what about a native desktop client?
-- Only the IDE has a native answer today. A desktop already runs in the browser
-  (the last row below), and this section exists so a native desktop client is not
-  mistaken for something that ships.
-- **No native client in the table below is built, scheduled, or tested**, and
-  [ROADMAP.md](../ROADMAP.md) lists no native IDE or remote-desktop path.
+- The IDE has a native answer today, and so does a Linux VM run's desktop. A
+  desktop also runs in the browser (the last row below), and this section exists
+  so no other native desktop client is mistaken for something that ships.
+- **One native client in the table below is built: a Linux VM run's window**
+  (`wardyn window <run>`, the "Built in 0.11" row). No other is built,
+  scheduled, or tested, and [ROADMAP.md](../ROADMAP.md) lists no other native
+  IDE or remote-desktop path.
 - **What exists today: VS Code Remote-SSH**, over the SSH gateway, with one
   client setting ([SSH.md §5](SSH.md#5-vs-code-remote-ssh)).
 - That is the whole
-  native story.
+  native IDE story.
 - It needs no relay, no `ui_apps` entry and no second listener —
   it is the SSH gateway doing what SSH does.
 - **What a further native lane would have to solve.** Each candidate is listed
@@ -811,6 +883,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 |  | That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one |  |
 |  | X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route |  |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
+| Linux VM window (RFB) | A viewer in the `wardyn` CLI that draws a Linux VM run's display on the computer its runner is on, over the runner's local socket. No new listener, and the browser desktop only watches while it is open | **Built in 0.11**: `wardyn window <run>`, off until `features.local_window.enabled` is on. Linux computers only, no clipboard, and not recorded, so a run recorded at Screen and actions refuses it ([more](operations/linux-vm-sandboxes.md#a-window-on-your-own-computer)) |
 | Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base`, the same default the vscode image now uses — an X stack does not need a language runtime |
 |  |  | Published with every release as `ghcr.io/cjohnstoniv/agent-novnc` ([Verify a release](VERIFY.md)). Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 

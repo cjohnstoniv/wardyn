@@ -29,7 +29,17 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 )
+
+// agentHTTP2Config is the guest agent's HTTP/2 receive windows. An exec's input is its request body, which the
+// agent reads only as fast as the exec's process reads its stdin, so each stream holds at most its own window and
+// the connection's has room for every stream at once: an exec whose input goes unread never stalls another's.
+func agentHTTP2Config() *http.HTTP2Config {
+	const streams, perStream = 250, 256 << 10
+	return &http.HTTP2Config{MaxConcurrentStreams: streams, MaxReceiveBufferPerStream: perStream,
+		MaxReceiveBufferPerConnection: streams * perStream}
+}
 
 // PortName is the virtio-serial port the agent serves; in the guest it is /dev/virtio-ports/PortName.
 const PortName = "org.wardyn.agent.0"
@@ -68,6 +78,9 @@ type Init struct {
 	// it in the guest's System keychain, for TLS only, before Init answers (MacKeychain). The
 	// operator's CAs are not in it. A Linux guest ignores it.
 	RunCA string `json:"run_ca,omitempty"`
+	// Fork says a Linux guest's disk is another run's snapshot. Every Init first removes the files the last
+	// Init on the disk wrote, by the record it kept; a fork's Init is refused when that record is missing.
+	Fork bool `json:"fork,omitempty"`
 }
 
 // initPrint is Init without its String method, so printing it does not recurse.

@@ -29,16 +29,22 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 	if err != nil {
 		return nil, err
 	}
-	deleted := 0
+	deleted, keptTeam := 0, 0
 	var errs []error
 	for _, o := range owned {
+		// A person's own team drive belongs to its unit: a leaver's cleanup keeps it (#3459), unless its owner had
+		// already asked for its delete, which the cleanup then finishes.
+		if o.Team && !o.Deleting() {
+			keptTeam++
+			continue
+		}
 		refused, err := s.memberDriveOwnerStarting(ctx, ms, o, memberDriveByAdmin)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("member drive %q: %w", o.Name, err))
 			continue
 		}
 		if refused {
-			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", o.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: %s", o.Name, memberDriveStartingWhose(o)))
 			continue
 		}
 		d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, o.ID)
@@ -56,22 +62,41 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 		switch {
 		case res.err != nil:
 			errs = append(errs, fmt.Errorf("member drive %q: %w", d.Name, res.err))
+		case res.driverErr != nil && res.untouched:
+			errs = append(errs, fmt.Errorf("storage deletion was refused for drive %q: %w", d.Name, res.driverErr))
 		case res.driverErr != nil:
-			errs = append(errs, fmt.Errorf("member drive %q is in use or not reclaimable and was kept: %w", d.Name, res.driverErr))
+			// Refused after the issue without the substrate saying nothing changed (a Kubernetes claim already
+			// terminating): the drive is held and its storage may be going, so only the underlying error is kept.
+			errs = append(errs, fmt.Errorf("member drive %q is held: Wardyn could not confirm that deleting its storage finished: %w", d.Name, res.driverErr))
 		case res.reason == reasonMemberDriveDeleteUnavailable:
-			errs = append(errs, fmt.Errorf("member drive %q was kept: this server cannot delete its storage", d.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: this server cannot delete its storage", d.Name))
 		case res.reason == reasonMemberDriveInUse:
-			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", d.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: %s", d.Name, memberDriveStartingWhose(d)))
+		case res.reason == reasonMemberDriveBusy:
+			// The claim taken above was consumed or taken over before the issue: no storage call ran.
+			errs = append(errs, fmt.Errorf("member drive %q is being deleted by another request", d.Name))
 		case res.reason == reasonMemberDriveDeleteDeferred:
 			errs = append(errs, fmt.Errorf("member drive %q is being deleted: its Mac is offline, and its disk is removed when it reconnects", d.Name))
 		case res.reason == reasonMemberDriveRecordOnly:
 			deleted++ // its Mac is no longer registered, so only the record was Wardyn's to remove
+		case res.reason != "" && res.issued != 0:
+			// The delete was issued and its end is not confirmed: the drive is held and its storage may be partly or wholly gone.
+			errs = append(errs, fmt.Errorf("member drive %q is held: Wardyn could not confirm that deleting its storage finished", d.Name))
 		case res.reason != "":
-			errs = append(errs, fmt.Errorf("member drive %q was kept: deleting its storage failed", d.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: deleting its storage failed", d.Name))
 		default:
 			deleted++
 		}
 	}
 	machines, err := s.eraseKeptMachinesOf(ctx, person) // the same scope reaches a kept machine (kept_machine_delete.go)
-	return map[string]any{"drives": deleted, "kept_machines": machines}, errors.Join(append(errs, err)...)
+	return map[string]any{"drives": deleted, "kept_machines": machines, "kept_team_drives": keptTeam}, errors.Join(append(errs, err)...)
+}
+
+// memberDriveStartingWhose says whose starting run holds a member drive's delete: its owner's, or anyone's for a team
+// drive, which every unit member's run may mount.
+func memberDriveStartingWhose(d types.UserDrive) string {
+	if d.Team {
+		return "a run on it is starting"
+	}
+	return "a run of its owner's is starting"
 }

@@ -267,6 +267,18 @@ describe("ConnectSSHCard for a helper", () => {
     expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("novnc") })).toBeInTheDocument();
   });
 
+  it("web apps without desktop: a declared app of kind desktop says P-01 for the desktop and has no Open", async () => {
+    attach(["web_apps"], "helper", { ui_apps: [...run.ui_apps!, { name: "desk", port: 5900, path: "/", kind: "desktop" }] });
+    expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("code-server") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: UI_APPS_LANE.cta("desk") })).toBeNull();
+    expect(screen.getByText(closed("desktop"))).toBeInTheDocument();
+  });
+
+  it("web apps and desktop: the kind-desktop app keeps its Open", async () => {
+    attach(["web_apps", "desktop"], "helper", { ui_apps: [...run.ui_apps!, { name: "desk", port: 5900, path: "/", kind: "desktop" }] });
+    expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("desk") })).toBeInTheDocument();
+  });
+
   it("an owner's novnc app keeps its Open with no doors in play", async () => {
     attach(null, "owner", { ui_apps: [{ name: "novnc", port: 6080, path: "/" }] });
     expect(await screen.findByRole("button", { name: UI_APPS_LANE.cta("novnc") })).toBeInTheDocument();

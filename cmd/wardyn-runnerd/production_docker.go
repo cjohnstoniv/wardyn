@@ -117,6 +117,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	extras.windowsVM = enableWindowsVM(ctx, sub, extras.linuxVM, os.Getenv)
 	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, stateDir, sub.EndVM)
@@ -407,7 +408,8 @@ type runtimeExtras struct {
 	closeAlso func() error
 	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
 	// runner's caps offer; nil offers none and refuses create_vm.
-	linuxVM *runnerwire.VMCaps
+	linuxVM   *runnerwire.VMCaps
+	windowsVM *runnerwire.VMCaps // enableWindowsVM: Windows VM sandboxes beside Linux ones; nil offers none
 	// macOSVM, set when the operator turned macOS VM sandboxes on (enableMacOSVM), builds the caps'
 	// macos_vm and resends them when they change; nil offers none.
 	macOSVM *macOSVMs
@@ -430,6 +432,8 @@ type runtimeExtras struct {
 	boundFolders bool
 	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
 	runsNamespaces []string
+	// drives: a k8s runner's WARDYN_RUNNERD_DRIVES, advertised as its drives.
+	drives bool
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
 	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
 	// netPolWatch, set by the k8s runner (the driver's OnNetPolChange), takes the hook a canary re-check
@@ -465,12 +469,14 @@ func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keysto
 }
 
 // hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
-// supports, its name, version and arch, whether it keeps a sandbox after the run ends, and whether it can
-// cut an agent off its networks (ProxyFence: the substrate's, never the process's).
+// supports, its name, version and arch, whether it keeps a sandbox after the run ends, whether it can
+// cut an agent off its networks (ProxyFence: the substrate's, never the process's), and whether a run
+// moved to it reads present before it starts (MoveImportPresent: the substrate's too).
 func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
 	_, keeps := sub.(runner.SandboxEnder)
 	_, fences := sub.(runner.ProxyFencer)
 	_, narrows := sub.(runner.ProxyNarrower)
+	_, importPresent := sub.(runner.MoveImportPresenter)
 	support, err := sub.Classes(ctx)
 	if err != nil {
 		return runnerwire.Caps{}, err
@@ -480,7 +486,8 @@ func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runner
 	if arch == "" {
 		arch = engineArch(ctx)
 	}
-	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows}, nil
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows,
+		MoveState: true, MoveImportPresent: importPresent}, nil
 }
 
 // checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
@@ -523,6 +530,14 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if !extra.noPosture {
 		reporter = posture.NewReporter()
 	}
+	// A Mac presents the MDM device identities its helper reads from the System keychain, only while the
+	// organisation asks (hooks.DeviceCert); with no helper beside this runner (no macOS VM support) it presents nothing.
+	var deviceCerts *posture.DeviceCertSender
+	if runtime.GOOS == "darwin" {
+		if helper, err := macVMHelperPath(); err == nil {
+			deviceCerts = posture.NewDeviceCertSender(helper, stateDir, identity.OrgURLSHA256)
+		}
+	}
 	if err := manager.SetOptions(extra.options); err != nil {
 		return runnerRuntime{}, err
 	}
@@ -545,11 +560,15 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
-		WorkloadStatus: extra.workloadStatus,
+		WorkloadStatus: extra.workloadStatus, WindowsVM: extra.windowsVM != nil,
+		SpoolDrained: manager.SpoolDrained, MoveUnbound: manager.MoveUnbound,
 	})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	// A restart keeps each run it can vouch for until its saved lapse time, then contains the rest. The k8s
+	// runner gave its runs theirs in started, after listing its proxies; this call adds none there.
+	manager.ProvisionalDeadlines()
 	checkLapsesAtStartup(ctx, manager)
 	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
 	if extra.netPolWatch != nil {
@@ -595,10 +614,17 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
 			}
+			// The device certificate report waits on the Mac's keychain, so it runs beside the session, not on
+			// the way to READY: Watch sends at once, then every 6 hours.
+			if deviceCerts != nil {
+				go deviceCerts.Watch(peer)
+			}
 		},
 		LocalAttach: local.Set,
 		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
 		PerRunLimits: extra.macOSVM.setPerRunLimits,
+		// Whether the organisation has an MDM device CA set, on every connect: a Mac reads its keychain only then.
+		DeviceCert: deviceCerts.SetWanted,
 		StreamOffline: func(peer *runnerwire.Peer) {
 			caps.online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)
@@ -627,7 +653,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}()
 		return manager.Run(ctx)
 	}
-	return runnerRuntime{hooks: hooks, run: run, close: func() error {
+	return runnerRuntime{hooks: hooks, run: run, onLatch: manager.SetOnLatch, close: func() error {
 		err := errors.Join(local.Close(), manager.Close(), relay.Close())
 		if extra.closeAlso != nil {
 			err = errors.Join(err, extra.closeAlso())

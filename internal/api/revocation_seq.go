@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // mintIssue is where a credential this request mints sits against the revocation cuts: the request's
@@ -20,11 +21,24 @@ import (
 // principal the request does not speak for) it reads the current sequence. A zero Seq is a deployment
 // whose revocations do not order cuts, and the credential is compared on time.
 func (s *Server) mintIssue(ctx context.Context, principal string, authorizedAt time.Time) (oidc.Issue, error) {
+	return s.mintIssueQ(ctx, nil, principal, authorizedAt)
+}
+
+// mintIssueQ is mintIssue for a credential minted inside the transaction q (nil: none). The current sequence is
+// then read on q when the revocation store can read there, as sessionStatusAt checks the owner on it, and never
+// on a second pool connection while q holds one.
+func (s *Server) mintIssueQ(ctx context.Context, q store.Querier, principal string, authorizedAt time.Time) (oidc.Issue, error) {
 	if s.cfg.SessionRevocations == nil {
 		return oidc.Issue{At: authorizedAt}, nil
 	}
 	if seq := oidc.RevocationSeqFor(ctx, principal); seq > 0 {
 		return oidc.Issue{At: authorizedAt, Seq: seq}, nil
+	}
+	if rev, ok := s.cfg.SessionRevocations.(interface {
+		RevocationSeqQ(context.Context, store.Querier) (int64, error)
+	}); ok && q != nil {
+		seq, err := rev.RevocationSeqQ(ctx, q)
+		return oidc.Issue{At: authorizedAt, Seq: seq}, err
 	}
 	seq, err := oidc.IssueSeq(ctx, s.cfg.SessionRevocations)
 	return oidc.Issue{At: authorizedAt, Seq: seq}, err

@@ -41,6 +41,11 @@ func (s PG) UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) 
 // UpsertCapabilityGrantQ is UpsertCapabilityGrant's statement on q. A held governance change applies
 // through it inside the decision transaction.
 func UpsertCapabilityGrantQ(ctx context.Context, q Querier, g types.CapabilityGrant) (types.CapabilityGrant, error) {
+	if g.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "capability_grants.subject", g.Subject); err != nil {
+			return types.CapabilityGrant{}, err
+		}
+	}
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
 	}

@@ -213,7 +213,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the hosted-model list it started with, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop, whether it is still being set up, and its disk and its kept machine over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the hosted-model list it started with, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop, whether it is still being set up, its disk, its kept machine, whether its owner may copy work out of it while kept, and the desktop watermark over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -233,10 +233,13 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "macos",
       "background_watch",
       "mac_window",
+      "local_window",
       "macos_preparing",
       "macos_disk",
       "wall_preset",
       "machine",
+      "kept_copy_out",
+      "desktop_watermark",
     ]);
   });
 
@@ -292,6 +295,13 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const goEnded = [...windowGo.matchAll(/^\s*macWindowEnded\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
     const tsEnded = [...(/reason: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunMacWindowClose")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
     expect(tsEnded).toEqual(goEnded);
+  });
+
+  it("RunLocalWindow's keys are exactly localWindowView's json tags (GET /runs/{id} local_window, run_local_window.go)", () => {
+    const windowGo = readFileSync(join(root, "internal/api/run_local_window.go"), "utf8");
+    const goTags = goJSONTags(windowGo, "localWindowView").sort();
+    expect(goTags).toEqual(["message", "open", "opened_at"]);
+    expect(tsInterfaceKeys(runsTs, "RunLocalWindow").sort()).toEqual(goTags);
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {
@@ -442,7 +452,7 @@ describe("source parity — five more flat structs", () => {
     expect(siteConfigGo).toMatch(/Components\s+\*ComponentSettings\s+`json:"components,omitempty"`/);
     expect(siteTs).toMatch(/components\?: ComponentSettings;/);
     const goTags = goJSONTags(siteConfigGo, "ComponentSettings");
-    expect(goTags.length).toBe(3);
+    expect(goTags.length).toBe(4);
     expect(new Set(tsInterfaceKeys(siteTs, "ComponentSettings"))).toEqual(new Set(goTags));
   });
 

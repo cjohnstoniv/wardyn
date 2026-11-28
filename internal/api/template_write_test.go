@@ -39,7 +39,8 @@ func saveBodyWith(scope, group, name, kind, intent string) string {
 // exactly these.
 func TestTemplatePolicyKeysArePinned(t *testing.T) {
 	want := []string{"allow_all_egress", "allowed_domains", "allowed_methods", "data_out", "denied_domains", "eligible_grants",
-		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "host_rules", "llm_inspection", "max_holds", "recording", "refuse_ip_literals"}
+		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "host_rules", "llm_inspection", "local_folders", "max_holds", "outage", "recording",
+		"refuse_ip_literals"}
 	got := templatePolicyKeys()
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
@@ -197,6 +198,38 @@ func TestTemplateCopyRerunsTheScopeDoor(t *testing.T) {
 	clean := e.seed(types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "root"}, types.TemplateKindTemplate, "egress", templateIntentEgress)
 	if status, body = e.call(root, http.MethodPost, "/api/v1/templates/"+clean.ID.String()+"/copy", `{"scope":"org","name":"published"}`); status != http.StatusCreated {
 		t.Errorf("copy of a clean template to org = %d %s", status, body)
+	}
+}
+
+// TestTemplateCopyRefusesARevisionSavedAfterReview: a copy that names the revision its publisher reviewed is refused
+// with template_revision_conflict, and copies nothing, once a later save moved the template on; naming the current
+// revision copies it.
+func TestTemplateCopyRefusesARevisionSavedAfterReview(t *testing.T) {
+	e := newTemplateEnv(t)
+	root := templateCookie(t, "root", oidc.RoleAdmin, false, []string{}, false)
+	src := e.seed(types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "root"}, types.TemplateKindTemplate, "reviewed", templateIntentEgress)
+	path := "/api/v1/templates/" + src.ID.String()
+	b, _ := json.Marshal(map[string]any{"name": "edited after review", "expected_revision": 1, "document": json.RawMessage(templateDocBody(templateIntentEgress))})
+	if status, body := e.call(root, http.MethodPut, path, string(b)); status != http.StatusOK {
+		t.Fatalf("update = %d %s", status, body)
+	}
+	listed := func() int {
+		rows, err := e.ts.ListTemplatesVisible(context.Background(), "root", []string{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rows)
+	}
+	before := listed()
+	status, body := e.call(root, http.MethodPost, path+"/copy", `{"scope":"org","expected_revision":1}`)
+	if status != http.StatusConflict || !strings.Contains(body, reasonTemplateRevisionConflict) || !strings.Contains(body, "revision 2") {
+		t.Fatalf("copy of a revision saved over = %d %s", status, body)
+	}
+	if n := listed(); n != before {
+		t.Fatalf("the refused copy left %d templates, want %d", n, before)
+	}
+	if status, body = e.call(root, http.MethodPost, path+"/copy", `{"scope":"org","name":"published","expected_revision":2}`); status != http.StatusCreated {
+		t.Fatalf("copy of the current revision = %d %s", status, body)
 	}
 }
 

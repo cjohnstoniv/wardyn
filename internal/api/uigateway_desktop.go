@@ -74,6 +74,8 @@ const (
 	uiTicketInvalidMsg = "Invalid, expired, or already-used attach ticket"
 	uiNoSessionMsg     = "No valid UI session for this run — open the app again from its run page"
 	uiNoDesktopMsg     = "This run has no desktop: only a desktop VM run has one"
+	// desktopUnconfirmedMsg is the close words of a stream whose access checks went unanswered for the session budget.
+	desktopUnconfirmedMsg = "Wardyn could not confirm access to this desktop. It reconnects when the service is back."
 )
 
 // The desktop stream's close codes (RFC 6455 private range): the viewer tells an ended session or
@@ -90,8 +92,9 @@ const (
 	desktopCloseWindowOpen websocket.StatusCode = 4006
 )
 
-// desktopWindowOpenMsg is desktopCloseWindowOpen's reason.
-const desktopWindowOpenMsg = "A window is open on the Mac, so this desktop only watches. Open the desktop again from the run page to watch it."
+// desktopWindowOpenMsg is desktopCloseWindowOpen's reason, for a window on the Mac or on the person's own
+// computer. A close reason holds at most 123 bytes; a longer one drops the connection with no close frame.
+const desktopWindowOpenMsg = "A window is open on the person's computer, so this desktop only watches. Open it again from the run page to watch it."
 
 // uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: a cache
 // of those known closed (until the cookie would have expired anyway) and the streams still open.
@@ -133,14 +136,8 @@ func (s *Server) uiDesktopClosedHere(sess uiSession, now time.Time) bool {
 	return ok
 }
 
-// uiDesktopClosed reports whether sess was closed on any replica. Only a closed answer is cached: an
-// open one is read from the store every time, and a store that cannot answer counts as closed.
-func (s *Server) uiDesktopClosed(ctx context.Context, sess uiSession, now time.Time) bool {
-	closed, unread := s.uiDesktopClosedRead(ctx, sess, now)
-	return closed || unread
-}
-
-// uiDesktopClosedRead is uiDesktopClosed with its two answers apart: sess was closed, or the store couldn't say.
+// uiDesktopClosedRead reports whether sess was closed on any replica, and whether the store could not say. Only a
+// closed answer is cached: an open one is read from the store every time.
 func (s *Server) uiDesktopClosedRead(ctx context.Context, sess uiSession, now time.Time) (closed, unread bool) {
 	if s.uiDesktopClosedHere(sess, now) {
 		return true, false
@@ -226,13 +223,20 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, uiNoDesktopMsg)
 		return
 	}
-	if s.macOSDesktopSignInsOff(r.Context(), run) {
+	off, err := s.macOSDesktopSignInsOffRead(r.Context(), run)
+	if err != nil && !ta.admitBy.IsZero() {
+		refuseIssuerOpeningUnread(r.Context(), w, "site config", uiSessionUnverifiableMsg, err)
+		return
+	}
+	if off {
 		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
 			ta.withVia(map[string]any{"reason": "the agent does not allow sign-ins in a desktop, which a macOS desktop cannot block"}))
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
 		return
 	}
-	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+	if (!superAdmin || !s.adminDoorExempt(run)) && s.uiDesktopDoor(w, r, run.ID, true, func(w http.ResponseWriter) bool {
+		return s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
+	}) {
 		return
 	}
 	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
@@ -240,7 +244,7 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	// A background run reaches here only through the watch door; interactive sessions stay unpinned.
 	sess.ViewOnly = run.BackgroundOnly() && ticketOpensBackgroundWatch(ta, uiDesktopAppName)
 	data := withBackgroundWatch(sess.backgroundWatch(), map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)})
-	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.macOSDesktopViewOnly(run), data), "/", redirectStatus)
+	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.desktopViewOnly(run), data), "/", redirectStatus)
 }
 
 // handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
@@ -260,7 +264,15 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
 		return
 	}
-	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
+	if sess.closedUnread { // an issuer portal's session whose Closed set could not be read in its bound
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+		return
+	}
+	checkStart := time.Now() // an issuer portal's open stream is re-checked from here (desktopIssuerCut)
+	actx, acancel := issuerAdmitCtx(r.Context(), sess)
+	end, de := s.uiReassertRelayEnd(actx, sess)
+	acancel()
+	if de != nil {
 		writeErrorReason(w, de.status, de.reason, de.msg)
 		return
 	}
@@ -275,12 +287,14 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		if sess.backgroundWatch() {
 			boot["view_only"], boot["background"] = true, true
 		}
+		// Who is looking and at which run, for the viewer's watermark; the organisation's rule says whether it may be off.
+		boot["watermark"] = s.desktopWatermarkFor(r.Context(), sess.Email, sess.Principal, runID.String())
 		// The run's machine kind, so the viewer names a macOS desktop while it starts. A run that
 		// cannot be read is served without it: the viewer then says what it says of any desktop.
 		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil {
 			if run.MachineKind != "" {
 				boot["machine_kind"] = string(run.MachineKind)
-				if s.macOSDesktopViewOnly(run) {
+				if s.desktopViewOnly(run) {
 					boot["view_only"] = true
 				}
 			}
@@ -292,7 +306,7 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		}
 		s.serveDesktopViewer(w, r, runID, boot, http.StatusOK)
 	case rest == uiDesktopRFB:
-		s.serveDesktopRFB(w, r, sess)
+		s.serveDesktopRFB(w, r, sess, checkStart, end)
 	case rest == uiDesktopClose && r.Method == http.MethodPost:
 		if err := s.closeDesktop(r.Context(), sess); err != nil {
 			slog.WarnContext(r.Context(), "wardynd: desktop Close could not be stored", "run_id", runID, "err", err)
@@ -379,26 +393,34 @@ func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runI
 // serveDesktopRFB carries the VM's display between the viewer's WebSocket and the runner, re-checking
 // the person and the run as uiDial does, and ending at the session's bound, at Close, when the run
 // stops, or when the person may no longer enter it.
-func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession) {
+func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession, checkStart, end time.Time) {
+	viewer := &viewerHijack{ResponseWriter: w}
+	// An issuer portal's stream is cut from beside it, from before its setup reads and the upgrade, so neither
+	// they nor the start lock and the dial below delay its re-check; a cut ends their context.
+	base, upgrade, cut, stopCut := s.desktopIssuerCut(r, viewer, sess, checkStart, end)
+	defer stopCut()
+	// Its setup reads run under the session's opening deadline (issuerAdmitCtx), on the cut's context, so a read
+	// that stalls answers 503 within the bound; the stream then lives on base.
+	actx, acancel := issuerAdmitCtx(base, sess)
+	defer acancel()
 	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
 	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
-	_, rules, _, err := s.runDesktopPolicy(r.Context(), sess.Run)
+	_, rules, _, err := s.runDesktopPolicy(actx, sess.Run)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return
 	}
 	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in or
 	// a take over is open, from the first frame and at each vmSignInRecheck after; a mark or take over
 	// that cannot be read refuses the stream rather than record it.
-	signIn, err := s.watchVMSignIn(r.Context(), sess.Run)
+	signIn, err := s.watchVMSignIn(actx, sess.Run)
 	if err != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
 		return
 	}
 	defer signIn.stop()
-	viewer := &viewerHijack{ResponseWriter: w}
-	ws, err := websocket.Accept(viewer, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
+	ws, err := websocket.Accept(upgrade, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
 	}
@@ -406,7 +428,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	// ctx ends the stream at the bound and at Close; the socket itself lives on the request, so the
 	// stream can tell the viewer why before it goes.
 	// A window that opens on the Mac ends a stream with control with errMacWindowTookControl as its cause.
-	yielding, yield := context.WithCancelCause(r.Context())
+	yielding, yield := context.WithCancelCause(base)
 	defer yield(nil)
 	ctx, cancel := context.WithDeadline(yielding, time.Unix(sess.Expires, 0))
 	defer cancel()
@@ -419,7 +441,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 
-	run, code, why := s.desktopBoundedRunCheck(ctx, sess)
+	run, code, why, _ := s.desktopBoundedRunCheck(ctx, sess)
 	if code != 0 {
 		_ = c.Close(code, why)
 		return
@@ -429,58 +451,59 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(desktopCloseUnreachable, "no runner configured; UI apps unavailable")
 		return
 	}
+	// An issuer portal's stream starts nothing in the sandbox at or after its dispatch time, its check's start
+	// plus uiDispatchFresh: not the thaw, not the dial (uigateway_dispatch.go).
+	by, gated := checkStart.Add(uiDispatchFresh()), issuerPortalPerson(sess.Via, sess.Principal)
+	past := func() bool { return gated && !time.Now().Before(by) }
 	// A watch is not a person entering: it neither resumes the run nor stamps presence nor keeps the run alive.
 	watch := sess.backgroundWatch()
+	if past() {
+		_ = c.Close(desktopCloseUnreachable, uiSessionUnverifiableMsg)
+		return
+	}
 	if !watch {
-		if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
+		if s.desktopThaw(ctx, run, sess, gated, by) != nil {
 			_ = c.Close(desktopCloseUnreachable, "run is paused and could not be resumed; try again")
 			return
 		}
 	}
 	release, ok := s.acquireUIConn(sess.Run)
+	switch {
+	case !ok && !gated: // the run's idle relay connections may hold its slots
+		release, ok = s.uiSlotAfterIdleClose(sess.Run)
+	case !ok: // an issuer portal's stream does not wait on the close; its retry finds the slot
+		s.uiIdleCloseAsync()
+	}
 	if !ok {
 		_ = c.Close(desktopCloseUnreachable, uiConnCapMsg)
 		return
 	}
 	defer release()
-	// The display is dialed under the run's start lock, on the run as it stands there, a watch's too: a run that
-	// ended since the check above opens no display.
-	h, err := s.lockStart(ctx, sess.Run)
-	if err != nil {
-		_ = c.Close(desktopCloseUnreachable, lockUnavailableMsg)
-		return
-	}
-	if run, code, why = s.desktopBoundedRunCheck(h.ctx, sess); code != 0 {
-		h.release()
+	display, run, code, why := s.openDesktopDisplay(ctx, sess, dd, gated, by)
+	if code != 0 {
 		_ = c.Close(code, why)
 		return
 	}
-	display, err := startAdmitted(s, ctx, h, execStartBudget,
-		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
-		func(d io.ReadWriteCloser) { _ = d.Close() })
-	switch {
-	case startCut(err):
-		_ = c.Close(desktopCloseUnreachable, err.Error())
-		return
-	case err != nil:
-		_ = c.Close(desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err))
+	defer func() { _ = display.Close() }()
+	if past() { // installed only before the dispatch time: no frame is relayed from a display returned late
+		_ = c.Close(desktopCloseUnreachable, uiSessionUnverifiableMsg)
 		return
 	}
-	defer func() { _ = display.Close() }()
 
 	if !watch {
 		go s.attachKeepalive(ctx, sess.Run)
 	}
 	opened := s.cfg.Now()
-	viewOnly := sess.ViewOnly || s.macOSDesktopViewOnly(run)
+	// One keyboard at a time: while a window is open on the Mac or on the person's own computer, this stream only watches.
+	viewOnly := sess.ViewOnly || s.desktopViewOnly(run)
 	yielded := func() {} // forgets this stream's control; a window waits for it, never for the close frame
-	if !viewOnly && run.MachineKind.IsMacOSVM() {
-		// A stream with control is known to a window that opens (macWindowYieldControl). Registered before the
-		// window is looked for once more, so a window that opened since viewOnly was read ends this stream
-		// instead of running beside it.
+	if !viewOnly && run.MachineKind.IsVM() {
+		// A stream with control is known to a window that opens (macWindowYieldControl), a Mac's or a local one.
+		// Registered before the windows are looked for once more, so a window that opened since viewOnly was read
+		// ends this stream instead of running beside it.
 		yielded = s.desktopControl.track(sess.Run, func() { yield(errMacWindowTookControl) })
 		defer yielded()
-		if s.macWindows.open(sess.Run) != nil {
+		if s.macWindows.open(sess.Run) != nil || s.localWindows.open(sess.Run) != nil {
 			yielded()
 			_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 			return
@@ -502,13 +525,53 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		yielded()
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
-	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened)
+	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened, cut != nil)
+}
+
+// openDesktopDisplay dials the run's display under its start lock, on the run as it stands there (returned), a
+// watch's too: a run that ended since serveDesktopRFB's check opens no display. A gated stream's (an issuer
+// portal's) lock wait and dial end at its dispatch time by. A display not opened comes back as a close code and why.
+func (s *Server) openDesktopDisplay(ctx context.Context, sess uiSession, dd runner.DesktopDialer, gated bool,
+	by time.Time) (io.ReadWriteCloser, types.AgentRun, websocket.StatusCode, string) {
+	sctx, budget := ctx, execStartBudget
+	if gated {
+		sctx = runner.WithStartCutoff(ctx, by) // the lock's wait ends then, and a runner's start CALL is refused after it
+	}
+	h, err := s.lockStart(sctx, sess.Run)
+	if err != nil {
+		return nil, types.AgentRun{}, desktopCloseUnreachable, lockUnavailableMsg
+	}
+	run, code, why, _ := s.desktopBoundedRunCheck(h.ctx, sess)
+	if code != 0 {
+		h.release()
+		return nil, run, code, why
+	}
+	if gated {
+		if !time.Now().Before(by) { // no dial is started with no time left
+			h.release()
+			return nil, run, desktopCloseUnreachable, uiSessionUnverifiableMsg
+		}
+		budget = min(budget, time.Until(by))
+	}
+	display, err := startAdmitted(s, sctx, h, budget,
+		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
+		func(d io.ReadWriteCloser) { _ = d.Close() })
+	switch {
+	case startCut(err):
+		return nil, run, desktopCloseUnreachable, err.Error()
+	case err != nil:
+		return nil, run, desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err)
+	}
+	return display, run, 0, ""
 }
 
 // relayDesktopStream carries frames both ways until either side ends, the stream's bound or Close lands, or a
-// re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB).
+// re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB). With
+// watched set, the run's re-check runs beside the stream (desktopIssuerCut) and only the Closed set is read here.
+// A re-check that refuses ends the stream at once; one that could not read (unread) rides the session budget,
+// asking again every few seconds, and ends the stream with desktopCloseUnreachable once the budget runs out.
 func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession, c desktopSocket, ws *websocket.Conn,
-	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func()) {
+	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func(), watched bool) {
 	done := make(chan struct{}, 2)
 	go func() {
 		_ = relayViewer(reqCtx, ws, filtered)
@@ -520,8 +583,14 @@ func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession,
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck))
 	defer tick.Stop()
+	recheck := tick.C
+	if watched {
+		recheck = nil
+	}
 	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
 	defer closedTick.Stop()
+	b := s.newSessionBudget(ctx, uiWatchID(sess, sessionSurfaceDesktop))
+	defer b.leave()
 	for {
 		select {
 		case <-done:
@@ -541,15 +610,28 @@ func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession,
 			}
 			return
 		case <-closedTick.C:
-			// A Close on another replica, or a Closed set that cannot be read, ends the stream.
-			if code, why := s.desktopBoundedClosedCheck(ctx, sess); code != 0 {
-				_ = c.Close(code, why)
+			// A Close on another replica ends the stream; a Closed set that cannot be read ends it once the budget runs out.
+			code, why, unread := s.desktopBoundedClosedCheck(ctx, sess)
+			if desktopStep(ctx, c, b, sess, "closed", code, why, unread) {
 				return
 			}
-		case <-tick.C:
-			if _, code, why := s.desktopBoundedRunCheck(ctx, sess); code != 0 {
-				_ = c.Close(code, why)
+		case <-recheck:
+			_, code, why, unread := s.desktopBoundedRunCheck(ctx, sess)
+			if desktopStep(ctx, c, b, sess, "run", code, why, unread) {
 				return
+			}
+		case <-b.retryC():
+			if b.retrying("closed") {
+				code, why, unread := s.desktopBoundedClosedCheck(ctx, sess)
+				if desktopStep(ctx, c, b, sess, "closed", code, why, unread) {
+					return
+				}
+			}
+			if recheck != nil && b.retrying("run") {
+				_, code, why, unread := s.desktopBoundedRunCheck(ctx, sess)
+				if desktopStep(ctx, c, b, sess, "run", code, why, unread) {
+					return
+				}
 			}
 		}
 	}
@@ -587,48 +669,79 @@ func (d desktopSocket) Close(code websocket.StatusCode, why string) error {
 }
 
 // desktopBoundedRunCheck is desktopRunCheck under uiDesktopRecheckWait: a read that runs out of it is a read that failed.
-func (s *Server) desktopBoundedRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
+func (s *Server) desktopBoundedRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
 	defer cancel()
 	return s.desktopRunCheck(ctx, sess)
 }
 
 // desktopBoundedClosedCheck is an open stream's read of the Closed set under uiDesktopRecheckWait, answering the
-// close code and words that end it, or 0 while it may go on. A watch that can't be verified ends as any re-check
-// ends a watch; a session its person closed says so, and any other session keeps the one answer it has.
-func (s *Server) desktopBoundedClosedCheck(ctx context.Context, sess uiSession) (websocket.StatusCode, string) {
+// close code and words that end it, or 0 while it may go on, and whether the answer is a read that failed
+// (unread). A watch that can't be verified ends as any re-check ends a watch; a session its person closed says
+// so, and any other session keeps the one answer it has.
+func (s *Server) desktopBoundedClosedCheck(ctx context.Context, sess uiSession) (websocket.StatusCode, string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
 	defer cancel()
 	closed, unread := s.uiDesktopClosedRead(ctx, sess, s.cfg.Now())
 	switch {
 	case unread && sess.backgroundWatch():
-		return desktopCloseWatchEnded, backgroundWatchEndedMsg
+		return desktopCloseWatchEnded, backgroundWatchEndedMsg, true
 	case closed || unread:
-		return desktopCloseSessionEnded, "this desktop session ended"
+		return desktopCloseSessionEnded, "this desktop session ended", unread
 	}
-	return 0, ""
+	return 0, "", false
+}
+
+// desktopStep folds one of an open stream's checks into its budget and closes the stream when it must end: with the
+// check's own code on a refusal, and with desktopCloseUnreachable, which the viewer retries, when the budget ran
+// out (a background watch keeps its own code, as every end of a watch does). It reports whether the stream ended.
+// A check that ctx ended meanwhile is not folded: the stream's own end (the loop's ctx.Done arm) says why it closed.
+func desktopStep(ctx context.Context, c desktopSocket, b *sessionBudget, sess uiSession, check string, code websocket.StatusCode, why string, unread bool) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	switch b.step(check, code != 0, unread) {
+	case budgetSpent:
+		b.end()
+		if sess.backgroundWatch() {
+			_ = c.Close(desktopCloseWatchEnded, backgroundWatchEndedMsg)
+		} else {
+			_ = c.Close(desktopCloseUnreachable, desktopUnconfirmedMsg)
+		}
+		return true
+	case budgetRefused:
+		_ = c.Close(code, why)
+		return true
+	}
+	return false
 }
 
 // desktopRunCheck loads the session's run fresh and answers the close code and words that end its
-// stream, or 0 while it may go on. On a watch, a run that can't be read ends the view rather than retry it.
-func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
+// stream, or 0 while it may go on, and whether the answer is a read that failed (unread: the run could not be
+// read, or the UI re-check answered 503). On a watch, a run that can't be read ends the view with its own code.
+func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string, bool) {
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
-		if sess.backgroundWatch() {
-			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg
+		missing := errors.Is(err, store.ErrNotFound)
+		switch {
+		case sess.backgroundWatch():
+			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg, !missing
+		case missing:
+			return run, desktopCloseRunEnded, "run not found", false
 		}
-		return run, desktopCloseUnreachable, "run not found"
+		return run, desktopCloseUnreachable, "run could not be read", true
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
-		return run, desktopCloseRunEnded, "run has ended; cannot open a UI app"
+		return run, desktopCloseRunEnded, "run has ended; cannot open a UI app", false
 	}
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		unread := de.status == http.StatusServiceUnavailable
 		if sess.backgroundWatch() {
-			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg
+			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg, unread
 		}
-		return run, desktopCloseNotAuthorized, de.msg
+		return run, desktopCloseNotAuthorized, de.msg, unread
 	}
-	return run, 0, ""
+	return run, 0, "", false
 }
 
 // desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
@@ -714,6 +827,10 @@ type viewerHijack struct {
 	frames *rfbfilter.ClientFrames
 }
 
+// Unwrap hands the server's writer to http.ResponseController, so a deadline set on the viewer reaches the
+// connection: an issuer portal's cut interrupts a blocked handshake flush through it (desktopIssuerCut).
+func (v *viewerHijack) Unwrap() http.ResponseWriter { return v.ResponseWriter }
+
 func (v *viewerHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, brw, err := http.NewResponseController(v.ResponseWriter).Hijack()
 	if err != nil {
@@ -733,6 +850,10 @@ type checkedConn struct {
 }
 
 func (c checkedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// NetConn is the hijacked connection under the check, so a cut closes the transport itself (closeRawConn), not
+// through a TLS close.
+func (c checkedConn) NetConn() net.Conn { return c.Conn }
 
 // wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
 // made, re-encoded by the filter, so no mask is ever set.
@@ -792,3 +913,14 @@ func (f *wsFramed) Read(p []byte) (int, error) {
 }
 
 func (f *wsFramed) Close() error { return f.raw.Close() }
+
+// desktopThaw is a desktop stream's thaw; for an issuer portal's stream (gated) it runs under a context that
+// ends at its dispatch time by.
+func (s *Server) desktopThaw(ctx context.Context, run types.AgentRun, sess uiSession, gated bool, by time.Time) error {
+	if gated {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(runner.WithStartCutoff(ctx, by), by)
+		defer cancel()
+	}
+	return s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence")
+}

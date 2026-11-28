@@ -85,14 +85,18 @@ func TestMemberDriveOwnerSubOnly(t *testing.T) {
 	wantReason(t, memberCall(bob, srv.handleDeleteMyDrive, http.MethodDelete, "/api/v1/me/drives/"+made.ID, "", map[string]string{"id": made.ID}),
 		http.StatusNotFound, string(authz.ReasonDriveNotFound))
 
-	// A drive being deleted is gone from the catalogue and from drives[].
+	// A drive being deleted is listed to its owner as deleting (#4061) and can never be attached.
 	id := uuid.MustParse(made.ID)
 	d := st.drives[id]
 	at := time.Now()
 	d.DeleteStartedAt = &at
 	st.drives[id] = d
-	if a := meDrivesOf(t, srv, alice); len(a.Drives) != 0 || a.Create.Count != 1 {
+	if a := meDrivesOf(t, srv, alice); len(a.Drives) != 1 || a.Drives[0].ID != made.ID || !a.Drives[0].Owned ||
+		a.Drives[0].UnavailableReason != client.MeDriveUnavailableDeleting || a.Create.Count != 1 {
 		t.Errorf("a drive being deleted = %+v (create %+v)", a.Drives, a.Create)
+	}
+	if b := meDrivesOf(t, srv, bob); len(b.Drives) != 0 {
+		t.Errorf("Bob's catalogue lists Alice's deleting drive: %+v", b.Drives)
 	}
 	if _, f := authorizeDrives(srv, alice, drivesRequest(made.ID)); f == nil || f.body.Reason != string(authz.ReasonDriveNotFound) {
 		t.Errorf("attaching a drive being deleted = %+v, want drive_not_found", f)
@@ -221,19 +225,23 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 	at := time.Now()
 	tomb := row
 	tomb.DeleteStartedAt = &at
+	held := row
+	held.LegacyUnsettled = true
 	cases := []struct {
 		name     string
 		drives   map[uuid.UUID]types.UserDrive // nil: the store cannot re-read
 		owner    string
 		runOwner string
 		mounts   bool
+		hint     string // the refusal's sentence when it is not drive_not_found's
 	}{
-		{"present", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, aliceSub, true},
-		{"deleted", map[uuid.UUID]types.UserDrive{}, aliceSub, aliceSub, false},
-		{"being deleted", map[uuid.UUID]types.UserDrive{id: tomb}, aliceSub, aliceSub, false},
-		{"another owner", map[uuid.UUID]types.UserDrive{id: row}, bobSub, aliceSub, false},
-		{"another person's run", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, bobSub, false},
-		{"store cannot re-read", nil, aliceSub, aliceSub, false},
+		{"present", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, aliceSub, true, ""},
+		{"deleted", map[uuid.UUID]types.UserDrive{}, aliceSub, aliceSub, false, ""},
+		{"being deleted", map[uuid.UUID]types.UserDrive{id: tomb}, aliceSub, aliceSub, false, ""},
+		{"another owner", map[uuid.UUID]types.UserDrive{id: row}, bobSub, aliceSub, false, ""},
+		{"another person's run", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, bobSub, false, ""},
+		{"store cannot re-read", nil, aliceSub, aliceSub, false, ""},
+		{"held since the upgrade", map[uuid.UUID]types.UserDrive{id: held}, aliceSub, aliceSub, false, legacyDriveHeldMsg(held)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,8 +266,12 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 			if fr.createCalls != 0 {
 				t.Fatalf("CreateSandbox ran %d time(s) for a gone member drive", fr.createCalls)
 			}
-			if st.State() != types.RunFailed || st.FailureHint() != driveNotFoundMsg(id.String()) {
-				t.Errorf("run = %s %q, want FAILED with the drive_not_found sentence", st.State(), st.FailureHint())
+			wantHint := driveNotFoundMsg(id.String())
+			if tc.hint != "" {
+				wantHint = tc.hint
+			}
+			if st.State() != types.RunFailed || st.FailureHint() != wantHint {
+				t.Errorf("run = %s %q, want FAILED with %q", st.State(), st.FailureHint(), wantHint)
 			}
 			ev := findAudit(audit.events, run.ID, "run.create", "failure")
 			if ev == nil || !strings.Contains(string(ev.Data), `"reason":"drive_not_found"`) {
@@ -361,23 +373,23 @@ func (r *cancellingReclaim) ReclaimDrive(context.Context, types.DriveMount) (run
 // a database call would.
 type ctxMemberDriveStore struct{ *memberDriveStore }
 
-func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started)
+	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started, n)
 }
 
-func (s ctxMemberDriveStore) AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+func (s ctxMemberDriveStore) ClearMemberDriveClaim(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.memberDriveStore.AbortMemberDriveDelete(ctx, id, started)
+	return s.memberDriveStore.ClearMemberDriveClaim(ctx, id, started, n)
 }
 
 // TestMemberDriveDeleteOutlivesTheRequest: a delete whose caller goes away
-// mid-reclaim still finishes. A failed reclaim clears the tombstone, so the
-// drive is the owner's again; a successful one removes the row.
+// mid-reclaim still finishes. A reclaim whose answer is not known leaves the drive held (deleting, listed to its
+// owner as deleting, never attachable) for a later delete to settle; a successful one removes the row.
 func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 	for name, tc := range map[string]struct {
 		outcome runner.DriveReclaimOutcome
@@ -405,10 +417,13 @@ func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 			switch {
 			case ok != tc.kept:
 				t.Fatalf("row kept = %v, want %v", ok, tc.kept)
-			case tc.kept && d.DeleteStartedAt != nil:
-				t.Fatal("the tombstone stayed set after the caller went away")
-			case tc.kept && len(meDrivesOf(t, srv, alice).Drives) != 1:
-				t.Error("the kept drive is not back in its owner's catalogue")
+			case tc.kept && d.DeleteStartedAt == nil:
+				t.Fatal("the claim was cleared after an answer that is not known")
+			case tc.kept:
+				if rows := meDrivesOf(t, srv, alice).Drives; len(rows) != 1 || rows[0].ID != made.ID ||
+					rows[0].UnavailableReason != client.MeDriveUnavailableDeleting {
+					t.Errorf("a drive held after an unknown answer = %+v, want one row listed as deleting", rows)
+				}
 			}
 		})
 	}
@@ -454,6 +469,12 @@ type agreeStore struct{ *memberDriveStore }
 
 func (agreeStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
 	return false, nil
+}
+
+// GetDelegateByID answers the delegated caller's portal as a console portal (no issuer): an attach reads the
+// portal first (issuerPortalOf), and a console portal's caller keeps the person's own catalogue.
+func (agreeStore) GetDelegateByID(_ context.Context, id uuid.UUID) (types.Delegate, error) {
+	return types.Delegate{ID: id, Name: "console portal"}, nil
 }
 
 // TestMemberDriveAttachAndDispatchAgree: for every caller kind, a member drive

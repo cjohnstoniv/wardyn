@@ -170,6 +170,13 @@ export const FIELD_HELP = {
     doc: "desktop--desktopcontrols",
     snippet: { copy_out: "allowed" },
   },
+  outage: {
+    what: "How long a run's network keeps serving while Wardyn cannot be reached, and what happens when that time runs out. Fixed when the run is dispatched.",
+    values:
+      "allowance_minutes: 0 (the site's) or 30-1440, never longer than the site's allowance (outage_allowance_minutes, 60 unless an admin raised it). strict: true ends the run at the allowance; false pauses its network instead. unattended: keep | end; end ends an unattended run after a long outage. This release records the terms; pausing and ending come in a later release.",
+    doc: "outage--outagecontrols",
+    snippet: { allowance_minutes: 30 },
+  },
   tool_rules: {
     what: "Per-tool effects for a run whose tool approvals are held — the middle between approving everything and approving nothing.",
     values:
@@ -232,5 +239,12 @@ export const FIELD_HELP = {
       "allowed | review | blocked. Omitted: allowed. review lets files out one at a time through the Files panel, each with a person's yes; blocked also refuses every download and every git push.",
     doc: "data_out",
     snippet: "review",
+  },
+  local_folders: {
+    what: "Walls for folders from a person's computer. A layer above can only add walls.",
+    values:
+      "deny_remote: true, not allowed for a run on another machine. deny_pull: true, changes in the sandbox don't sync back to your computer. max_push_mib, max_pull_mib: 1 to 1048576 MiB per session. deny: patterns skipped by wardyn sync and the runner. Omitted: no walls beyond the organisation's.",
+    doc: "local_folders",
+    snippet: { deny_pull: true },
   },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

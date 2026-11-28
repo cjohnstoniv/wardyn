@@ -64,6 +64,18 @@ func some[T any](r *rand.Rand, v T) *T {
 
 func smallInt(r *rand.Rand, xs ...int) int { return xs[r.Intn(len(xs))] }
 
+// genOutages are the outage terms a generated base or overlay may set.
+var genOutages = []types.OutageControls{{AllowanceMinutes: 30}, {AllowanceMinutes: 120, Strict: true}, {Unattended: types.OutageUnattendedEnd}}
+
+// genOutage is nil or a copy of one of genOutages.
+func genOutage(r *rand.Rand) *types.OutageControls {
+	if r.Intn(4) == 0 {
+		return nil
+	}
+	o := pick(r, genOutages)
+	return &o
+}
+
 // genAuthority is a random base: every field populated or left unset at random.
 func genAuthority(r *rand.Rand) composer.Authority {
 	c := types.RunPolicySpec{
@@ -75,6 +87,7 @@ func genAuthority(r *rand.Rand) composer.Authority {
 		MinConfinementClass: pick(r, []types.ConfinementClass{"", types.CC1, types.CC2, types.CC3}),
 		AutoStopAfterSec:    smallInt(r, -1, 0, 300, 3600), GitPushAnyBranch: r.Intn(3) == 0,
 		UIApps: []types.UIApp{{Name: "jupyter", Port: 8888}, {Name: "docs", Port: 8000}}[:r.Intn(3)],
+		Outage: genOutage(r),
 	}
 	if r.Intn(2) == 0 {
 		c.Resources = &types.ResourceLimits{CPUMillis: smallInt(r, 0, 500, 4000, 64000), MemoryMiB: smallInt(r, 0, 256, 8192), PidsLimit: smallInt(r, 0, 64, 4096), DiskMiB: smallInt(r, 0, 1024)}
@@ -90,6 +103,10 @@ func genAuthority(r *rand.Rand) composer.Authority {
 	}
 	if r.Intn(3) == 0 {
 		c.AzureDevOpsCapabilities = subset(r, genCaps)
+	}
+	if r.Intn(2) == 0 {
+		c.LocalFolders = &types.LocalFolderRules{DenyRemote: r.Intn(3) == 0, DenyPull: r.Intn(3) == 0,
+			MaxPushMiB: smallInt(r, 0, 10, 100), MaxPullMiB: smallInt(r, 0, 10, 100), Deny: subset(r, genPaths)}
 	}
 	if r.Intn(4) == 0 {
 		rw := r.Intn(2) == 0
@@ -121,6 +138,7 @@ func genOverlay(r *rand.Rand, withGrants bool) composer.Overlay {
 		FirstUseHoldSeconds: some(r, smallInt(r, 0, 5, 30, 120, 900)), MaxHolds: some(r, smallInt(r, 0, 4, 16, 64, 1000)),
 		MinConfinementClass: some(r, pick(r, []types.ConfinementClass{types.CC1, types.CC2, types.CC3})),
 		AutoStopAfterSec:    some(r, smallInt(r, -1, 0, 300, 3600)), GitPushAnyBranch: some(r, r.Intn(2) == 0),
+		Outage: some(r, pick(r, genOutages)),
 	}
 	if ms := subset(r, genMethods); len(ms) > 0 && r.Intn(2) == 0 {
 		c.AllowedMethods = &ms
@@ -148,6 +166,10 @@ func genOverlay(r *rand.Rand, withGrants bool) composer.Overlay {
 	if r.Intn(2) == 0 {
 		c.PushRules = &types.PushRulesOverlay{DenyPaths: some(r, subset(r, genPaths)), RequireReviewPaths: some(r, subset(r, genPaths)),
 			MaxInspectPackMiB: some(r, smallInt(r, 0, 8, 32, 64)), HoldSeconds: some(r, smallInt(r, 0, 30, 300, 900)), MaxFileSizeMiB: some(r, smallInt(r, 0, 5, 50))}
+	}
+	if r.Intn(3) == 0 {
+		c.LocalFolders = &types.LocalFolderRules{DenyRemote: r.Intn(2) == 0, DenyPull: r.Intn(2) == 0,
+			MaxPushMiB: smallInt(r, 0, 5, 20), MaxPullMiB: smallInt(r, 0, 5, 20), Deny: []string{"*.pem"}[:r.Intn(2)]}
 	}
 	if withGrants && r.Intn(3) == 0 {
 		c.EligibleGrants = &[]types.GrantSpec{{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.vendor.example"}`)}}

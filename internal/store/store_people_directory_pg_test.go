@@ -521,3 +521,173 @@ func TestPG_PeopleDirectory_LoginGroups(t *testing.T) {
 		t.Errorf("bare = %+v", g)
 	}
 }
+
+// A portal person's last sign-in is the latest successful use of any portal, not the workforce last_login_at
+// they never have: a person who minted shows that time, one who was introduced but never completed a grant
+// stays "never", and a workforce person is read as before. The console-session count is its own: using a portal
+// opens no console session.
+func TestPG_PeopleDirectory_PortalPersonLastSignInIsLatestUse_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	p := newIssuerPortal(t, st, "")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// One person uses two portals of the same issuer: the first portal at t1, the second at t2, the first again
+	// at t3. The directory shows t3, the latest across both portals, not the second portal's row, which was
+	// written last but used earlier.
+	second := newIssuerPortalOn(t, st, p)
+	_, _, firstUse := mintFor(t, st, p, "used")
+	_, _, secondUse := mintFor(t, st, second, "used")
+	_, _, latestUse := mintFor(t, st, p, "used")
+	if !secondUse.After(firstUse) || !latestUse.After(secondUse) {
+		t.Fatalf("uses at %v, %v, %v are not in order", firstUse, secondUse, latestUse)
+	}
+	issueFor(t, st, p, "introduced") // never completes a grant
+	workforceAt := now.Add(-3 * time.Minute)
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "wf", Issuer: "https://dex.example", Email: "wf@Corp.Example"}, workforceAt); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := listingByPrincipal(t, page.People, types.PortalPrincipal(p.Key, "used"))
+	if used.LastSignInAt == nil || !used.LastSignInAt.Equal(latestUse) {
+		t.Errorf("portal person who minted: last sign-in = %v, want the latest use %v", used.LastSignInAt, latestUse)
+	}
+	if used.ActiveSessions != 0 {
+		t.Errorf("portal person who minted: active sessions = %d, want 0 (a portal opens no console session)", used.ActiveSessions)
+	}
+	introduced := listingByPrincipal(t, page.People, types.PortalPrincipal(p.Key, "introduced"))
+	if introduced.LastSignInAt != nil || introduced.ActiveSessions != 0 {
+		t.Errorf("introduced portal person: last sign-in = %v, active sessions = %d, want nil and 0", introduced.LastSignInAt, introduced.ActiveSessions)
+	}
+	wf := listingByPrincipal(t, page.People, "wf")
+	if wf.LastSignInAt == nil || !wf.LastSignInAt.Equal(workforceAt) || wf.ActiveSessions != 1 {
+		t.Errorf("workforce person: last sign-in = %v, active sessions = %d, want %v and 1", wf.LastSignInAt, wf.ActiveSessions, workforceAt)
+	}
+
+	// A portal person who also signed in on the console: the later of the two shows, and the session count
+	// follows the console sign-in alone, a revoke after it ends the session whatever the portal use.
+	both := types.PortalPrincipal(p.Key, "used")
+	if err := markedExec(t, pool, `UPDATE principal_identities SET last_login_at = $2 WHERE principal = $1`, both, latestUse.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, $2)`, both, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	used = listingByPrincipal(t, page.People, both)
+	if used.LastSignInAt == nil || !used.LastSignInAt.Equal(latestUse) {
+		t.Errorf("console sign-in older than the portal use: last sign-in = %v, want %v", used.LastSignInAt, latestUse)
+	}
+	if used.ActiveSessions != 0 {
+		t.Errorf("revoked console session: active sessions = %d, want 0", used.ActiveSessions)
+	}
+
+	// A console sign-in later than the latest portal use shows as the last sign-in, and the session count
+	// follows it: a revoke between the portal use and the console sign-in leaves that session live.
+	later := types.PortalPrincipal(p.Key, "consolelater")
+	issueFor(t, st, p, "consolelater")
+	useAt, consoleAt := now.Add(-3*time.Hour), now.Add(-10*time.Minute)
+	if _, err := pool.Exec(ctx, `INSERT INTO portal_person_portals (identity_id, delegate_id, first_used_at, last_used_at)
+		SELECT id, $2, $3, $3 FROM principal_identities WHERE principal = $1`, later, p.Delegate.ID, useAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := markedExec(t, pool, `UPDATE principal_identities SET last_login_at = $2 WHERE principal = $1`, later, consoleAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, $2)`, later, now.Add(-90*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := listingByPrincipal(t, page.People, later)
+	if cl.LastSignInAt == nil || !cl.LastSignInAt.Equal(consoleAt) {
+		t.Errorf("console sign-in later than the portal use: last sign-in = %v, want the console time %v", cl.LastSignInAt, consoleAt)
+	}
+	if cl.ActiveSessions != 1 {
+		t.Errorf("console sign-in after the revoke: active sessions = %d, want 1 (the count follows the console time, not the use at %v)", cl.ActiveSessions, useAt)
+	}
+}
+
+// First sign-in is the person's first sign-in, never the moment SCIM provisioned them. A provisioned
+// person who has not signed in is not listed with a sign-in date; the date is the first sign-in's and a later
+// one leaves it; and a historical provisioned row that already signed in (before the column existed) has no date
+// to give, so it shows none rather than the provisioning time.
+func TestPG_PeopleDirectory_FirstSignInIsNotProvisioning(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	provisioned := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Microsecond)
+	first := provisioned.Add(48 * time.Hour)
+	second := first.Add(24 * time.Hour)
+	oid := uuid.NewString()
+	principal := "entra:" + idTenant + ":" + oid
+
+	if _, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, oid, store.IdentityUpdate{Emails: []string{"lee@corp.example"}}, provisioned); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: principal, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "lee@corp.example"}, first); err != nil {
+		t.Fatalf("first sign-in: %v", err)
+	}
+	signIn := func() *time.Time {
+		t.Helper()
+		page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return listingByPrincipal(t, page.People, principal).FirstSignInAt
+	}
+	if got := signIn(); got == nil || !got.Equal(first) {
+		t.Fatalf("first sign-in = %v, want %v (not the provisioning time %v)", got, first, provisioned)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: principal, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "lee@corp.example"}, second); err != nil {
+		t.Fatalf("second sign-in: %v", err)
+	}
+	if got := signIn(); got == nil || !got.Equal(first) {
+		t.Errorf("first sign-in after a second = %v, want it kept at %v", got, first)
+	}
+
+	// A historical row: provisioned over SCIM, signed in before the column existed, so it has a last sign-in and
+	// no first one. It shows no first sign-in.
+	hOID := uuid.NewString()
+	hPrincipal := "entra:" + idTenant + ":" + hOID
+	if _, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, hOID, store.IdentityUpdate{Emails: []string{"old@corp.example"}}, provisioned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET principal = $1, last_login_at = $2, scim_external_id = 'ext-old' WHERE object_id = $3`, hPrincipal, second, hOID); err != nil {
+		t.Fatal(err)
+	}
+	// The first-login trigger stamps first_login_at from that first last_login_at, as it does for a 0.10.1 replica's
+	// sign-in; a row from before the column had none, so clear it (the trigger fires only on last_login_at).
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET first_login_at = NULL WHERE object_id = $1`, hOID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := listingByPrincipal(t, page.People, hPrincipal); h.FirstSignInAt != nil || h.LastSignInAt == nil {
+		t.Errorf("historical provisioned row: first sign-in %v, last %v; want an unknown first and a known last", h.FirstSignInAt, h.LastSignInAt)
+	}
+	// Its next sign-in, on the new build, still shows an unknown first one: a populated last sign-in means an
+	// earlier one happened, whether before the column or by a replica that does not write it yet.
+	next := second.Add(24 * time.Hour)
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: hPrincipal, Issuer: idIssuer, TenantID: idTenant, ObjectID: hOID, Email: "old@corp.example"}, next); err != nil {
+		t.Fatalf("historical row's next sign-in: %v", err)
+	}
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := listingByPrincipal(t, page.People, hPrincipal); h.FirstSignInAt != nil || h.LastSignInAt == nil || !h.LastSignInAt.Equal(next) {
+		t.Errorf("historical row after its next sign-in: first %v, last %v; want an unknown first and the last at %v", h.FirstSignInAt, h.LastSignInAt, next)
+	}
+}

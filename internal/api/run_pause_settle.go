@@ -249,6 +249,12 @@ func (s *Server) notePauseSettleOrRetry(ctx context.Context, id uuid.UUID) (time
 	if _, busy := pauseSettleRetries.LoadOrStore(key, struct{}{}); busy {
 		return due, ok
 	}
+	// The sandbox the record is about: a run moved since then runs on another sandbox, which this record must never
+	// reach. When this read fails, the loop's first read that succeeds sets it.
+	var ref string
+	if run, err := s.cfg.Store.GetRun(ctx, id); err == nil {
+		ref = run.SandboxRef
+	}
 	slog.WarnContext(ctx, "wardynd: a pause's settle record could not be written; it is written again in the background until it lands",
 		slog.String("run_id", id.String()))
 	s.goBackground(func() {
@@ -259,7 +265,7 @@ func (s *Server) notePauseSettleOrRetry(ctx context.Context, id uuid.UUID) (time
 				return
 			case <-time.After(pauseSettleRetryEvery):
 			}
-			if s.retryPauseSettle(base, id) {
+			if s.retryPauseSettle(base, id, &ref) {
 				return
 			}
 		}
@@ -268,8 +274,9 @@ func (s *Server) notePauseSettleOrRetry(ctx context.Context, id uuid.UUID) (time
 }
 
 // retryPauseSettle is one round of notePauseSettleOrRetry's loop: true once the record is written, or once the run
-// needs none (it is gone, or no longer running with a sandbox, as settlePause reads it).
-func (s *Server) retryPauseSettle(base context.Context, id uuid.UUID) bool {
+// needs none (it is gone, no longer running with a sandbox, as settlePause reads it, or running on another sandbox
+// than *ref, the one the loop started for, as a moved run is). An empty *ref takes the sandbox this round reads.
+func (s *Server) retryPauseSettle(base context.Context, id uuid.UUID, ref *string) bool {
 	ctx, cancel := context.WithTimeout(base, pauseCompensateTimeout)
 	defer cancel()
 	run, err := s.cfg.Store.GetRun(ctx, id)
@@ -280,7 +287,10 @@ func (s *Server) retryPauseSettle(base context.Context, id uuid.UUID) bool {
 		return false
 	case run.State != types.RunRunning || run.SandboxRef == "":
 		return true
+	case *ref != "" && run.SandboxRef != *ref:
+		return true
 	}
+	*ref = run.SandboxRef
 	// One write a round, straight to the store: notePauseSettle's own retries and its error log are the first
 	// write's, and the loop has already said once that it is writing again.
 	st, has := s.cfg.Store.(store.PauseSettler)
@@ -356,6 +366,14 @@ func (s *Server) settlePause(ctx context.Context, f runner.Freezer, id uuid.UUID
 		return false
 	}
 	defer unlock()
+	// The listing was read without the lock: a record deleted since (a move's commit deletes its run's) settles
+	// nothing, so a listed record never reaches a sandbox it was not written about.
+	if st, has := s.cfg.Store.(store.PauseSettler); has {
+		due, err := heldRead(lctx, func(ctx context.Context) (time.Time, error) { return st.PauseSettleFor(ctx, id) })
+		if err != nil || due.IsZero() {
+			return false
+		}
+	}
 	return s.settlePauseHeld(ctx, lctx, f, id)
 }
 

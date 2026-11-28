@@ -45,11 +45,15 @@ type RunnerHooks struct {
 	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
 	ProxyImage func(string)
 	// LocalAttach, when set, is told on every connect whether the organisation's AUTH_OK allows local
-	// attach (false from an organisation that does not say).
+	// attach or a local window, either of which needs the local socket (false from an organisation that
+	// says neither).
 	LocalAttach func(bool)
 	// PerRunLimits, when set, is told on every connect the per-run CPU (milli-CPU) and memory (MiB) the
 	// organisation's AUTH_OK names for this runner (0, 0 from an organisation that names none).
 	PerRunLimits func(cpuMillis, memoryMiB int64)
+	// DeviceCert, when set, is told on every connect whether the organisation's AUTH_OK asks for the Mac's MDM
+	// device certificate (false from an organisation that does not say).
+	DeviceCert func(bool)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 	// ConnectFailed, when set, is told each error that ended a connection attempt or a session, except
@@ -82,6 +86,13 @@ type Client struct {
 	// at the head of the replay buffer.
 	quickDeaths int
 	link        linkState
+	// authOKs counts the sessions of this process the organisation has accepted (AUTH_OK); prior is that count
+	// before the current one.
+	authOKs, prior int
+	// freshPending is RequireFresh's request that the next session be fresh; live is the peer of the session up, for
+	// RequireFresh, which runs on another goroutine than the loop that owns peer, session and ready.
+	freshPending atomic.Bool
+	live         atomic.Pointer[Peer]
 }
 
 // A resumed session that ends within resumeQuickDeath of READY with an EVENT unacknowledged, resumeQuickDeaths times
@@ -210,6 +221,9 @@ func (c *Client) Run(ctx context.Context) error {
 		if errors.Is(err, ErrGoaway) || errors.Is(err, ErrResumeGap) {
 			c.session, c.ready = "", false
 		}
+		if c.freshPending.Swap(false) {
+			c.session, c.ready = "", false
+		}
 		if c.dropLivelockedResume() {
 			slog.WarnContext(ctx, "runner stops resuming its session and starts a fresh one: it ended within seconds of READY "+
 				"with an event unacknowledged, repeatedly, so the organisation refuses that event. Kinds the runner regenerates "+
@@ -278,28 +292,33 @@ func (c *Client) Connect(ctx context.Context) error {
 	defer conn.Close()
 	cfg, resume := c.resume(ctx)
 	c.link.setPhase(phaseAuthenticate)
-	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock)
+	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock, StreamWindowLarge)
 	if err != nil {
 		return err
 	}
 	if !ok.Resumed {
 		cfg = PeerConfig{}
 	}
+	cfg.StreamWindow = int64(ok.StreamWindow) // the window agreed on THIS connection, resumed or not
 	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
 	}
 	if c.cfg.Hooks.LocalAttach != nil {
-		c.cfg.Hooks.LocalAttach(ok.LocalAttach)
+		c.cfg.Hooks.LocalAttach(ok.LocalAttach || ok.LocalWindow)
 	}
 	if c.cfg.Hooks.PerRunLimits != nil {
 		c.cfg.Hooks.PerRunLimits(ok.PerRunCPUMillis, ok.PerRunMemoryMiB)
 	}
+	if c.cfg.Hooks.DeviceCert != nil {
+		c.cfg.Hooks.DeviceCert(ok.DeviceCert)
+	}
 	c.session, c.ready = ok.SessionID, false
+	c.prior, c.authOKs = c.authOKs, c.authOKs+1
 	return c.serve(ctx, conn, cfg, ok)
 }
 
 func (c *Client) resume(ctx context.Context) (PeerConfig, *Resume) {
-	if !c.ready || c.peer == nil || time.Since(c.ended) > ResumeWindow {
+	if !c.ready || c.peer == nil || c.freshPending.Load() || time.Since(c.ended) > ResumeWindow {
 		return PeerConfig{}, nil
 	}
 	cfg, err := c.peer.ResumeConfig(ctx)
@@ -329,6 +348,16 @@ func (c *Client) dropLivelockedResume() bool {
 	return true
 }
 
+// RequireFresh ends the session that is up, if any, and makes the next one fresh, so its STATE page, which precedes
+// READY and every LEASE, carries what changed: a local containment. It never touches the loop's own fields and may be
+// called from any goroutine.
+func (c *Client) RequireFresh() {
+	c.freshPending.Store(true)
+	if p := c.live.Load(); p != nil {
+		p.Close()
+	}
+}
+
 // replayHeadIsEvent reports whether the oldest frame b still holds, unacknowledged, is an EVENT.
 func replayHeadIsEvent(b *ReplayBuffer) bool {
 	b.mu.Lock()
@@ -346,8 +375,11 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	var readyAt time.Time
 	c.configure(ctx, &cfg, &ready, pending, func() *Peer { return peer })
 	peer = NewPeer(conn, cfg)
+	peer.prior = c.prior
 	c.peer = peer
+	c.live.Store(peer)
 	defer func() {
+		c.live.Store(nil)
 		c.setLink(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
@@ -357,6 +389,11 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		}
 		c.cfg.Hooks.Offline(ctx)
 	}()
+	if ok.Resumed && c.freshPending.Load() {
+		// RequireFresh landed after the resume was decided and before this peer was live: end it unstarted, so the
+		// loop forgets the session and the next connect is fresh.
+		return nil
+	}
 	if ok.Resumed {
 		c.link.setPhase(phaseBeforeReady)
 		if err := c.cfg.Hooks.BeforeReady(ctx, peer, true); err != nil {

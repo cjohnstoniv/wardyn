@@ -6,6 +6,7 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -48,8 +50,9 @@ func NewSubstrate(cfg Config) (substrate.Substrate, error) {
 	return served(d), nil
 }
 
-// runService reads the run's namespace and its Service. A run with no Service is not one that can be kept, and
-// answers runner.ErrReviveUnsupported.
+// runService reads the run's namespace and its Service, for a run that is kept. Every server run has a Service, so
+// kept-ness is read from the agent's Sandbox, as keptSandbox reads it: a run whose Sandbox is gone, being deleted or not
+// labelled kept, or that has no Service, answers runner.ErrReviveUnsupported.
 func (k *keepDriver) runService(ctx context.Context, ref string) (uuid.UUID, string, *corev1.Service, error) {
 	runID, err := runIDFromAgentPodName(ref)
 	if err != nil {
@@ -66,10 +69,21 @@ func (k *keepDriver) runService(ctx context.Context, ref string) (uuid.UUID, str
 	if err != nil {
 		return uuid.Nil, "", nil, fmt.Errorf("k8s: keep: read the run's Service: %w", err)
 	}
+	sb, err := k.dynamic.Resource(sandboxesGVR).Namespace(ns).Get(ctx, agentPodName(runID), metav1.GetOptions{})
+	if isNotFound(err) {
+		return uuid.Nil, "", nil, runner.ErrReviveUnsupported
+	}
+	if err != nil {
+		return uuid.Nil, "", nil, fmt.Errorf("k8s: keep: read the agent's Sandbox: %w", err)
+	}
+	labels, _, _ := unstructured.NestedStringMap(sb.Object, "spec", "podTemplate", "metadata", "labels")
+	if sb.GetDeletionTimestamp() != nil || labels[labelKeep] != "true" {
+		return uuid.Nil, "", nil, runner.ErrReviveUnsupported
+	}
 	return runID, ns, svc, nil
 }
 
-// CanReplaceProxy answers nil only for a run whose Service exists.
+// CanReplaceProxy answers nil only for a kept run whose Service exists.
 func (k *keepDriver) CanReplaceProxy(ctx context.Context, ref string) error {
 	_, _, _, err := k.runService(ctx, ref)
 	return err
@@ -79,57 +93,67 @@ func (k *keepDriver) CanReplaceProxy(ctx context.Context, ref string) error {
 func (k *keepDriver) EnsureProxyImage(context.Context) error { return nil }
 
 // replaceInputs reads what the new proxy pod needs from the config the API passes and from what Wardyn wrote when the
-// run began. It changes nothing, so an error here leaves the old proxy running. It fills everything but SecretName.
-func (d *Driver) replaceInputs(ctx context.Context, ns string, runID uuid.UUID, cfgJSON []byte) (proxyPodInputs, error) {
+// run began. It changes nothing, so an error here leaves the old proxy running. It fills everything but SecretName, and
+// also answers the proxy egress the config asks for and the run's proxy policies, which a moved run's replace writes from.
+func (d *Driver) replaceInputs(ctx context.Context, ns string, runID uuid.UUID, cfgJSON []byte) (proxyPodInputs, []networkingv1.NetworkPolicyEgressRule, proxyPolicies, error) {
 	var c struct {
 		ControlPlaneURL string            `json:"control_plane_url"`
 		AzureGates      []json.RawMessage `json:"azure_gates"`
 		NoNetwork       bool              `json:"no_network"`
 	}
 	if err := json.Unmarshal(cfgJSON, &c); err != nil {
-		return proxyPodInputs{}, fmt.Errorf("k8s: keep: read the proxy config: %w", err)
+		return proxyPodInputs{}, nil, proxyPolicies{}, fmt.Errorf("k8s: keep: read the proxy config: %w", err)
 	}
 	spec := runner.SandboxSpec{RunID: runID, ProxyConfig: runner.ProxyConfig{ControlPlaneURL: c.ControlPlaneURL, NoNetwork: c.NoNetwork}}
-	_, pin, err := d.proxyEgressPlan(ctx, spec)
+	egress, pin, err := d.proxyEgressPlan(ctx, spec)
 	if err != nil {
-		return proxyPodInputs{}, err
+		return proxyPodInputs{}, nil, proxyPolicies{}, err
 	}
-	extra, err := d.runExtraLabels(ctx, ns, runID)
+	extra, pols, err := d.runExtraLabels(ctx, ns, runID)
 	if err != nil {
-		return proxyPodInputs{}, err
+		return proxyPodInputs{}, nil, proxyPolicies{}, err
 	}
 	deadline, err := d.agentDeadline(ctx, ns, runID)
 	if err != nil {
-		return proxyPodInputs{}, err
+		return proxyPodInputs{}, nil, proxyPolicies{}, err
 	}
 	return proxyPodInputs{
 		RunID: runID, Namespace: ns, Deadline: deadline, ControlPlaneURL: c.ControlPlaneURL,
 		Azure: len(c.AzureGates) > 0, Labels: extra, CPPin: pin,
-	}, nil
+	}, egress, pols, nil
 }
 
-// runExtraLabels is the run's own labels, read from its proxy NetworkPolicy, minus the three Wardyn reserves.
+// runExtraLabels is the run's own labels, read from its proxy NetworkPolicy, minus the three Wardyn reserves, with the
+// run's proxy policies it found. A moved run not yet revived has only the import's hold policy, which carries the same
+// labels.
 //
 // Wardyn wrote these labels when the run began; the run's spec is not kept here.
-func (d *Driver) runExtraLabels(ctx context.Context, ns string, runID uuid.UUID) (map[string]string, error) {
+func (d *Driver) runExtraLabels(ctx context.Context, ns string, runID uuid.UUID) (map[string]string, proxyPolicies, error) {
 	sel := labelRun + "=" + runID.String() + "," + labelComponent + "=" + componentProxy
-	pols, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+	list, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
 	if err != nil {
-		return nil, fmt.Errorf("k8s: keep: read the proxy NetworkPolicy: %w", err)
+		return nil, proxyPolicies{}, fmt.Errorf("k8s: keep: read the proxy NetworkPolicy: %w", err)
 	}
-	for _, p := range pols.Items {
-		if p.Name != proxyNetPolName(runID) {
-			continue
+	var pols proxyPolicies
+	for i := range list.Items {
+		switch list.Items[i].Name {
+		case proxyNetPolName(runID):
+			pols.canonical = &list.Items[i]
+		case proxyHoldNetPolName(runID):
+			pols.hold = &list.Items[i]
 		}
-		extra := map[string]string{}
-		for k, v := range p.Labels {
-			if k != labelManaged && k != labelRun && k != labelComponent {
-				extra[k] = v
-			}
-		}
-		return extra, nil
 	}
-	return nil, fmt.Errorf("k8s: keep: the run's proxy NetworkPolicy %s was not found", proxyNetPolName(runID))
+	from := cmp.Or(pols.canonical, pols.hold)
+	if from == nil {
+		return nil, pols, fmt.Errorf("k8s: keep: the run's proxy NetworkPolicy %s was not found", proxyNetPolName(runID))
+	}
+	extra := map[string]string{}
+	for k, v := range from.Labels {
+		if k != labelManaged && k != labelRun && k != labelComponent {
+			extra[k] = v
+		}
+	}
+	return extra, pols, nil
 }
 
 // agentDeadline is the active deadline of the run's agent pod template, or nil when it has none: the same backstop a
@@ -202,7 +226,8 @@ func (k *keepDriver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON
 // runner.ErrProxyGenerationNewer before anything is written. The proxy pod removed is the one read, never one that took
 // the name since, and the replacement config Secret it mounted goes with it (removeProxyPod).
 // The run's EndpointSlice is emptied only while no newer proxy pod is there (emptyKeepEndpointsAt), and a replace that
-// fails before its new proxy pod is made deletes the config Secret it wrote.
+// fails before its new proxy pod is made deletes the config Secret it wrote. A moved run whose proxy policy is still the
+// import's hold first gets its policy from cfgJSON, before any Secret or pod (settleProxyPolicy).
 func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
 	runID, ns, svc, err := k.runService(ctx, ref)
 	if err != nil {
@@ -212,8 +237,11 @@ func (k *keepDriver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJS
 	if err != nil {
 		return "", err
 	}
-	in, err := k.replaceInputs(ctx, ns, runID, cfgJSON)
+	in, egress, pols, err := k.replaceInputs(ctx, ns, runID, cfgJSON)
 	if err != nil {
+		return "", err
+	}
+	if err := k.settleProxyPolicy(ctx, ns, runID, egress, pols, old); err != nil {
 		return "", err
 	}
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 36)

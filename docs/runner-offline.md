@@ -10,6 +10,7 @@ A local runner retains agents and their files after losing its organisation conn
 | Spool full, Docker-hosted Linux VM | Asks the guest to power down, keeps the stopped VM and removes its proxy; a Kubernetes VM is not covered | Receives the spooled decisions on reconnect |
 | Reconnect | Replays its decision spool; a deadline is not extended | Verifies the runner's claim, owner, revocation and run binding, then commits audit rows and receipts together |
 | Exit receipt refused 8 times in a row | Nothing | Parks the receipt and audits `runner.exit.park`; see [A parked exit receipt](#a-parked-exit-receipt) |
+| An operator runs `wardyn-runnerd contain` | Stops the run's proxy on its next pass and drops every later lease for it; see [Break-glass](#break-glass-contain-a-run-on-its-runner-host) | Records `runner.local_contain.record` from the next STATE page and refuses the run's revive |
 | Runner revoked | Latches the revocation and refuses further work | Settles the runner's open and deferred actions |
 
 Runner lifecycle state and decision spools live under the runner state directory with private permissions. Only the proxy receives its run's spool mount; the agent does not. A durable creation intent records the deterministic sandbox reference before provisioning so a failed create or restart can still contain a partially created proxy.
@@ -22,7 +23,7 @@ Replay receipts hold metadata only and are erased with their run or runner. Audi
 
 The organisation stores an authenticated session's original run candidates and bounded STATE page observations. Page progress and observations commit together. Only a complete inventory can identify an omitted, unchanged original run; interrupted pages and newly created runs cannot imply loss. These internal records neither acknowledge audit history nor authorize execution. A fresh session replaces the preceding inventory records.
 
-Each queued runner action is bound to the runner owner, the run's exact reference and execution generation, and for a proxy stop the exact loss it contains. The binding is written once and checked again when the runner reports the result; a result from another runner, run or identity is refused. Results are `success`, `deferred` or `refused`, and use the organisation's arrival time. A repeated identical result is acknowledged without a second effect; a changed one is refused. A deferred result keeps the run fenced. A `refused` result means the runner changed nothing, because the reference is not its own or names a container it cannot prove it created. It closes the action without the reference and generation check, so it no longer fences the run, and it is audited `runner.action.refuse`. Actions queued before the `refused` result existed still fence their run but are never delivered or settled. Each reconnect delivers at most 100 actions, oldest first, and readiness waits until none remain open. A Mac runner with held runs reports READY only after each held run's end is retried, which can take up to about 80 seconds per held run. A database trigger refuses any change to the binding or to a written result. An organisation teardown issued while the runner is offline queues the matching action for its current run, and proxy-stop requirements found in a reconnect report commit with that report page. Revoking the runner settles its open and deferred actions in the same transaction that ends their runs KILLED; the rows are kept.
+Each queued runner action is bound to the runner owner, the run's exact reference and execution generation, and for a proxy stop the exact loss it contains. The binding is written once and checked again when the runner reports the result; a result from another runner, run or identity is refused. Results are `success`, `deferred` or `refused`, and use the organisation's arrival time. A repeated identical result is acknowledged without a second effect; a changed one is refused. A deferred result keeps the run fenced. A `refused` result for a reference that is not the runner's own, or that names a container it cannot prove it created, means the runner changed nothing. A teardown the runner could not confirm is also reported `refused`, but it may already have been attempted: the runner keeps it as a `teardown_hold` for the run and retries it. A `refused` result closes the action without the reference and generation check, so it no longer fences the run, and it is audited `runner.action.refuse`. Actions queued before the `refused` result existed still fence their run but are never delivered or settled. Each reconnect delivers at most 100 actions, oldest first, and readiness waits until none remain open. A Mac runner with held runs reports READY only after each held run's end is retried, which can take up to about 80 seconds per held run. A database trigger refuses any change to the binding or to a written result. An organisation teardown issued while the runner is offline queues the matching action for its current run, and proxy-stop requirements found in a reconnect report commit with that report page. Revoking the runner settles its open and deferred actions in the same transaction that ends their runs KILLED; the rows are kept.
 
 A queued action can name a run the organisation has no row for, such as an erased or restored-over run that a runner still reports. Such an asserted subject has no owner and no execution generation. It is contained by a kill and then a quarantine bound to the runner-reported run and reference; the runner's own generation travels only inside the quarantine proof, marked asserted. Its other runs reach READY as usual. A runner can have at most 100 asserted subjects, settled ones included; past that its inventory is held not-ready and `runner.inventory.hold` is audited. That row is written when the hold begins and again at most once an hour on a server while it lasts, and is the operator's signal. The hold lifts as settled subjects age out, 90 days after their quarantine succeeded, or at once when the operator revokes the runner and enrolls a new one. A deferred kill or quarantine continues in one successor action after each completed inventory. Nothing for an asserted subject is acknowledged or retired. Its local spool, output and exit are deleted by the runner 90 days after the quarantine, or at once when the runner is revoked, in either case after any call already in flight for the run finishes; the organisation deletes its action rows 90 days after the quarantine succeeded.
 
@@ -112,6 +113,8 @@ generation; a pre-execution sandbox instead requires that no execution has yet
 been issued. The queued proof stays immutable, and another incarnation remains
 fenced until settlement. The audit records organisation arrival time and labels
 the runner's observed time as asserted evidence. It never restores credentials.
+A lost or ended run's GitHub installation tokens that the organisation kept sealed are handed back to GitHub by the
+revoke's background worker, so a revived run mints new ones.
 
 A run contained this way, by a settled `end` or `stop_proxy`, comes back only
 through a revive. Its runner refuses the run a lease until a `recover_containment`
@@ -127,6 +130,34 @@ flight, is asked again by the next revive. A run that was killed or
 quarantined, a run held pending a node record, and a runner-side record kept only
 for containment are never recovered.
 
+## Break-glass: contain a run on its runner host
+
+Use it when a run must lose its network now and the organisation cannot be reached to kill it. On the runner host, as
+the user serve runs as:
+
+```sh
+wardyn-runnerd contain --run <run-id>      # repeat --run for more runs
+wardyn-runnerd contain --all               # every run on this runner
+```
+
+On a Kubernetes runner, run the same command in the runnerd pod (`kubectl exec`).
+
+- The running serve stops each run's proxy on its next pass, the same stop a lapsed lease gets, and drops every later
+  lease for the run without ending its session.
+- `contain` waits up to `--wait` (default 60 seconds) for serve's receipt. Exit 0 means every proxy is confirmed
+  stopped, 3 that one is not yet (each run is printed with why), 5 that no receipt came.
+- Exit 4 means serve is not running: the latch is applied when serve next starts, before it connects, and nothing is
+  stopped now. To stop the proxies now, run `docker stop wardyn-proxy-<run-id>` on Docker (the run's network is
+  internal with no gateway); on a Kubernetes runner whose runnerd pod is down, `kubectl delete pod
+  wardyn-proxy-<run-id>`, which also removes the agent pod it owns.
+- The runner reports the latch in the STATE page of its next fresh session, before READY. The organisation records
+  `runner.local_contain.record`, refuses the run's revive with `revive_local_contained` and its recovery, and the run
+  is lost when its token lapses.
+- A run that has its first lease but no sandbox yet is not in the runner's record: `--run` answers `unknown` for it,
+  `--all` skips it, and its sandbox is still created. Contain it again once it has one.
+- `contain` does not end the run and does not refuse new runs; nothing clears it but ending the run. To stop new
+  work, stop serve or revoke the runner.
+
 ## Schema
 
 | Migration | Adds |
@@ -138,3 +169,4 @@ for containment are never recovered.
 | `0155_runner_asserted_subjects` | Queued actions that name a run the organisation has no row for |
 | `0175_runner_action_refused` | The `refused` action result |
 | `0232_runner_exit_parked` | `parked_at` on exit receipts |
+| `0425_revocation_outage` | `run_local_containment`, a run a local operator contained on its runner, as reported; and `run_github_token_seals` |

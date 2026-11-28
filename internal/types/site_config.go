@@ -29,6 +29,10 @@ type SiteConfig struct {
 	// Runners defaults off. PUT /site-config retains the stored value; the
 	// dedicated audited runner enablement operation owns changes.
 	Runners *RunnerSettings `json:"runners,omitempty"`
+	// Assistant is the organisation's assistant block: which purposes are on, which model providers may
+	// serve them, and what is never sent. PUT /site-config retains the stored value; PUT
+	// /assistant/settings owns changes. Absent means every purpose is off.
+	Assistant *AssistantSettings `json:"assistant,omitempty"`
 	// UpstreamProxySecretRef names a secret holding the corporate upstream
 	// proxy URL, or "" for none. UpstreamProxyURL wins if both are set (not
 	// rejected, so an operator can migrate between the two).
@@ -134,8 +138,17 @@ type SiteConfig struct {
 	// MacOSVM is the organisation's macOS VM sandbox settings. A POINTER for the same byte-identical-GET
 	// reason as the provider blocks; nil, or a zero max, sets no maximum.
 	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
+	// DesktopWatermark is whether every desktop view must show the viewer's name and the run id. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks; nil is not required.
+	DesktopWatermark *SiteDesktopWatermark `json:"desktop_watermark,omitempty"`
 	// Images is the org's image rules. Absent reads as every rule off.
 	Images *SiteImages `json:"images,omitempty"`
+	// Sessions is how open sessions behave while Wardyn cannot check access (#4057). A POINTER for the same
+	// byte-identical-GET reason as the provider blocks; nil reads as the defaults.
+	Sessions *SiteSessions `json:"sessions,omitempty"`
+	// FeatureSwitches is the features block (site_features.go): the features new in 0.11, each off until an admin
+	// turns it on. Read it only through internal/api's siteFeatureOn and siteFeatureSettings.
+	FeatureSwitches *SiteFeatureSwitches `json:"features,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
@@ -157,6 +170,18 @@ type SiteConfig struct {
 	// value and carries the stored one forward; a dropped value is reported
 	// as onboarding_completed_at_ignored.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+	// OutageAllowanceMinutes is how long a run's network keeps serving while Wardyn cannot be reached (#4082): 0 for
+	// the default, 60, else 60 to 1440. A policy can only shorten it (OutageControls). A pointer, as GovernanceMaxDepth
+	// is, so an explicit 0 (the reset) stays on the wire: nil is absent and keeps the stored value.
+	OutageAllowanceMinutes *int `json:"outage_allowance_minutes,omitempty"`
+}
+
+// OutageAllowance is the site's outage allowance in minutes as stored: 0, the default, when it is unset.
+func (c SiteConfig) OutageAllowance() int {
+	if c.OutageAllowanceMinutes == nil {
+		return 0
+	}
+	return *c.OutageAllowanceMinutes
 }
 
 // SiteMacOSVM is SiteConfig.MacOSVM.
@@ -183,6 +208,11 @@ type SiteMacOSVM struct {
 	// MaxKeptMachinesPerPerson caps how many machines one person keeps. 1 to 4; 0 or absent reads
 	// MaxKeptMachinesPerPersonDefault.
 	MaxKeptMachinesPerPerson int `json:"max_kept_machines_per_person,omitempty"`
+}
+
+// SiteDesktopWatermark is the organisation's desktop watermark rule.
+type SiteDesktopWatermark struct {
+	Required bool `json:"required,omitempty"`
 }
 
 // The kept-machine limits' defaults and bounds (macos_vm.kept_machine_idle_days and
@@ -277,7 +307,20 @@ type ComponentSettings struct {
 	// a governance profile: "" no cap (default), "L1" holds tool calls, "L0"
 	// refuses unattended runs. No other value is accepted: the cap only tightens.
 	AutonomyCap AutonomyLevel `json:"autonomy_cap,omitempty"`
+	// LocalMCPServers is the organisation's Local MCP servers setting: "off" refuses an MCP server that
+	// starts from a command; "on", "" and an absent key read on. A pointer, so a write that leaves the key
+	// out keeps the stored value.
+	LocalMCPServers *LocalMCPSetting `json:"local_mcp_servers,omitempty"`
 }
+
+// LocalMCPSetting is ComponentSettings.LocalMCPServers.
+type LocalMCPSetting string
+
+// The Local MCP servers values.
+const (
+	LocalMCPOff LocalMCPSetting = "off"
+	LocalMCPOn  LocalMCPSetting = "on"
+)
 
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.
 type InternalHost struct {
@@ -350,4 +393,38 @@ type RunnerSettings struct {
 	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
 	// Always on the wire, false included, so GET /runners/settings states it when it is off.
 	RequireManagedDevice bool `json:"require_managed_device"`
+	// MDMDeviceCAPEM is the organisation's MDM CA bundle (PEM, CA certificates only). It must hold the CA that
+	// issues the device certificates and signs the CRL. When set, a macOS sandbox needs a device certificate
+	// that chains to it and is not on MDMDeviceCRLURL's current CRL. Empty: no certificate check (the v0.10.2
+	// behaviour). Set only by PUT /runners/settings; not sent to runners.
+	MDMDeviceCAPEM string `json:"mdm_device_ca_pem,omitempty"`
+	// MDMDeviceCRLURL is where the control plane fetches that CA's full CRL (https recommended; http works,
+	// since the CRL is signature-checked). Required exactly when MDMDeviceCAPEM is set.
+	MDMDeviceCRLURL string `json:"mdm_device_crl_url,omitempty"`
+	// MachineKindDenials refuses a new local run of a machine kind on runners of a trust class (#2950).
+	// Deny-only, so it only narrows; a macOS VM needs a managed_device runner whatever it says. Set only
+	// by PUT /runners/settings, never PUT /site-config. Always on the wire, [] when none.
+	MachineKindDenials []MachineKindDenial `json:"machine_kind_denials"`
+}
+
+// SiteSessions is SiteConfig.Sessions.
+type SiteSessions struct {
+	// UnconfirmedBudgetSec is how long an open terminal, desktop, window, app or SSH connection keeps going, asking
+	// again every few seconds, while no check of the person's access gets an answer: 0 to SessionBudgetMaxSec. 0 ends
+	// it at the first check that gets none. A pointer so 0 survives omitempty: absent reads SessionBudgetDefaultSec.
+	UnconfirmedBudgetSec *int `json:"unconfirmed_budget_s,omitempty"`
+}
+
+// SessionBudgetDefaultSec and SessionBudgetMaxSec are UnconfirmedBudgetSec's default and its largest value.
+const (
+	SessionBudgetDefaultSec = 30
+	SessionBudgetMaxSec     = 120
+)
+
+// UnconfirmedBudget is the budget s sets: the default when s or its field is nil.
+func (s *SiteSessions) UnconfirmedBudget() time.Duration {
+	if s == nil || s.UnconfirmedBudgetSec == nil {
+		return SessionBudgetDefaultSec * time.Second
+	}
+	return time.Duration(*s.UnconfirmedBudgetSec) * time.Second
 }

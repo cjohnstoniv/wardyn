@@ -41,11 +41,16 @@ type runnerStreamState struct {
 	relay   relayListener
 	// beganSession is each runner's latest fresh session id (set by BeginInventory, which runs just before
 	// Connected), and connectOwed the session whose runner.connect row waits for the version its runner
-	// reports (see runnerHub). Both are under connectMu. Keying the debt by session keeps a superseded
+	// reports (see runnerHub). Both, and connectOrder, are under connectMu. Keying the debt by session keeps a superseded
 	// session's late caps from settling the new session's row.
 	connectMu    sync.Mutex
 	beganSession map[uuid.UUID]string
 	connectOwed  map[uuid.UUID]string
+	// connectOrder is each runner's own lock over its presence rows: writeOwedRunnerConnect and runnerDisconnected
+	// hold it across their reads and audit writes, so a runner.disconnect still follows the runner.connect its
+	// session owed while connectMu, which guards only the maps, is never held across a read or a write. Under
+	// connectMu; an entry is never removed (one per runner this replica has seen).
+	connectOrder map[uuid.UUID]*sync.Mutex
 	// beganAt is when each runner's latest fresh session began on this replica (runner_goaway reads it).
 	beganAt map[uuid.UUID]time.Time
 
@@ -270,12 +275,39 @@ func (s *Server) runnerLocalAttach(rn types.Runner) bool {
 	return s.cfg.AttachLocal && rn.OwnerKind == types.RunnerOwnerPerson
 }
 
+// runnerLocalWindow is AUTH_OK's local_window for rn: rn is a person's runner, the server is in no local mode,
+// and the features.local_window switch is on now. A site config that cannot be read says false, so the runner
+// opens no socket for a window. A switch change reaches a connected runner at its next connect.
+func (s *Server) runnerLocalWindow(ctx context.Context, rn types.Runner) bool {
+	if s.cfg.LocalMode || rn.OwnerKind != types.RunnerOwnerPerson {
+		return false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	return err == nil && localWindowOn(sc)
+}
+
+// runnerDeviceCertWanted is the hub's DeviceCert answer: whether an MDM device CA is stored, read as the macOS
+// placement gate reads it (mdmDeviceVerdictFor). A Mac runner reads its keychain only while this is true.
+func (s *Server) runnerDeviceCertWanted(ctx context.Context) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, errRunnersConfigUnavailable
+	}
+	cfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	return runnerSettingsOf(cfg).MDMDeviceCAPEM != "", nil
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 	s.runnerStreams.once.Do(func() {
 		cfg := s.cfg.RunnerHub
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
+		if br, ok := st.(store.RunnerBatchReader); ok && cfg.LookupMany == nil {
+			cfg.LookupMany = br.GetRunnersByID
+		}
 		cfg.Verified = func(ctx context.Context, id uuid.UUID) error {
 			admission, _ := ctx.Value(runnerAdmissionKey{}).(runnerAdmission)
 			if admission.release != nil {
@@ -307,6 +339,12 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		if cfg.LocalAttach == nil {
 			cfg.LocalAttach = s.runnerLocalAttach
 		}
+		if cfg.LocalWindow == nil {
+			cfg.LocalWindow = s.runnerLocalWindow
+		}
+		if cfg.DeviceCert == nil {
+			cfg.DeviceCert = s.runnerDeviceCertWanted
+		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside
 		// a fresh admission. A runner reports its version only in its `caps` event,
@@ -318,11 +356,15 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		// its caps writes the owed row in Disconnected, with the version last held,
 		// so every runner.disconnect still follows its runner.connect. A new session's
 		// runner.connect still never precedes the last one's runner.disconnect. Both
-		// callbacks read the runner row and write the audit row on that slot; the
-		// offline sweep is only scheduled there and never runs on it.
+		// callbacks read the runner row and write the audit row on that slot, under the
+		// runner's own connectOrder lock and never under connectMu; the offline sweep is
+		// only scheduled there and never runs on it.
 		if cfg.Connected == nil && cfg.Disconnected == nil {
 			cfg.Connected = func(ctx context.Context, id uuid.UUID) error {
 				if _, err := st.GetRunner(ctx, id); err != nil {
+					return err
+				}
+				if err := s.closeRunnerLinkWindow(ctx, st, id); err != nil {
 					return err
 				}
 				if err := st.TouchRunner(ctx, id, "", s.cfg.Now()); err != nil {
@@ -336,15 +378,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 				s.runnerStreams.connectMu.Unlock()
 				return nil
 			}
-			cfg.Disconnected = func(ctx context.Context, id uuid.UUID) error {
-				s.writeOwedRunnerConnect(ctx, st, id, s.owedConnectSession(id), "")
-				var lastSeen *time.Time
-				if rn, err := st.GetRunner(ctx, id); err == nil {
-					lastSeen = rn.LastSeenAt
-				}
-				s.RecordRunnerDisconnected(ctx, id, lastSeen)
-				s.runnerStreams.offline.schedule(s.cfg.BaseCtx, id, s.OfflineFromRunner)
-				return nil
+			cfg.Disconnected = func(ctx context.Context, id uuid.UUID) error { return s.runnerDisconnected(ctx, st, id) }
+			cfg.LinkLost = func(ctx context.Context, id uuid.UUID, session string, droppedFor time.Duration) {
+				s.openRunnerLinkWindow(ctx, st, id, session, droppedFor)
 			}
 		}
 		s.runnerStreams.hub = remote.NewHub(s.cfg.BaseCtx, cfg)
@@ -384,22 +420,62 @@ func (s *Server) owedConnectSession(id uuid.UUID) string {
 	return rs.connectOwed[id]
 }
 
-// writeOwedRunnerConnect writes the runner.connect row id owes for session, once, with version, or with
-// the version the runner row holds when the session reported none. A session that is not the one owing
-// the row (a superseded session's late caps) writes nothing and leaves the debt. It holds connectMu across
-// the write so the Disconnected that follows waits for it.
-func (s *Server) writeOwedRunnerConnect(ctx context.Context, st store.RunnerStore, id uuid.UUID, session, version string) {
+// runnerConnectOrder is id's own presence-row lock (connectOrder).
+func (s *Server) runnerConnectOrder(id uuid.UUID) *sync.Mutex {
 	rs := &s.runnerStreams
 	rs.connectMu.Lock()
 	defer rs.connectMu.Unlock()
-	if owed, ok := rs.connectOwed[id]; !ok || owed != session {
+	if rs.connectOrder == nil {
+		rs.connectOrder = map[uuid.UUID]*sync.Mutex{}
+	}
+	mu := rs.connectOrder[id]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		rs.connectOrder[id] = mu
+	}
+	return mu
+}
+
+// writeOwedRunnerConnect writes the runner.connect row id owes for session, once, with version, or with
+// the version the runner row holds when the session reported none. A session that is not the one owing
+// the row (a superseded session's late caps) writes nothing and leaves the debt. It holds id's own
+// connectOrder lock across the read and the write, so the Disconnected that follows waits for it; another
+// runner's waits for nothing.
+func (s *Server) writeOwedRunnerConnect(ctx context.Context, st store.RunnerStore, id uuid.UUID, session, version string) {
+	order := s.runnerConnectOrder(id)
+	order.Lock()
+	defer order.Unlock()
+	rs := &s.runnerStreams
+	rs.connectMu.Lock()
+	owed, ok := rs.connectOwed[id]
+	if ok && owed == session {
+		delete(rs.connectOwed, id)
+	}
+	rs.connectMu.Unlock()
+	if !ok || owed != session {
 		return
 	}
-	delete(rs.connectOwed, id)
 	if version == "" {
 		if rn, err := st.GetRunner(ctx, id); err == nil {
 			version = rn.Version
 		}
 	}
 	s.RecordRunnerConnected(ctx, id, version, false)
+}
+
+// runnerDisconnected is the Hub's Disconnected for a session it reported Connected: the runner.connect row the
+// session still owes, then runner.disconnect with the runner's last_seen_at, then the offline sweep, scheduled
+// and not run here. The two rows are written under id's own connectOrder lock, in that order.
+func (s *Server) runnerDisconnected(ctx context.Context, st store.RunnerStore, id uuid.UUID) error {
+	s.writeOwedRunnerConnect(ctx, st, id, s.owedConnectSession(id), "")
+	order := s.runnerConnectOrder(id)
+	order.Lock()
+	var lastSeen *time.Time
+	if rn, err := st.GetRunner(ctx, id); err == nil {
+		lastSeen = rn.LastSeenAt
+	}
+	s.RecordRunnerDisconnected(ctx, id, lastSeen)
+	order.Unlock()
+	s.runnerStreams.offline.schedule(s.cfg.BaseCtx, id, s.OfflineFromRunner)
+	return nil
 }

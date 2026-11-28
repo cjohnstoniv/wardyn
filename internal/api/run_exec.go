@@ -140,6 +140,11 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	at, actor := actorFromRequest(r)
+	if rf := windowsVMDoorRefusal(run, "exec"); rf != nil { // the kind never changes after insert, so this read holds
+		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": rf.body.Error})
+		rf.write(s, w, r)
+		return
+	}
 	fresh, start, msg := s.execFreshRun(ctx, run.ID, actor)
 	if msg != "" {
 		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).
@@ -159,8 +164,8 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.sshReleaseSession(run.ID)
 	if viaSupport {
-		// A helper's command lasts while its grant does: the grant is asked again every authority tick, and
-		// the end of it cancels the request's context, which ends runExec's execCtx.
+		// A helper's command lasts while its grant does: the grant is asked again every authority tick; a grant read that
+		// fails rides the session budget, and the end of it cancels the request's context, which ends runExec's execCtx.
 		// The cut carries its cause, so runExec audits it as the grant's end and not as the caller leaving. check
 		// and end run on the one goroutine holdAttachAuthority starts, so cause needs no lock.
 		hctx, hcancel := context.WithCancelCause(r.Context())
@@ -171,13 +176,15 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 			if v == supportOK {
 				return nil
 			}
-			cause = errRunExecSupportEnded
 			if v == supportUnavailable {
 				cause = errRunExecSupportUnverified
+				return unconfirmed(errRunExecSupportUnverified)
 			}
+			cause = errRunExecSupportEnded
 			return errAttachAuthorityEnded
 		}
-		s.holdAttachAuthority(hctx, check, func() { hcancel(cause) })
+		b := s.newSessionBudget(r.Context(), sessionWatchID{Run: fresh.ID, Actor: types.ActorHuman, Principal: actor, Surface: sessionSurfaceCommand})
+		s.holdAttachAuthority(hctx, b, check, func(bool) { hcancel(cause) })
 		r = r.WithContext(hctx)
 	}
 	s.runExec(w, r, fresh, req.Command, timeout, start)

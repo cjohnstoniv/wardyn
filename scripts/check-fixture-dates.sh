@@ -101,7 +101,8 @@ declare -A ALLOWLIST=(
   # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
   # strings so the canon wording is pinned. Nothing compares them against the clock. +2: the
   # Not-started row's bounds; its state comes from the fixture, not the date.
-  ["ui/src/app/components/screens/audit-retention.test.tsx"]=15
+  ["ui/src/app/components/screens/audit-retention.test.tsx"]=18 # +3: three ISO literals in the drop-dialog tests (the mid-day cutover and its partition bound, and the midnight cutover); display data, never compared to the clock
+  ["ui/e2e/audit-retention.spec.ts"]=1 # the mid-day cutoff the drop question must print exactly; display data, never compared to the clock
   ["ui/src/app/components/screens/runners/remote-runner-drawer.test.tsx"]=2 # passthrough only: the runner fixture's created_at and updated_at, never compared to the clock
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
@@ -180,6 +181,12 @@ declare -A ALLOWLIST=(
   # Invitations and service identities: a fixed instant that is wire passthrough (CLI table rows, the account
   # lists) or the frozen clock the token dialog and the copy formatters are tested against; nothing reads the real clock.
   ["cmd/wardyn/service_identity_test.go"]=1
+  # The pinned kill receipt: a fixed id and time carried into the event unchanged and compared for equality only;
+  # nothing reads the real clock.
+  ["internal/api/portal_kill_guard_test.go"]=2
+  # The drive delete fence backfill: a created_at in the year 2100 stands for a database clock set back, so the
+  # backfill must mark the row whatever its stored time says; the migration reads no clock against it.
+  ["internal/db/drive_delete_fence_migration_pg_test.go"]=2
   ["ui/src/app/components/screens/settings/token-dialog.test.tsx"]=1
   ["ui/src/app/components/screens/settings/your-account-screen.test.tsx"]=2
   ["ui/src/app/components/wardyn/copy/service-tokens.test.ts"]=4
@@ -228,7 +235,12 @@ declare -A ALLOWLIST=(
   ["ui/e2e/team-drives.spec.ts"]=1
   ["ui/src/app/components/screens/new-run-flow/draft/draft-reducer.test.ts"]=1
   ["ui/src/app/components/screens/new-run-flow/draft/intent-to-wire.test.ts"]=2
-  ["ui/src/app/components/screens/new-run-flow/draft/launch-start.test.ts"]=4
+  # Repeating schedules: next-slot and first-start math on an injected clock (NOW, or the now each helper is given),
+  # and next_at/due_at/paused.at values the screens only format in a zone; nothing reads the wall clock.
+  ["ui/src/app/components/screens/new-run-flow/draft/launch-start.test.ts"]=16 # injected clock only: every call passes NOW or a fixed now, so past/far/first-start never read the wall clock
+  ["ui/src/app/components/screens/new-run-flow/launch/review-with-launch-schedule.test.tsx"]=1 # passthrough only: the created schedule's next_at in the stubbed reply, never rendered or compared to the clock
+  ["ui/src/app/components/screens/schedules.test.tsx"]=6 # display only: next_at, due_at and paused.at formatted in the schedule's zone, never compared to the clock
+  ["internal/api/run_schedule_repeat_test.go"]=14 # injected clock only: nextOccurrence and firstSlot take the instant as an argument; the start_at one is a body refused for carrying the field, never parsed
   ["ui/src/app/components/screens/new-run-flow/launch/refusal-text.test.ts"]=2
   ["ui/src/app/components/screens/new-run-flow/steps/run/run-step.test.tsx"]=1
   ["ui/src/app/components/screens/run-detail-summary-header.test.tsx"]=1
@@ -247,6 +259,10 @@ declare -A ALLOWLIST=(
   ["internal/store/auditchain_range_pg_test.go"]=1
   ["ui/e2e/desktop-replay.spec.ts"]=1
   ["ui/src/app/lib/desktop-replay-timeline.test.ts"]=1
+  # 0.11 WATERMARK: the same recorded desktop started_at and audit row time, passthrough to the replay and its
+  # watermark; neither is compared to the wall clock.
+  ["ui/e2e/desktop-watermark.spec.ts"]=1
+  ["ui/src/app/components/screens/run-detail/desktop-replay-watermark.test.tsx"]=2
   # A macOS base's created_at and edited_at: the age and edit tests pass a fixed instant in as the clock (statusNow,
   # Now, macOSBaseLimit.Now) and compare only to it; the runnerwire tests only encode and decode them.
   ["cmd/wardyn-runnerd/macos_vm_age_test.go"]=9
@@ -263,6 +279,10 @@ declare -A ALLOWLIST=(
   # compares the printed date and time to those literals; the conformance self-test passes a fixed now in as the clock.
   ["cmd/wardyn-runnerd/macos_vm_machines_test.go"]=5
   ["test/conformance/macvm/kept_test.go"]=1
+  ["pkg/client/governance_review_test.go"]=10 # passthrough only: approval, impact and live-run times decoded as given, never compared to the clock
+  ["cmd/wardyn/governance_review_test.go"]=10 # passthrough only: proposal, expiry and approval times decoded and printed as given, never compared to the clock
+  ["internal/api/run_clone_status_test.go"]=1 # the fixture's injected clock: the server reads it through cfg.Now, never the wall clock
+  ["internal/api/run_policy_as_value_test.go"]=1 # passthrough only: the epoch audit row times are offset from, shown as given
 )
 
 fail=0

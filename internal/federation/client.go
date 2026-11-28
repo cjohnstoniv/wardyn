@@ -76,11 +76,8 @@ func NormaliseOrgURL(raw string) string {
 	return scheme + "://" + host + port + strings.TrimRight(u.EscapedPath(), "/")
 }
 
-// TokenSHA256 is hex(sha256(token)), the form Credential records.
-func TokenSHA256(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
+// TokenSHA256 is types.TokenDigest, the form Credential records.
+func TokenSHA256(token string) string { return types.TokenDigest(token) }
 
 // StatusError is a non-2xx answer from the organisation. RetryAfter is the
 // parsed Retry-After header; WWWAuthenticate lets Revoked tell the
@@ -131,7 +128,7 @@ func (c *Client) Enrol(ctx context.Context, enrolmentToken string) (types.Device
 
 // Push sends one batch of this daemon's chained rows, oldest first, and
 // returns the organisation's recorded cursor for the device.
-func (c *Client) Push(ctx context.Context, cred Credential, rows []types.FederatedAuditEvent) (int64, error) {
+func (c *Client) Push(ctx context.Context, cred Credential, rows []types.FederatedAuditRow) (int64, error) {
 	var ack types.DeviceAck
 	err := c.post(ctx, "/api/v1/devices/"+cred.DeviceID.String()+"/audit", cred.Token, rows, http.StatusOK, &ack)
 	return ack.AckedSeq, err

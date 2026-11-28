@@ -171,6 +171,10 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 				w.WriteHeader(http.StatusCreated)
 			}
 			f.grants[key] = g
+			// As the server: the write's answer names a portal's folder, a later read of the row does not.
+			if req.SubjectType == sdk.CapabilitySubjectType("portal") {
+				g.ObjectName = "wardyn-portal-" + req.DriveID.String() + "-" + req.Subject
+			}
 			_ = json.NewEncoder(w).Encode(g)
 
 		default:
@@ -401,6 +405,37 @@ func TestDriveApply_RoundTripKeepsASubjectsSeveralDrives(t *testing.T) {
 	}
 	if len(fake.grants) != 2 {
 		t.Fatalf("get then set left alice %d allocations, want both", len(fake.grants))
+	}
+}
+
+// A portal allocation's claim name is what a Kubernetes super admin provisions storage from, and the allocation's
+// write answers with it while a later read does not carry it, so `drive set` must print the name it was told.
+func TestDriveApply_PrintsAPortalAllocationsObjectName(t *testing.T) {
+	fake := newFakeDriveServer()
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	if _, err := runDriveApply(t, srv.URL, sdk.DrivesDocument{Drives: seedDrives()}); err != nil {
+		t.Fatalf("bootstrap drives: %v", err)
+	}
+	var driveID uuid.UUID
+	for id := range fake.drives {
+		driveID = id
+		break
+	}
+	portal := uuid.NewString()
+	out, err := runDriveApply(t, srv.URL, sdk.DrivesDocument{Grants: []sdk.UserDriveGrant{
+		{SubjectType: sdk.CapabilitySubjectType("portal"), Subject: portal, DriveID: driveID, Enabled: true},
+	}})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	var doc sdk.DrivesDocument
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := "wardyn-portal-" + driveID.String() + "-" + portal
+	if len(doc.Grants) != 1 || doc.Grants[0].ObjectName != want {
+		t.Errorf("drive set printed grants %+v, want one portal allocation with object_name %q", doc.Grants, want)
 	}
 }
 

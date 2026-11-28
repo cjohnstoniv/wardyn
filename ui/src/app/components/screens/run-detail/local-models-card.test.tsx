@@ -70,7 +70,8 @@ describe("LocalModelsCard", () => {
     expect(T).not.toHaveProperty("LEDE");
     expect(T).not.toHaveProperty("RUN_KEEPS");
     expect(screen.getByText("qwen2.5-coder:7b")).toBeInTheDocument();
-    expect(screen.getByText(T.ASKED_FOR(["Claude Code", "Codex CLI"]))).toBeInTheDocument();
+    // The heading shows before the provider read lands (the run carries the list), so wait on the read here.
+    expect(await screen.findByText(T.ASKED_FOR(["Claude Code", "Codex CLI"]))).toBeInTheDocument();
     expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();
     expect(screen.getByText(T.NOT_ASKED_FOR)).toBeInTheDocument();
     expect(screen.getByText("host.docker.internal:11434")).toBeInTheDocument();

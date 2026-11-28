@@ -61,9 +61,10 @@ func TestAgentSandboxOff_OverridesStillBoot(t *testing.T) {
 	}
 }
 
-// Off, create, status and teardown issue the same writes in the same order as before the backend
-// existed: both NetworkPolicies, the Secret, the proxy pod, the agent pod; nothing for a status read;
-// then pods, Secrets, NetworkPolicies. No Sandbox, no pod patch, and the agent pod carries no gate.
+// Off, create, status and teardown issue the same writes in the same order as without the backend:
+// both NetworkPolicies, the Secret, the run's Service and its EndpointSlice, the proxy pod, the agent
+// pod, the slice pointed at the proxy; nothing for a status read; then pods, Secrets, the Service and
+// its slices, NetworkPolicies. No Sandbox, no pod patch, and the agent pod carries no gate.
 func TestAgentSandboxOff_CreateAndTeardownWritesAreUnchanged(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
@@ -97,8 +98,10 @@ func TestAgentSandboxOff_CreateAndTeardownWritesAreUnchanged(t *testing.T) {
 		}
 	}
 	want := []string{
-		"create networkpolicies", "create networkpolicies", "create secrets", "create pods", "create pods",
-		"delete-collection pods", "delete-collection secrets", "delete-collection networkpolicies",
+		"create networkpolicies", "create networkpolicies", "create secrets", "create services", "create endpointslices",
+		"create pods", "create pods", "update endpointslices",
+		"delete-collection pods", "delete-collection secrets", "delete services", "delete-collection endpointslices",
+		"delete-collection networkpolicies",
 	}
 	if !slices.Equal(writes, want) {
 		t.Errorf("off writes = %v\nwant %v", writes, want)

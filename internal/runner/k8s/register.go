@@ -20,6 +20,9 @@ import (
 // errWarmPoolsRunner refuses warm pools under wardyn-runnerd, which keeps no placeholders, rather than ignoring them.
 var errWarmPoolsRunner = errors.New("k8s: refusing to boot: WARDYN_K8S_WARM_POOLS is for wardynd; wardyn-runnerd keeps no placeholders")
 
+// errSPIFFERunner refuses the SPIRE mount under wardyn-runnerd: a remote runner's proxies keep the bearer token only.
+var errSPIFFERunner = errors.New("k8s: refusing to boot: WARDYN_K8S_SPIFFE_CSI_DRIVER and WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT are for wardynd; a runner's proxies keep the bearer token only")
+
 // buildConfig maps registration Deps to the k8s driver's Config. Extracted to
 // a pure function so its Record wiring is testable without a live cluster
 // (register_test.go's TestBuildConfig_RecordFollowsDeps pins it): Deps.Record
@@ -51,6 +54,7 @@ func buildConfig(d substrate.Deps) Config {
 		// Experimental: the SandboxTemplate the agent pod takes its annotations from (agentsandbox_template.go).
 		AgentSandboxTemplate: os.Getenv("WARDYN_K8S_AGENT_SANDBOX_TEMPLATE"),
 		AgentSandboxKeep:     cliutil.EnvBool("WARDYN_K8S_AGENT_SANDBOX_KEEP", false),
+		RunServiceOff:        !cliutil.EnvBool("WARDYN_K8S_RUN_SERVICE", true),
 	}
 }
 
@@ -73,6 +77,9 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 	}
 	if os.Getenv("WARDYN_K8S_WARM_POOLS") != "" {
 		return nil, errWarmPoolsRunner
+	}
+	if spiffe, err := spiffeMountFromEnv(); err != nil || spiffe.enabled() {
+		return nil, errSPIFFERunner
 	}
 	apply(&cfg)
 	if cfg.RunnerID == "" {
@@ -109,6 +116,11 @@ func init() {
 		}
 		cfg.WarmPools = pools
 		cfg.WarmPriorityClass = os.Getenv("WARDYN_K8S_WARM_PRIORITY_CLASS")
+		spiffe, err := spiffeMountFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		cfg.SPIFFE = spiffe
 		s, err := New(cfg)
 		if err != nil {
 			return nil, err
@@ -140,4 +152,21 @@ func controlPlanePeerFromEnv() (*ControlPlanePeer, error) {
 		labels[k] = v
 	}
 	return &ControlPlanePeer{Namespace: ns, PodLabels: labels}, nil
+}
+
+// errSPIFFEMountEnv refuses a half-set SPIRE mount at boot.
+var errSPIFFEMountEnv = errors.New("k8s: WARDYN_K8S_SPIFFE_CSI_DRIVER and WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT are set together or not at all")
+
+// spiffeMountFromEnv reads the proxy pods' SPIRE Workload API mount. Neither set is the zero mount; one alone
+// refuses boot, since a proxy with the socket but on the default account, or on the account with no socket,
+// matches no run entry.
+func spiffeMountFromEnv() (SPIFFEMount, error) {
+	m := SPIFFEMount{
+		CSIDriver:           os.Getenv("WARDYN_K8S_SPIFFE_CSI_DRIVER"),
+		ProxyServiceAccount: os.Getenv("WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT"),
+	}
+	if (m.CSIDriver == "") != (m.ProxyServiceAccount == "") {
+		return SPIFFEMount{}, errSPIFFEMountEnv
+	}
+	return m, nil
 }

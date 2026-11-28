@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -222,13 +223,28 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, ok := s.getRunOr404(w, r, id)
-	if !ok {
+	// An issuer portal's ticket is admitted under its opening deadline (ticketActor.admitCtx), the run read and
+	// the entry checks included; the socket then lives on the request.
+	admit, _ := ticketActorFromContext(ctx)
+	actx, acancel := admit.admitCtx(ctx)
+	defer acancel()
+	ar := r.WithContext(actx)
+	var run types.AgentRun
+	if !admit.admitBy.IsZero() {
+		got, gone, ok := s.issuerOpeningRun(actx, w, id, attachUnverifiableMsg)
+		if gone {
+			writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found") // as getRunOr404 answers
+		}
+		if !ok {
+			return
+		}
+		run = got
+	} else if run, ok = s.getRunOr404(w, r, id); !ok {
 		return
 	}
 
 	// Entry authorization (#1476): the owner rule, on both lanes.
-	if s.refuseAttachEntry(w, r, run) || s.refuseBackgroundOnly(w, r, run, "terminal") {
+	if s.refuseAttachEntry(w, ar, run) || s.refuseBackgroundOnly(w, ar, run, "terminal") {
 		return
 	}
 
@@ -239,10 +255,18 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
-	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	// A kept run is RUNNING with nothing to attach to, except for its owner's own ticket into a run its Kubernetes
+	// runner keeps with its agent running (keptCopyOutRefusal). A support helper's or an issuer portal's ticket is
+	// refused as on any kept run.
 	if runIsKept(run) {
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
-		return
+		by := ""
+		if ta, ok := ticketActorFromContext(ctx); admit.admitBy.IsZero() && (!ok || ta.support == uuid.Nil) {
+			_, by = actorFromRequest(r)
+		}
+		if msg := s.keptCopyOutRefusal(actx, run, by, "run has ended; cannot attach"); msg != "" {
+			writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, msg)
+			return
+		}
 	}
 	if run.SandboxRef == "" {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNoSandbox, "run has no sandbox; cannot attach")
@@ -250,7 +274,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Door 2 of five (mask_manifest.go): the terminal's recorded tail is masked
 	// against the run's corpus, which this server must be able to prove whole.
-	if s.refuseUncovered(w, r, run.ID, "runs.attach") {
+	if s.refuseUncovered(w, ar, run.ID, "runs.attach") {
 		return
 	}
 
@@ -275,19 +299,38 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	defer releaseSlot()
 
 	// A paused run is thawed before the exec: the daemon refuses one into a
-	// paused container (run_pause.go).
-	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
+	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock and the runtime's
+	// thaw included, runs under what is left of the opening deadline, by design: one that fails or runs out is
+	// the retryable 503, and a thaw the deadline ends leaves the run paused with a settle record for the
+	// pause sweep (resumeRun), so the next try starts from a paused run.
+	tctx, tcancel := attachThawCtx(ctx, actx)
+	defer tcancel()
+	if err := s.thawForExec(tctx, run, principalType, principal, "presence"); err != nil {
+		if attachDispatchPast(ctx) { // a thaw cut at an issuer portal's dispatch time
+			writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
+			return
+		}
+		if !admit.admitBy.IsZero() {
+			refuseIssuerOpeningUnread(actx, w, "thaw", attachUnverifiableMsg, err)
+			return
+		}
 		writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
 		return
 	}
 	// transport=local (attach_local.go) is checked only here, after every check above, thaw
-	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder.
-	local, ok := s.localAttachRequested(w, r, run)
+	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder. It reads under
+	// the opening deadline (ar); the socket below lives on the request.
+	local, ok := s.localAttachRequested(w, ar, run)
 	if !ok {
 		return
 	}
 
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	// An issuer portal's socket is cut from beside it (attachIssuerCut): the upgrade goes through the cut's
+	// writer, so the switched connection registers with it, and its watch runs from here, before the audit
+	// write below.
+	ctx, aw, cut, stopCut := s.attachIssuerCut(r, w, id)
+	defer stopCut()
+	c, err := websocket.Accept(aw, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -341,10 +384,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		actorType:  principalType,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceWeb,
-		onInput:    func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
+		onInput:    s.presenceOnInput(ctx, id, principalType, principal),
 		cols:       opts.Cols,
 		rows:       opts.Rows,
 		via:        via,
+		recheck:    s.attachPromotionCheck(r, id, cut),
 		notify:     wa.notify,
 		displace:   wa.displace,
 		ping:       c.Ping,
@@ -370,6 +414,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// release above, so a holder never outlives its exec.
 	defer func() { _ = holder.mux.Close() }()
 
+	s.finishAttachSession(ctx, finishCtx, pumpCtx, cancel, r, c, run, id, principalType, principal, opts, wa, holder, la, readOnly, releaseHolder, cut)
+}
+
+// finishAttachSession is handleAttachWS's tail: the opening session.attach row,
+// the pump, and the recording, session.detach audit and socket close after it.
+func (s *Server) finishAttachSession(ctx, finishCtx, pumpCtx context.Context, cancel context.CancelFunc, r *http.Request,
+	c *websocket.Conn, run types.AgentRun, id uuid.UUID, principalType types.ActorType, principal string,
+	opts runner.AttachOptions, wa *webAttach, holder *attachHolder, la *localAttach, readOnly bool,
+	releaseHolder func() (announce func()), cut *streamCut) {
 	// The first of two session.attach rows: the holder is registered and its exec
 	// is being opened. The audit log is append-only and hash-chained, so the
 	// outcome is a second row, never an update; this one exists before any
@@ -424,7 +477,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	go s.attachKeepalive(pumpCtx, id)
 	// Started before the exec is opened, so a fence ends an attach in flight too. The credential that
 	// opened this socket is checked again while it is open (attachEnders, attach_authority.go).
-	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel)
+	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel, cut)
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
@@ -498,12 +551,47 @@ func (s *Server) attachFinishCtx(ctx context.Context) (context.Context, *types.D
 	return finishCtx, nil
 }
 
-// attachKeepalive periodically bumps the run's updated_at so the idle reaper
-// does not stop a session a human is actively attached to. It runs until ctx is
-// cancelled (the pump ended / the handler returned). A TouchRun error is benign
-// here — the worst case is the reaper sees the run as idle, which the never-reap
-// policy escape hatch covers for long unattended sessions.
+// attachKeepalive keeps the run's updated_at moving so the idle reaper does not stop a session a human is actively
+// attached to, for as long as ctx lives (the pump ended, the handler returned, the relayed connection closed). Every
+// holder on the run shares one writer on this replica (touchRunEvery), which stops with the run's last holder: a
+// browser holding eight relay connections writes the row once per interval, not eight times. A TouchRun error is
+// benign here — the worst case is the reaper sees the run as idle, which the never-reap policy escape hatch covers
+// for long unattended sessions. A holder whose ctx is not presence (a preview's connection, keepaliveTouches) keeps
+// the writer running but never makes it write: it writes only while some holder is presence.
 func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
+	present := keepaliveTouches(ctx)
+	k := &s.keepalives
+	k.mu.Lock()
+	r := k.runs[id]
+	if r == nil {
+		wctx, stop := context.WithCancel(s.cfg.BaseCtx)
+		r = &runKeepalive{stop: stop}
+		if k.runs == nil {
+			k.runs = map[uuid.UUID]*runKeepalive{}
+		}
+		k.runs[id] = r
+		go s.touchRunEvery(wctx, id, r)
+	}
+	r.holders++
+	if present {
+		r.present++
+	}
+	k.mu.Unlock()
+	<-ctx.Done()
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if present {
+		r.present--
+	}
+	if r.holders--; r.holders == 0 {
+		r.stop()
+		delete(k.runs, id)
+	}
+}
+
+// touchRunEvery is a run's one keepalive writer: TouchRun every attachKeepaliveEvery while r has a holder that is
+// presence, until ctx ends.
+func (s *Server) touchRunEvery(ctx context.Context, id uuid.UUID, r *runKeepalive) {
 	t := time.NewTicker(s.attachKeepaliveEvery())
 	defer t.Stop()
 	for {
@@ -511,9 +599,28 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = s.cfg.Store.TouchRun(ctx, id)
+			s.keepalives.mu.Lock()
+			present := r.present > 0 // a preview's connection is not presence (uiDial)
+			s.keepalives.mu.Unlock()
+			if present {
+				_ = s.cfg.Store.TouchRun(ctx, id)
+			}
 		}
 	}
+}
+
+// runKeepaliveState is this replica's keepalive writers, one per run with a holder (attachKeepalive). Zero value is
+// ready to use.
+type runKeepaliveState struct {
+	mu   sync.Mutex
+	runs map[uuid.UUID]*runKeepalive
+}
+
+// runKeepalive is one run's writer and how many holders keep it.
+type runKeepalive struct {
+	holders int
+	present int // the holders that are presence (keepaliveTouches)
+	stop    context.CancelFunc
 }
 
 // parseUint16 parses a decimal string to a uint16, returning 0 on any error

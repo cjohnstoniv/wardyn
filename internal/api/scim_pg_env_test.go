@@ -60,6 +60,11 @@ func (r *pgTestRevocations) RevocationSeq(ctx context.Context) (int64, error) {
 	return store.ReadRevocationSeq(ctx, r.pool)
 }
 
+// RevocationSeqQ reads the sequence on the governance decision's transaction, as in the production adapter.
+func (r *pgTestRevocations) RevocationSeqQ(ctx context.Context, q store.Querier) (int64, error) {
+	return store.ReadRevocationSeqQ(ctx, q)
+}
+
 // cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
 // adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
 func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issue oidc.Issue, cuts bool) (bool, error) {

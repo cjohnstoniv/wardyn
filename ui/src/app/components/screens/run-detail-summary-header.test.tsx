@@ -32,6 +32,7 @@ import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
 import { END_RUN } from "../wardyn/copy/run-lifetime";
+import { shortTime } from "../../lib/format";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -128,7 +129,7 @@ describe("SummaryHeader — attachable chip predicate", () => {
   it("a super admin keeps 'attachable' on an operator-owned run", () => {
     renderHeader(
       <OperatorProvider operator={true} principal="sam@acme.io">
-        <SummaryHeader run={{ ...runningInteractive, operator_owned: true } as AgentRun} terminal={false} onKill={() => {}} />
+        <SummaryHeader run={{ ...runningInteractive, operator_owned: true }} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
     expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();
@@ -138,7 +139,7 @@ describe("SummaryHeader — attachable chip predicate", () => {
 // 0.9 (M-RN-3 RS3, #111): a neutral chip names the computer of a LOCAL run beside the barrier; a remote run's
 // default place needs none (RN-Q14), so its header is what it was.
 describe("SummaryHeader — where a local run is", () => {
-  const onLaptop = { ...runningInteractive, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" } as AgentRun;
+  const onLaptop: AgentRun = { ...runningInteractive, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" };
 
   it("shows 'On {name}' for a local run", () => {
     renderHeader(
@@ -152,7 +153,7 @@ describe("SummaryHeader — where a local run is", () => {
   it.each([["remote"], [""]] as const)("shows no chip for a run whose placement is %j", (placement) => {
     renderHeader(
       <OperatorProvider operator={false}>
-        <SummaryHeader run={{ ...onLaptop, placement } as AgentRun} terminal={false} onKill={() => {}} />
+        <SummaryHeader run={{ ...onLaptop, placement }} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
     expect(screen.queryByText(/^On /)).toBeNull();
@@ -200,7 +201,7 @@ describe("SummaryHeader — the workload chip (T3-b)", () => {
 
 // #3034: the run's lifetime is two pill menus ending the facts row, not a full-width band under the header.
 describe("SummaryHeader — the lifetime pills", () => {
-  const live = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } } as AgentRun;
+  const live: AgentRun = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } };
 
   it("draws 'Ends: never' and 'Waits up to 4 h' in the facts row when the page can refresh the run", () => {
     renderHeader(
@@ -223,7 +224,7 @@ describe("SummaryHeader — the lifetime pills", () => {
     rerender(
       <MemoryRouter>
         <OperatorProvider operator={true}>
-          <SummaryHeader run={{ ...live, state: "COMPLETED" } as AgentRun} terminal onKill={() => {}} onLifetimeChanged={() => {}} />
+          <SummaryHeader run={{ ...live, state: "COMPLETED" }} terminal onKill={() => {}} onLifetimeChanged={() => {}} />
         </OperatorProvider>
       </MemoryRouter>,
     );
@@ -903,7 +904,8 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
         <SummaryHeader run={run} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText("Total run time 5m 0s")).toBeInTheDocument();
+    // The clock beside it is the end time too, not the teardown two days later.
+    expect(screen.getByLabelText("Total run time 5m 0s")).toHaveTextContent(`Ran 5m 0s · ended ${shortTime(at(5 * 60_000))}`);
   });
 
   it("falls back to updated_at when the run has no ended_at", () => {
@@ -918,7 +920,7 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
         <SummaryHeader run={run} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText("Total run time 7m 0s")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total run time 7m 0s")).toHaveTextContent(`ended ${shortTime(at(7 * 60_000))}`);
   });
 });
 
@@ -983,8 +985,14 @@ describe("SummaryHeader — a live service's badge", () => {
   });
 
   it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {
-    show(svc({ service_status: undefined }));
+    const fresh = { created_at: aheadByHours(-0.05), admitted_at: aheadByHours(-0.05) };
+    show(svc({ service_status: undefined, ...fresh }));
     expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    // ten minutes past admission with no reading, the grace is over: renewal reads it as unknown
+    show(svc({ service_status: undefined, created_at: aheadByHours(-0.2), admitted_at: aheadByHours(-0.2) }));
+    expect(screen.getByText("Health unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Starting")).not.toBeInTheDocument();
     cleanup();
     show(svc({ service: undefined, service_status: undefined }));
     expect(screen.getByText("Running")).toBeInTheDocument();

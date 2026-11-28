@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/runneragent"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -110,9 +111,19 @@ func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe,
 	caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = c.capacity(ctx), c.dispatcher.Selftests(), true, c.dispatcher.Residents()
 	caps.ViaOrgADO = true
 	caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = c.extra.proxySettings(), c.extra.driveRoots, c.extra.localModelPorts
-	caps.LinuxVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.macOSVM.current(), c.hasLocal
+	caps.LinuxVM, caps.WindowsVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.windowsVM, c.extra.macOSVM.current(), c.hasLocal
+	caps.LocalWindow = c.hasLocal && c.extra.linuxVM != nil
+	_, snapshots := c.sub.(runner.Snapshotter)
+	caps.Snapshots = snapshots && c.extra.linuxVM != nil // a Docker runner's Linux VMs
+	if caps.MacOSVM != nil {
+		// A copy: the handle's own caps are shared with every other sender.
+		mac, prior := *caps.MacOSVM, peer.PriorSessions()
+		mac.PriorSessions = &prior
+		caps.MacOSVM = &mac
+	}
 	caps.BoundFolders = c.extra.boundFolders
 	caps.RunsNamespaces = c.extra.runsNamespaces
+	caps.Drives = c.extra.drives
 	if !c.extra.report.fill(ctx, &caps, reprobe) && !always {
 		return nil
 	}

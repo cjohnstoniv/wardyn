@@ -13,6 +13,13 @@ chart/console/IdP split, and the derivation rules behind a signed cookie.
 - Authorization is a real three-role model: every OIDC session carries an **admin**, **`security_admin`** or **user** role (0.9 removed `member`), derived once at login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session cookie.
 - A sign-in whose subject starts with `service:` (and one that starts `local:`, `device:`, `delegate:` or `subject:`, or equals `admin-token`, `erased` or the local operator's name) is refused: those names are reserved. A `service:<name>` principal is a service identity and authenticates only by its own tokens, never by signing in (`isReservedPrincipal`, [`internal/api/reserved_principal.go`](../../internal/api/reserved_principal.go)).
 - A cookie signed before this existed (pre-0.5) decodes as no session, forcing a re-login that derives one fresh.
+- **People of an issuer portal** never sign in to the console: their principal starts `delegate:person:`, which every human door refuses. They get in only through their portal's token exchange ([issuer portals](api-tokens.md#portals-with-their-own-identity-issuer)).
+  - They are always role `user`, with the portal's `user_type`, and a delegated token acts at user reach.
+  - Their sign-in record holds no groups, so no group of theirs reaches a grant or restriction. The portal's own registered group still gates its token exchange, from the token's claim.
+  - The People list keeps a display value only, never used to authorise: the `email` claim of an ID token, the `sub` of an access token.
+  - An admin names one by principal in a unit membership, capability grant, restriction member, drive allocation or runner-pool use policy. The principal's issuer must have a binding, or the write is refused.
+  - A unit's admins, template group admins, role mappings, a remote runner's people and a service identity's sponsor refuse a portal person: they never hold an admin, sponsor, approver or console role.
+  - An admin or security admin suspends one with `POST /people/{principal}/suspend`; a super admin sets a purge date, reactivates or purges one. [The steps](api-tokens.md#suspend-reactivate-and-purge-a-portals-person) cover finding the person, the stuck-step view and the 15-minute sweep.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|

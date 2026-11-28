@@ -64,6 +64,8 @@
 # not asserting at all. Left for a follow-up that can verify it against a real
 # cluster.
 #
+# The control-plane outage tests on this cluster (#4080) are scripts/cp-outage-walk.sh kind.
+#
 # GUARD: self-skips unless WARDYN_TEST_K8S=1, same knob every other
 # cluster-dependent lane uses. Never creates or deletes the cluster — it
 # deletes wardynd's own pod and cordons a node on whatever wardyn-quickstart

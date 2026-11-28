@@ -44,6 +44,19 @@ func (s *Server) eraseMaskCopies(ctx context.Context, person string, want *erasu
 			}
 		}
 	}
+	// So do the GitHub tokens the broker keeps sealed for hand-back, under the same manifest owner. A queued one
+	// deleted here is not handed back; it expires on GitHub's own TTL.
+	if seals, ok := s.cfg.Broker.(brokerTokenSeals); ok {
+		tokens, _ := detail["run_tokens"].(int)
+		for _, ns := range namespaces {
+			n, err := seals.DeleteOwnerTokenSeals(ctx, ns)
+			tokens += n
+			detail["run_tokens"] = tokens
+			if err != nil {
+				return detail, err
+			}
+		}
+	}
 	for _, ns := range namespaces {
 		left, err := s.cfg.MaskRegistry.EraseOwner(ctx, ns)
 		if err != nil {

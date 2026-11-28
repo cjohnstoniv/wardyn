@@ -113,6 +113,16 @@ var scpRepoURL = regexp.MustCompile(`^[\w.-]+@[\w.-]+:[^\s@]*$`)
 
 const unparseableRepoURL = "<unparseable repository URL>"
 
+// currentImageBuild is ws's build record while it describes the row's image: schema known, naming the row's
+// image and cache key. nil otherwise. It asks the builder nothing; imageBuildView adds that check.
+func currentImageBuild(ws types.Workspace) *types.ImageBuild {
+	rec := ws.ImageBuild
+	if rec == nil || rec.Schema != types.ImageBuildSchema || rec.Image.Ref != ws.ImageRef || rec.CacheKey != ws.BuiltProfileHash {
+		return nil
+	}
+	return rec
+}
+
 // imageBuildView returns ws's build record while it is current (design §3.3):
 // schema known, naming the row's image and cache key, and, when the builder can
 // say, still the image its tag names. missing reports a current record whose
@@ -120,7 +130,7 @@ const unparseableRepoURL = "<unparseable repository URL>"
 // image, "" when it gave none, whether or not a record is current.
 func (s *Server) imageBuildView(ctx context.Context, ws types.Workspace) (rec *types.ImageBuild, missing bool, liveID string) {
 	rec = ws.ImageBuild
-	current := rec != nil && rec.Schema == types.ImageBuildSchema && rec.Image.Ref == ws.ImageRef && rec.CacheKey == ws.BuiltProfileHash
+	current := currentImageBuild(ws) != nil
 	ider, ok := s.cfg.ImageBuilder.(ImageIdentifier)
 	if !ok || ws.ImageRef == "" {
 		if current {

@@ -53,6 +53,8 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 		"changeForRead"},
 	"GET /api/v1/governance/changes/{id}": {"a held change's diff is stored rendered and re-withheld for the reader's tier by changeForRead",
 		"changeForRead"},
+	"GET /api/v1/governance/changes/{id}/impact": {"answers people, units and live-run counts from a replay; " +
+		"never serves the change's diff or ceiling", ""},
 	"GET /api/v1/governance/requests": {"each held request the caller may see (canSeeGovernanceChange) is served through changeForRead, " +
 		"as the changes list serves it; a request's diff names a unit, a person and a duration or an image, never a ceiling", "changeForRead"},
 	"GET /api/v1/governance/units/{id}/model-usage": {"the unit tree decides the subtree whose usage is summed and names its units; " +
@@ -61,9 +63,16 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 	"GET /api/v1/me/runner-pools":                {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
 	"GET /api/v1/runs/{id}/desktop/files":        {"the run's resolved desktop rules decide the transfer defaults it reports; the answer carries file names and sizes, never a spec", ""},
 	"GET /api/v1/runs/{id}/desktop/files/{name}": {"the run's resolved desktop rules decide whether a download is allowed; the body is the file, never a spec", ""},
+	"GET /api/v1/runs/{id}/attach/forward":       {"a ticketed TCP relay to the sandbox's loopback port (handleAttachForward); the refusals name the rule only, never a spec", ""},
 	"GET /api/v1/runs/{id}/attach":               {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
 	"GET /api/v1/setup/status":                   {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
 	"GET /api/v1/me/machines":                    {"the caller's effective ceiling decides whether they may keep another machine (keptMachineKeepRefusal reads deny_kept_machines); the answer is their own machines, a count, a limit and a reason, never a spec", ""},
+	// The Walls view's routes.
+	"GET /api/v1/walls/topology": {"reads each unit's ceiling for its egress mode only (allowlist, allow-all, sealed or unknown); the boundary is served as its mode and restrictions as id and name, never a spec", ""},
+	"GET /api/v1/me/components": {"mine is the caller's own rows, served whole because the Settings editor sends each back through withStored; " +
+		"org rows go through orgComponentView, which carries no MCP sandbox policy, and a raw secret value is refused at save", ""},
+	"GET /api/v1/components": {"operator-only (requireOperator), so always read at the full tier, and the admin editor sends each row back whole; " +
+		"a raw secret value in an MCP sandbox overlay is refused at save", ""},
 }
 
 // specCensus is the parsed source the route census reads.

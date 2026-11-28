@@ -79,9 +79,12 @@ var kernelDoors = map[string][]string{
 	// run's context only for a caller it is granted to, asked as the attach door
 	// asks it, so an ungranted caller never learns the pinned unit. It grants nothing.
 	"componentPins": {"capComponent"},
+	// A drive fill's grant: kept only when the caller holds the secret capability on its shared name and the egress capability on github.com.
+	"driveFillKeeps": {"capEgressHost", "capSecret"},
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	"sshTicketScope":  {"capFeature"}, // an SSH ticket mint asks ssh_key, as adding a key does
 	// A CLI session's refresh re-asks the api_token feature on every rotation.
 	"cliSessionCutsPass": {"capFeature"},
 	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
@@ -90,6 +93,9 @@ var kernelDoors = map[string][]string{
 	"handleMeCapabilities": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
 	"sponsorMayEnter": {"capFeature"},
+	// The assistant: every marked provider the person is not granted is denied to them, for GET /me/assistant,
+	// the preview and start, and each later message and edit of a session.
+	"assistantLimitsFor": {"capModelProvider"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).
 	"denyProviderAsMissing": {"capModelProvider"},
 	// A workspace read hides a pin to a provider the reader may not use.

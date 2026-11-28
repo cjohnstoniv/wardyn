@@ -221,8 +221,10 @@ const (
 //
 // THREE SizeLimits and the container limit are not a quadruple budget: the kubelet evicts on
 // whichever binds first, and emptyDir usage also counts toward the pod's ephemeral-storage total, so
-// the three volumes together still can't exceed limits[ephemeral-storage]. Zero disk_mib adds
-// nothing, matching resourceRequirements' "absent means unbounded" shape.
+// for a one-container pod the three volumes together still can't exceed limits[ephemeral-storage].
+// Each extra container carries the same limit (extra_containers.go), so with N extras the pod's total
+// is (N+1) x disk_mib and the three volumes together can hold up to min(3, N+1) x disk_mib. Zero
+// disk_mib adds nothing, matching resourceRequirements' "absent means unbounded" shape.
 //
 // NARROWED, NOT CLOSED: everything the agent writes outside these three paths stays on the ephemeral
 // container's own unmetered writable layer. readOnlyRootFilesystem would close it and is NOT set,

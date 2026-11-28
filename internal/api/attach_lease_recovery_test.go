@@ -47,6 +47,7 @@ func TestLeaseRecoveryTickTakesBackALeaseThatLapsedUnclaimed(t *testing.T) {
 	leases.advance(attachLeaseTTL + time.Second)
 
 	srv.attachLeaseTick(t.Context())
+	srv.WaitBackground()
 
 	expectKeeps(t, srv, leases, alice)
 	if calls := leases.reacquireCalls(); len(calls) != 1 || calls[0].HolderID != alice.h.id || calls[0].Principal != "alice" || !calls[0].Since.Equal(alice.h.since) {
@@ -83,7 +84,9 @@ func TestLeaseRecoveryADatabaseErrorKeepsTheWriterFencedAndLogsOnce(t *testing.T
 	leases.fail("reacquire", errors.New("lease table unreachable"))
 
 	srv.attachLeaseTick(t.Context())
+	srv.WaitBackground()
 	srv.attachLeaseTick(t.Context())
+	srv.WaitBackground()
 
 	if w, _ := leaseCovState(srv, leaseCovRun); w != alice.h || alice.wasDisplaced() || !alice.h.lease.held.Load() {
 		t.Fatalf("writer=%v displaced=%v held=%v, want alice kept: an error is not a loss", w, alice.wasDisplaced(), alice.h.lease.held.Load())
@@ -101,6 +104,7 @@ func TestLeaseRecoveryADatabaseErrorKeepsTheWriterFencedAndLogsOnce(t *testing.T
 
 	leases.fail("reacquire", nil)
 	srv.attachLeaseTick(t.Context())
+	srv.WaitBackground()
 
 	expectKeeps(t, srv, leases, alice)
 	if !alice.h.canWrite() {
@@ -128,6 +132,7 @@ func TestLeaseRecoveryNeverTakesALeaseAnotherClientHolds(t *testing.T) {
 			leases.mu.Unlock()
 
 			srv.attachLeaseTick(t.Context())
+			srv.WaitBackground()
 
 			if reason := alice.displacedWith(t); reason != attachLeaseLostReason {
 				t.Errorf("displaced with %q, want %q", reason, attachLeaseLostReason)
@@ -168,6 +173,7 @@ func TestLeaseRecoveryAWriterThatLeftMeanwhileGivesTheLeaseBack(t *testing.T) {
 	releaseAttach(release) // the client's socket ends while the recovery is in flight
 	unblock()
 	<-done
+	srv.WaitBackground()
 
 	if row, found := leases.row(leaseCovRun); found {
 		t.Fatalf("lease row = %+v, want none left for a client that is gone", row)
@@ -196,6 +202,7 @@ func TestLeaseRecoveryAStaleRecoveryNeverEndsTheWriterThatReplacedIt(t *testing.
 	releaseAttach(release) // bob is promoted and takes the lease
 	unblock()
 	<-done
+	srv.WaitBackground()
 
 	if w, _ := leaseCovState(srv, leaseCovRun); w != bob.h || bob.wasDisplaced() || !bob.h.canWrite() || alice.wasDisplaced() {
 		t.Fatalf("writer=%v displaced=%v/%v canWrite=%v, want bob the writer and nobody displaced", w, bob.wasDisplaced(), alice.wasDisplaced(), bob.h.canWrite())
@@ -224,6 +231,7 @@ func TestLeaseRecoveryATakeOverDuringRecoveryKeepsItsNoReconnectReason(t *testin
 	prev.displace(attachTakeoverReason("admin"))
 	unblock()
 	<-done
+	srv.WaitBackground()
 
 	if reason := alice.displacedWith(t); reason != attachTakeoverReason("admin") {
 		t.Errorf("displaced with %q, want the take-over's reason", reason)
@@ -318,6 +326,7 @@ func TestLeaseRecoveryGivingTheLeaseBackTellsTheOtherReplicas(t *testing.T) {
 	releaseAttach(p.releaseAlice) // the client's socket ends while the recovery is in flight
 	unblock()
 	<-done
+	p.srv.WaitBackground()
 
 	if row, found := p.leases.row(leaseCovRun); found {
 		t.Fatalf("lease row = %+v, want none left for a client that is gone", row)

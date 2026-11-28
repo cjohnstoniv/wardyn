@@ -257,6 +257,13 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPresetRequestInvalid), "request: invalid inline_policy: "+err.Error())
 			return false
 		}
+		if s.ruleUIAppCallersHTTP(w, r, *req.Request.InlinePolicy) {
+			return false
+		}
+	}
+	// The overlay's UI apps are ruled too: it is checked below only for its gated keys.
+	if err := s.ruleUIAppCallerApps(r.Context(), uiAppsOfRawOverlay(req.Request.PolicyOverlay)); err != nil {
+		return !uiAppCallerRefusal(err).write(s, w, r)
 	}
 	if err := authoredAPIKeyApprovalRefusal(rawEligibleGrants(req.Request.PolicyOverlay), held); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: invalid policy_overlay: "+err.Error())

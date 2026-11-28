@@ -48,6 +48,7 @@ type recheckCluster struct {
 func newRecheckCluster(t *testing.T) *recheckCluster {
 	t.Helper()
 	c := &recheckCluster{cs: fake.NewClientset()}
+	installServiceIPReactor(c.cs)
 	c.phaseB.Store(1) // enforced
 	var mu sync.Mutex
 	denyAll := map[string]int{}

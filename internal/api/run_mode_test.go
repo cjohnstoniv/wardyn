@@ -713,8 +713,8 @@ func TestBackgroundWatchIsTheDoorsOneException(t *testing.T) {
 
 // TestBackgroundExecIsTheDoorsThirdException holds the contract's third exception to the code: POST /runs/{id}/exec
 // stays the SSH access door's route; liveRunForExec, the fresh read without the background refusal, is called only
-// by sshFreshRun, which then refuses a background run, by execFreshRun, which only handleRunExec calls, and by
-// startFresh; and handleRunExec keeps the governance door, the data_out rule and the channel cap. startFresh re-reads
+// by sshFreshRun, which then refuses a background run, by execFreshRun, which only handleRunExec calls, by
+// handleAttachForward, which refuses a background run first, and its re-check, and by startFresh; and handleRunExec keeps the governance door, the data_out rule and the channel cap. startFresh re-reads
 // the run under its start lock; each of its callers has already made its door's background decision (SSH, attach and
 // sign-in refuse a background run; the UI gateway admits one only for its watch and inbound exceptions), and a run's
 // experience never changes after create. An SSH bridge switched to execFreshRun or liveRunForExec, or a new door
@@ -744,7 +744,8 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 		return out
 	}
 	for name, want := range map[string][]string{
-		"liveRunForExec": {"execFreshRun", "sshFreshRun", "startFresh"},
+		// handleAttachForward refuses a background run first; attachForwardRecheck re-reads the run it opened.
+		"liveRunForExec": {"attachForwardRecheck", "execFreshRun", "handleAttachForward", "sshFreshRun", "startFresh"},
 		"execFreshRun":   {"handleRunExec"},
 	} {
 		if got := callers(name); !slices.Equal(got, want) {
@@ -766,8 +767,9 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 	qualified := funcBodies(t, true)
 	for name, want := range map[string][]string{
 		"startFresh": {"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.sandboxExec", "localAttach.run"},
-		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced.
-		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp"},
+		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced. uiPreviewProbe is
+		// uiEnsureApp for a preview's session, its one caller, so it keeps uiEnsureApp's background decision.
+		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleAttachForward", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp", "Server.uiPreviewProbe"},
 		"execSFTPServer": {"Server.bridgeSSHSFTP", "Server.bridgeSSHSync", "Server.computerFolderPass"},
 	} {
 		var got []string
@@ -784,6 +786,11 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 	for _, name := range []string{"refuseExecGovernance", "refuseExecDataOut", "sshAcquireSession"} {
 		if !calls(bodies["handleRunExec"], name) {
 			t.Errorf("handleRunExec no longer calls %s", name)
+		}
+	}
+	for _, name := range []string{"refuseBackgroundOnly", "refuseForwardDataOut", "sshAcquireSession"} {
+		if !calls(bodies["handleAttachForward"], name) {
+			t.Errorf("handleAttachForward no longer calls %s", name)
 		}
 	}
 	if !callsBackgroundPredicate(bodies["sshFreshRun"]) || callsBackgroundPredicate(bodies["execFreshRun"]) {

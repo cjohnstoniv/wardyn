@@ -117,6 +117,62 @@ describe("runs.listRunsFiltered — sponsored", () => {
   });
 });
 
+describe("runs.listRunsFiltered — service", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(() => Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends service=1 only when asked", async () => {
+    await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("service=");
+    await runs.listRunsFiltered({ view: "user", service: true });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("service=1");
+  });
+});
+
+describe("runs.listRunsFiltered — counts", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(() => Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("skipCounts sends counts=skip and reads countsRead from the headers", async () => {
+    await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("counts=");
+    const skipped = await runs.listRunsFiltered({ view: "user", skipCounts: true });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("counts=skip");
+    expect(skipped.countsRead).toBe(false);
+
+    fetchMock.mockResolvedValueOnce(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Wardyn-Hidden-Older": "0", "X-Wardyn-Hidden-Killed": "0" },
+      }),
+    );
+    const counted = await runs.listRunsFiltered({ view: "user" });
+    expect(counted.countsRead).toBe(true);
+  });
+
+  it("endedAfter sends ended_after and reads X-Wardyn-Ended-After back", async () => {
+    const cut = new Date(Date.now() - 3_600_000).toISOString();
+    fetchMock.mockResolvedValueOnce(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json", "X-Wardyn-Ended-After": cut } }),
+    );
+    const delta = await runs.listRunsFiltered({ view: "user", skipCounts: true, endedAfter: cut });
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`ended_after=${encodeURIComponent(cut)}`);
+    expect(delta.endedAfter).toBe(cut);
+
+    const whole = await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[1][0])).not.toContain("ended_after=");
+    expect(whole.endedAfter).toBeUndefined();
+  });
+});
+
 // #159: opting into BOTH limit and offset switches listRuns() onto explicit
 // server-side paging and widens its return to { runs, truncated } — reading
 // X-Wardyn-Truncated off the response, which unwrapList's bare array return

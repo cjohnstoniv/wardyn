@@ -23,6 +23,11 @@
 # skips with `go test -skip`; the file is validated first and an expired or malformed entry exits 1.
 # Its format and rules are the ones in ui/e2e/quarantine.txt (scripts/lib/e2e-quarantine.sh).
 # Exit code mirrors the test run (non-zero if any test failed).
+# WARDYN_TEST_REPORT_SPLIT_BIN=<test binary> and WARDYN_TEST_REPORT_SPLIT_PKG=<its import path> run that package as
+# WARDYN_TEST_REPORT_SPLIT_N (3) concurrent slices of the binary, beside `go test` over every other package; only
+# -race, -tags and ./... may be passed then. The binary must be built with this run's build and coverage flags
+# (ci.yml's go job builds it in scripts/ci-api-prebuild.sh). Every top-level test the binary lists must be selected
+# by exactly one slice and must report an outcome there (scripts/lib/test_slices.py), or the suite fails.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,6 +35,35 @@ SUITE="${1:?usage: test-report.sh <suite> [go test args...]}"
 shift
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then PKGS=("./..."); fi
+
+SPLIT_BIN="${WARDYN_TEST_REPORT_SPLIT_BIN:-}"
+SPLIT_PKG="${WARDYN_TEST_REPORT_SPLIT_PKG:-}"
+SPLIT_N="${WARDYN_TEST_REPORT_SPLIT_N:-3}"
+if [ -n "$SPLIT_BIN" ]; then
+  split_die() { echo ">> SPLIT: $*" >&2; exit 2; }
+  [ -n "$SPLIT_PKG" ] || split_die "WARDYN_TEST_REPORT_SPLIT_BIN is set without WARDYN_TEST_REPORT_SPLIT_PKG"
+  [ -x "$SPLIT_BIN" ] || split_die "$SPLIT_BIN is not an executable test binary (did the prebuild run?)"
+  [[ "$SPLIT_N" =~ ^[1-9][0-9]*$ ]] || split_die "WARDYN_TEST_REPORT_SPLIT_N must be a positive integer, not '$SPLIT_N'"
+  command -v python3 >/dev/null 2>&1 || split_die "python3 is needed to split $SPLIT_PKG"
+  split_tags="" split_args=() split_want=0 split_all=0
+  for a in "${PKGS[@]}"; do
+    if [ "$split_want" = 1 ]; then split_tags="$a"; split_args+=("$a"); split_want=0; continue; fi
+    case "$a" in
+      -race) split_args+=("$a") ;;
+      -tags) split_args+=("$a"); split_want=1 ;;
+      -tags=*) split_tags="${a#-tags=}"; split_args+=("$a") ;;
+      ./...) split_all=1 ;;
+      *) split_die "only -race, -tags and ./... may be passed with a split, not '$a'" ;;
+    esac
+  done
+  [ "$split_all" = 1 ] || split_die "a split runs the whole module: pass ./..."
+  split_pkgs="$(go list -f '{{.ImportPath}}' ${split_tags:+-tags "$split_tags"} ./...)" || split_die "go list ./... failed"
+  grep -qxF "$SPLIT_PKG" <<<"$split_pkgs" || split_die "$SPLIT_PKG is not one of this run's packages"
+  mapfile -t split_rest < <(grep -vxF "$SPLIT_PKG" <<<"$split_pkgs")
+  [ "${#split_rest[@]}" -gt 0 ] || split_die "no package is left to run beside $SPLIT_PKG"
+  PKGS=("${split_args[@]}" "${split_rest[@]}")
+  SPLIT_DIR="$(go list -f '{{.Dir}}' ${split_tags:+-tags "$split_tags"} "$SPLIT_PKG")" || split_die "go list $SPLIT_PKG failed"
+fi
 
 OUT="$ROOT/test/reports/go/${WARDYN_TEST_REPORT_NAME:-$SUITE}"
 mkdir -p "$OUT"
@@ -45,9 +79,14 @@ mkdir -p "$OUT"
 QUARANTINE_FILE="${WARDYN_GO_QUARANTINE:-$ROOT/test/go-quarantine.txt}"
 quarantine_validate "$QUARANTINE_FILE" "$(date -u +%F)" >&2 || exit 1
 QUARANTINED="$(awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { for (i = 1; i <= 5; i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1 " " $2 " " $3 " " $4 " until " $5 }' "$QUARANTINE_FILE")"
+# WARDYN_TEST_REPORT_SKIP: a space-separated list of test names the caller runs elsewhere (a job of its own);
+# each goes through the same escape-and-anchor as a quarantine entry and is skipped the same way, with a banner.
+SKIP_NAMES=()
+read -ra SKIP_NAMES <<<"${WARDYN_TEST_REPORT_SKIP:-}"
 SKIP_ARGS=()
-if [ -n "$QUARANTINED" ]; then
-  SKIP_RE="$(awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' "$QUARANTINE_FILE" \
+if [ -n "$QUARANTINED" ] || [ "${#SKIP_NAMES[@]}" -gt 0 ]; then
+  SKIP_RE="$({ awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' "$QUARANTINE_FILE"
+      [ "${#SKIP_NAMES[@]}" -eq 0 ] || printf '%s\n' "${SKIP_NAMES[@]}"; } \
     | while IFS= read -r name; do
         out=""
         IFS=/ read -ra parts <<<"$name"
@@ -57,8 +96,14 @@ if [ -n "$QUARANTINED" ]; then
         printf '%s|' "${out#/}"
       done)"
   SKIP_ARGS=(-skip "${SKIP_RE%|}")
+fi
+if [ -n "$QUARANTINED" ]; then
   echo ">> QUARANTINED, skipped by go test -skip (fix the test and delete the line, ${QUARANTINE_FILE#"$ROOT"/}):"
   printf '>>   %s\n' "$QUARANTINED"
+fi
+if [ "${#SKIP_NAMES[@]}" -gt 0 ]; then
+  echo ">> SKIPPED by WARDYN_TEST_REPORT_SKIP, run by another job:"
+  printf '>>   %s\n' "${SKIP_NAMES[@]}"
 fi
 
 echo ">> running suite '$SUITE': go test -json $(echo "${PKGS[*]}" | cut -c1-300)"
@@ -72,6 +117,7 @@ echo ">> running suite '$SUITE': go test -json $(echo "${PKGS[*]}" | cut -c1-300
 # -timeout 40m, not go's 10m per-package default: internal/api's PG suite alone runs about 10 minutes
 # on a hosted runner, and a -timeout expiry is a panic that discards every verdict already produced.
 # The job's timeout-minutes is the real bound; a suite's own -timeout in PKGS comes later and wins.
+if [ -z "$SPLIT_BIN" ]; then
 if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
   rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
   go test -json -timeout 40m ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"} "${PKGS[@]}" > "$OUT/test-output.json"
@@ -79,6 +125,68 @@ else
   go test -json -timeout 40m -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"} "${PKGS[@]}" > "$OUT/test-output.json"
 fi
 GO_EXIT=$?
+else
+  # The slices run the prebuilt binary as cmd/go would: from the package directory, through test2json, with
+  # -test.paniconexit0, its own coverage directory and GOROOT/bin first on PATH (go1.27 cmd/go/internal/test).
+  rm -f "$OUT"/split-*
+  (cd "$SPLIT_DIR" && "$SPLIT_BIN" -test.list='.*') > "$OUT/split-all.list" \
+    || { echo ">> SPLIT: $SPLIT_BIN -test.list failed" >&2; exit 1; }
+  mapfile -t split_re < <(python3 -I "$ROOT/scripts/lib/test_slices.py" split "$SPLIT_N" < "$OUT/split-all.list")
+  [ "${#split_re[@]}" = "$SPLIT_N" ] || { echo ">> SPLIT: wanted $SPLIT_N slice patterns, got ${#split_re[@]}" >&2; exit 1; }
+  for i in $(seq 1 "$SPLIT_N"); do
+    (cd "$SPLIT_DIR" && "$SPLIT_BIN" -test.list="${split_re[$((i - 1))]}") > "$OUT/split-$i.list" \
+      || { echo ">> SPLIT: $SPLIT_BIN -test.list for slice $i failed" >&2; exit 1; }
+  done
+  if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
+    rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
+    go test -json -timeout 40m ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"} "${PKGS[@]}" > "$OUT/test-output.json" &
+  else
+    go test -json -timeout 40m -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"} "${PKGS[@]}" > "$OUT/test-output.json" &
+  fi
+  split_pids=("$!")
+  split_gcd=()
+  split_path="$(go env GOROOT)/bin:$PATH"
+  for i in $(seq 1 "$SPLIT_N"); do
+    gcd="$(mktemp -d)"
+    split_gcd+=("$gcd")
+    flags=(-test.v=test2json -test.paniconexit0 -test.timeout=40m -test.run="${split_re[$((i - 1))]}")
+    [ "${#SKIP_ARGS[@]}" -eq 0 ] || flags+=(-test.skip="${SKIP_ARGS[1]}")
+    [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ] || flags+=(-test.gocoverdir="$gcd" -test.coverprofile="$OUT/split-$i.cover.out")
+    (cd "$SPLIT_DIR" && PATH="$split_path" GOCOVERDIR="$gcd" go tool test2json -t -p "$SPLIT_PKG" "$SPLIT_BIN" "${flags[@]}") \
+      > "$OUT/split-$i.json" &
+    split_pids+=("$!")
+  done
+  GO_EXIT=0
+  for p in "${split_pids[@]}"; do wait "$p" || GO_EXIT=1; done
+  rm -rf "${split_gcd[@]}"
+  for i in $(seq 1 "$SPLIT_N"); do
+    cat "$OUT/split-$i.json" >> "$OUT/test-output.json"
+    if [ "${WARDYN_TEST_REPORT_COVER:-1}" != "0" ]; then
+      f="$OUT/split-$i.cover.out"
+      if [ -s "$f" ] && [ "$(head -1 "$f")" = "mode: atomic" ]; then
+        # go test's own merge: every profile after the first loses its mode line (cmd/go/internal/test/cover.go).
+        [ ! -s "$OUT/cover.out" ] || tail -n +2 "$f" >> "$OUT/cover.out"
+      else
+        echo ">> SPLIT: slice $i of $SPLIT_PKG wrote no atomic coverage profile" >&2
+        GO_EXIT=1
+      fi
+      rm -f "$f"
+    fi
+  done
+  awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); if ($2 !~ /\//) print $2 }' \
+    "$QUARANTINE_FILE" > "$OUT/split-skipped.list"
+  # A name skipped through WARDYN_TEST_REPORT_SKIP is absent on purpose, as a quarantined one is.
+  for name in ${SKIP_NAMES[@]+"${SKIP_NAMES[@]}"}; do
+    case "$name" in */*) ;; *) echo "$name" >> "$OUT/split-skipped.list" ;; esac
+  done
+  split_pairs=()
+  for i in $(seq 1 "$SPLIT_N"); do split_pairs+=("$OUT/split-$i.list,$OUT/split-$i.json"); done
+  echo ">> $SPLIT_PKG as $SPLIT_N slices of $(basename "$SPLIT_BIN")"
+  python3 -I "$ROOT/scripts/lib/test_slices.py" check "$OUT/split-all.list" "$OUT/split-skipped.list" "${split_pairs[@]}" \
+    || GO_EXIT=1
+  rm -f "$OUT"/split-*.json
+fi
+
 
 # ── name the failure ─────────────────────────────────────────────────────────
 # G11: a red `build`/`test-pg` job used to say only `make: *** [Makefile:195:
@@ -193,7 +301,10 @@ with open(sys.argv[1]) as f:
             # A test that started and never ended was running when the binary exited (os.Exit or a
             # crash inside it): test2json gives it no end event, and the package's fail is all that comes.
             if running.get(pkg) and (pkg, panic_test.get(pkg)) not in fails:
-                exited[pkg] = sorted(running[pkg])
+                exited[pkg] = sorted(set(exited.get(pkg, [])) | running[pkg])
+            running.pop(pkg, None)
+        elif action == "pass" and not test:
+            running.pop(pkg, None)
 
 if fails:
     print(">> failing tests:")

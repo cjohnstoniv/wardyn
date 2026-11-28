@@ -26,7 +26,7 @@ import {
   type RunLayoutPreset,
   type RunLayoutWidget,
 } from "../../../lib/api/run-layout";
-import { DESKTOP_REMOVED, forMachineRun, forRun, forVMRun, isDesktopRemoved, isMachineRemoved, isServiceRemoved, MACHINE_REMOVED, normalizeLayout, presetLayout, SERVICE_REMOVED } from "./widget-registry";
+import { DESKTOP_REMOVED, forMachineRun, forPreviews, forRun, forVMRun, isDesktopRemoved, isMachineRemoved, isPreviewsRemoved, isServiceRemoved, MACHINE_REMOVED, normalizeLayout, presetLayout, PREVIEWS_REMOVED, SERVICE_REMOVED } from "./widget-registry";
 
 // Long enough that a drag across the canvas is one PUT, short enough that a
 // human who drags and immediately closes the tab keeps the arrangement (and
@@ -108,6 +108,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
   const desktopRemoved = React.useRef(false);
   // The same for the Machine tile, which a saved layout from before the tile has no entry for.
   const machineRemoved = React.useRef(false);
+  // The same for the Preview URLs tile (the live preset only: the finished preset has no slot for it).
+  const previewsRemoved = React.useRef(false);
 
   const commit = (next: RunLayoutWidget[]) => {
     layoutRef.current = next;
@@ -132,6 +134,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       ...(serviceRemoved.current ? [SERVICE_REMOVED] : []),
       ...(desktopRemoved.current ? [DESKTOP_REMOVED] : []),
       ...(machineRemoved.current ? [MACHINE_REMOVED] : []),
+      ...(previewsRemoved.current ? [PREVIEWS_REMOVED] : []),
     ],
     [],
   );
@@ -208,6 +211,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       if (vm) desktopRemoved.current = !norm.some((w) => w.widget === "desktop");
       // A run with a kept machine shows the tile until it is taken out; a run with none says nothing.
       if (machine) machineRemoved.current = !norm.some((w) => w.widget === "machine");
+      // A live layout shows the Preview URLs tile until it is taken out.
+      if (preset === "live") previewsRemoved.current = !norm.some((w) => w.widget === "previews");
       commit(norm);
       cancelPending();
       lastBody.current = norm;
@@ -244,6 +249,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     serviceRemoved.current = false;
     desktopRemoved.current = false;
     machineRemoved.current = false;
+    previewsRemoved.current = false;
     commit(presetLayout(preset, service, vm, machine));
     lastBody.current = [];
     // PUT [] is the reset: there is no DELETE route, and storing today's
@@ -262,6 +268,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     serviceRemoved.current = false;
     desktopRemoved.current = false;
     machineRemoved.current = false;
+    previewsRemoved.current = false;
     setLoaded(false);
     runLayoutApi
       .getLayout(preset)
@@ -273,13 +280,16 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
         serviceRemoved.current = res.layout.some(isServiceRemoved);
         desktopRemoved.current = res.layout.some(isDesktopRemoved);
         machineRemoved.current = res.layout.some(isMachineRemoved);
-        const saved = res.layout.filter((w) => !isServiceRemoved(w) && !isDesktopRemoved(w) && !isMachineRemoved(w));
+        previewsRemoved.current = res.layout.some(isPreviewsRemoved);
+        const saved = res.layout.filter((w) => !isServiceRemoved(w) && !isDesktopRemoved(w) && !isMachineRemoved(w) && !isPreviewsRemoved(w));
         const shown = normalizeLayout(saved, preset);
         const base = saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current, vm, machine) : serviceRemoved.current ? shown : forRun(shown, preset, service);
         // Saved with the tile taken out: the preset's own tile (nothing saved but the marker) goes too.
         const withDesk = desktopRemoved.current ? base.filter((w) => w.widget !== "desktop") : saved.length === 0 ? base : forVMRun(base, vm);
         // Saved with the Machine tile taken out: the preset's own goes too. A saved layout with no entry gets it on a run that has a machine.
-        commit(machineRemoved.current ? withDesk.filter((w) => w.widget !== "machine") : saved.length === 0 ? withDesk : forMachineRun(withDesk, machine));
+        const withMach = machineRemoved.current ? withDesk.filter((w) => w.widget !== "machine") : saved.length === 0 ? withDesk : forMachineRun(withDesk, machine);
+        // Saved with the Preview URLs tile taken out: the preset's own goes too. A saved live layout with no entry gets it.
+        commit(previewsRemoved.current ? withMach.filter((w) => w.widget !== "previews") : saved.length === 0 ? withMach : forPreviews(withMach, preset));
         setLoaded(true);
       })
       .catch(() => {

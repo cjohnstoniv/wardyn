@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -147,17 +146,11 @@ func (b *mcpBroker) bind(token string) (string, []string) {
 	if b == nil || token == "" {
 		return "", nil
 	}
-	sum := sha256.Sum256([]byte(token))
-	got := hex.EncodeToString(sum[:])
-	var harness string
-	var servers []string
-	for _, bd := range b.bindings {
-		// No early exit: the loop's length must not depend on which one matched.
-		if subtle.ConstantTimeCompare([]byte(got), []byte(bd.SHA256)) == 1 {
-			harness, servers = bd.Harness, bd.Servers
-		}
+	i := types.MatchDigest(types.TokenDigest(token), len(b.bindings), func(i int) string { return b.bindings[i].SHA256 })
+	if i < 0 {
+		return "", nil
 	}
-	return harness, servers
+	return b.bindings[i].Harness, b.bindings[i].Servers
 }
 
 // parseMCPBrokerPath splits /wardyn/mcp/<token>/<key>. Nothing may follow the

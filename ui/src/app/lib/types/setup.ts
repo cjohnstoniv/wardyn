@@ -351,14 +351,36 @@ export interface SetupStatus {
     kubectl_cli?: boolean;
     /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
     multi_agent_tasks?: boolean;
-    /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
+    /** WARDYN_MCP_LOCAL_SERVERS, removed: always false. Optional for fixtures. */
     mcp_local_servers?: boolean;
+    /** WARDYN_MCP_OWN_SANDBOX: an MCP server that starts from a command may run in a sandbox of its own. Absent when off. */
+    mcp_own_sandbox?: boolean;
+    /** The switch and the organisation's Local MCP servers setting are both on. Absent when off. */
+    local_mcp_servers?: boolean;
     /** WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off. */
     macos_vms?: boolean;
     /** The site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window on their Mac. Absent when off. */
     mac_window?: boolean;
     /** WARDYN_SUPPORT_SESSIONS: a super admin may ask to help inside someone's running run. Absent when off. */
     support_sessions?: boolean;
+    /** The site config's features.org_sites: sites group runner pools and drives. Absent when off. */
+    org_sites?: boolean;
+    /** The site config's features.windows_vm: a run may ask for a Windows VM sandbox. Absent when off. */
+    windows_vms?: boolean;
+    /** The site config's features.run_move: a paused run may move to another machine. Absent when off. */
+    run_move?: boolean;
+    /** The site config's features.machine_snapshots: Linux VM sandboxes may be snapshotted and forked. Absent when off. */
+    machine_snapshots?: boolean;
+    /** The site config's features.local_window: a Linux VM run may open in a window on the person's own computer. Absent when off. */
+    local_window?: boolean;
+    /** The site config's features.preview_urls: a run's ports may have preview URLs. Absent when off. */
+    preview_urls?: boolean;
+    /** The site config's features.component_request_rules: custom components may carry request rules. Absent when off. */
+    component_request_rules?: boolean;
+    /** The site config's features.org_runner_drives: a drive may be kept on an organisation runner. Absent when off. */
+    org_runner_drives?: boolean;
+    /** The site config's features.preview_urls.max_visibility while preview URLs are on; an absent value reads private. Absent when off. */
+    preview_max_visibility?: "private" | "org" | "public";
   };
   checks: SetupCheck[];
   auth: {

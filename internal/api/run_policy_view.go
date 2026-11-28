@@ -66,6 +66,9 @@ type policySourceRecord struct {
 	// WallPreset is the wall preset the run was launched with and what it narrowed, set only when
 	// the launch chose one (personal_walls.go).
 	WallPreset *wallPresetSourceRecord `json:"wall_preset,omitempty"`
+	// AgentRules is what the rules of each agent the run includes narrowed, set only when they narrowed
+	// something (run_agent_rules.go).
+	AgentRules []agentRulesSourceRecord `json:"agent_rules,omitempty"`
 	// wallPreset stays in memory: the frozen copy create and the queue's start put on the run.
 	wallPreset *types.WallPresetOnRun
 	// edits stays in memory: the person's provenance rows for this request.
@@ -75,6 +78,8 @@ type policySourceRecord struct {
 	// knobs stays in memory: which layer set each value as the policy resolved,
 	// carried to the run.policy.resolve row (run_policy_provenance.go).
 	knobs knobProvenance
+	// localFolderLayers stays in memory: each local_folders wall's layer (stepLocalFolderWalls), for the envelope.
+	localFolderLayers map[string]types.LocalFolderWallLayer
 	// applyAudits stays in memory: the policy.*.apply rows a create writes once the run's row is
 	// inserted (recordPolicyApplyAudits), so a refusal before that leaves no row for a run that never began.
 	applyAudits []types.AuditEvent
@@ -127,6 +132,10 @@ type runPolicyResponse struct {
 	// code_write: a git token in the sandbox can still push. It is the decision behind unstoppablePushWarning, read from the
 	// spec the walls and the preset have already narrowed.
 	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
+	// SecretsAsValue is each host-scoped secret that went into the sandbox, or to the runner, as its value although a
+	// placeholder switch was on, and why (#3741). SecretsAsValueTruncated is set when more than 50 did; the list holds the first 50.
+	SecretsAsValue          []runPolicySecretAsValue `json:"secrets_as_value,omitempty"`
+	SecretsAsValueTruncated bool                     `json:"secrets_as_value_truncated,omitempty"`
 }
 
 type runPolicyWallPreset struct {
@@ -212,12 +221,12 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, effectivePolicyAuditScan)
+	pe, err := s.readRunPolicyEvidence(ctx, run.ID)
 	if err != nil {
 		writeServerError(w, r, "read run policy", err)
 		return
 	}
-	create := runCreateFacts(events)
+	create := pe.Create
 	resp := runPolicyResponse{RunID: run.ID, Changes: []runPolicyChange{}, Complete: create.Source != nil}
 	resp.Source = s.runPolicySourceOf(ctx, run, create)
 	if create.Source != nil {
@@ -240,32 +249,10 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.State, resp.RecordedAt = policyViewRecorded, &at
 
-	revives, err := s.runReviveEvents(ctx, run.ID)
+	ev, served, err := s.runPolicyServed(ctx, run, pe, envelope)
 	if err != nil {
 		writeServerError(w, r, "read run restarts", err)
 		return
-	}
-	ev := collectEvidence(events, revives)
-	ev.diskFilled, ev.diskBasis, ev.diskDefaultSource = envelope.DiskMiBFilled, envelope.DiskMiBBasis, envelope.DiskMiBDefaultSource
-	ev.bounded = create.Source != nil && create.Source.Bounded
-	if create.Source != nil {
-		ev.clamp, ev.overlay, ev.walls = create.ClampWarnings, create.Source.Overlay, create.Source.PersonalWalls
-		if p := create.Source.WallPreset; p != nil {
-			ev.preset = p.WallsSourceRecord
-		}
-	} else {
-		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)
-	}
-
-	served := envelope.RunPolicySpec
-	// data_out as the doors read it: the run row's rule when it keeps one (runDataOutRule).
-	if run.DataOut != nil && *run.DataOut != served.DataOut.DataOut() {
-		served.DataOut = *run.DataOut
-	}
-	for _, h := range ev.restartHosts {
-		if !slices.Contains(served.DeniedDomains, h) {
-			served.DeniedDomains = append(served.DeniedDomains, h)
-		}
 	}
 	var base *types.RunPolicySpec
 	if create.Source != nil {
@@ -285,6 +272,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
 	tier := s.specReadTierFor(ctx)
+	s.fillSecretsAsValue(ctx, run.ID, tier, &resp)
 	out := redactSpecForRead(served, tier)
 	if out.LLMInspection != nil {
 		li := *out.LLMInspection
@@ -309,7 +297,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
-		resp.HostMarks = envelope.HostMarks
+		resp.HostMarks = scopedHostMarks(envelope.HostMarks)
 	}
 	resp.InspectionLeftTo = s.inspectionLeftTo(ctx, run.ID, sc)
 	writeJSON(w, http.StatusOK, resp)

@@ -559,15 +559,20 @@ func TestDocsOpsRestoreRunbookRestoresUserDrives(t *testing.T) {
 		restore = restore[:j+1]
 	}
 
-	// The labels the runner requires, read out of the doc's own docker-volume
-	// create recipe rather than hard-coded here.
-	recipe := regexp.MustCompile(`(?s)docker volume create.*?wardyn-drive-`).FindString(ops)
-	if recipe == "" {
-		t.Fatal("docs/OPERATIONS.md no longer carries the `docker volume create` hand-restore recipe — re-anchor this guard")
+	// The labels the runner makes a drive volume with, read out of the runner's
+	// own constants rather than hard-coded here or taken from the doc it checks.
+	// scripts/test-ops-drive-restore.sh runs the restore loop itself and checks
+	// that it hands each recorded label back to docker volume create.
+	var src string
+	for _, f := range []string{"naming.go", "driver_volumes.go"} {
+		src += readOpsDoc(t, "internal", "runner", "docker", f)
 	}
-	labels := regexp.MustCompile(`--label (wardyn\.[a-z]+)=`).FindAllStringSubmatch(recipe, -1)
-	if len(labels) == 0 {
-		t.Fatal("parsed no wardyn.* labels out of the hand-restore recipe — this guard is checking nothing")
+	labels := regexp.MustCompile(`\blabel(?:Managed|Drive|DriveHome|DriveSubject)\s*=\s*"(wardyn\.[a-z]+)"`).FindAllStringSubmatch(src, -1)
+	if len(labels) != 4 {
+		t.Fatalf("found %d of the 4 drive volume label constants in internal/runner/docker — re-anchor this guard", len(labels))
+	}
+	if !strings.Contains(restore, `--label "$x"`) || !strings.Contains(restore, `docker volume create "$@"`) {
+		t.Error("the Restore runbook no longer hands each recorded label to docker volume create — a rebuild that follows it brings back the drive rows with none of the bytes")
 	}
 	for _, m := range labels {
 		if !strings.Contains(restore, m[1]) {

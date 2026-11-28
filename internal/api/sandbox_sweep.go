@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The terminal-sandbox sweep primitive: SweepTerminalSandboxes (unbounded,
-// the operator route) and SweepTerminalSandboxesPage (bounded, the periodic
+// the operator route) and SweepTerminalSandboxesAfter (bounded, the periodic
 // ticker — cmd/wardynd's runTerminalSandboxSweeper, #710), sharing one body.
 // Split from runs_lifecycle.go along that seam to keep it under the file-size
 // cap.
@@ -42,7 +42,7 @@ import (
 //
 // Caller: the operator route (POST /admin/sandboxes/sweep, unbounded — an
 // operator asked for it once) and, bounded, the periodic ticker
-// (cmd/wardynd's runTerminalSandboxSweeper, via SweepTerminalSandboxesPage
+// (cmd/wardynd's runTerminalSandboxSweeper, via SweepTerminalSandboxesAfter
 // below).
 func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 	runs, err := s.cfg.Store.ListRuns(ctx)
@@ -53,37 +53,36 @@ func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 	return swept, nil
 }
 
-// SweepTerminalSandboxesPage is SweepTerminalSandboxes bounded to one page of
-// runs, for the periodic ticker: unlike the operator-triggered
-// SweepTerminalSandboxes, which is deliberately unbounded because a human
-// asked for it once, a ticker's cost must never grow with run history. It
-// pages through store.Pager.ListRunsPage (the same ordering ListRuns'
-// unbounded read already uses, created_at DESC) — the caller advances
-// page.Offset by pageLen each tick and wraps back to 0 once pageLen comes
-// back short of page.Limit, so repeated ticks eventually cover the whole
-// table at bounded per-tick cost. Falls back to sweeping every run in one
-// pass when the store does not implement store.Pager (a fake without it, in
-// tests) — real PG always does.
-func (s *Server) SweepTerminalSandboxesPage(ctx context.Context, page store.Page) (swept, pageLen int, err error) {
-	pager, ok := s.cfg.Store.(store.Pager)
+// SweepTerminalSandboxesAfter is SweepTerminalSandboxes bounded to one page of runs read newest first after after,
+// for the periodic ticker: a ticker's cost must never grow with run history. It returns how many runs the page held
+// and the cursor of its last run; the caller carries the cursor to its next tick and starts again from the newest
+// run (the zero cursor) once a page comes back short. A cursor, unlike an offset, is not moved by the runs created
+// between two ticks, so a busy deployment still reaches its oldest runs. Falls back to sweeping every run in one pass
+// when the store does not implement store.RunsKeysetPager (a fake without it, in tests); real PG always does.
+func (s *Server) SweepTerminalSandboxesAfter(ctx context.Context, after store.RunCursor, limit int) (swept, pageLen int, next store.RunCursor, err error) {
+	pager, ok := s.cfg.Store.(store.RunsKeysetPager)
 	if !ok {
 		runs, lerr := s.cfg.Store.ListRuns(ctx)
 		if lerr != nil {
-			return 0, 0, lerr
+			return 0, 0, after, lerr
 		}
 		swept, _ = s.sweepTerminalSandboxRuns(ctx, runs)
-		return swept, len(runs), nil
+		return swept, len(runs), store.RunCursor{}, nil
 	}
-	runs, lerr := pager.ListRunsPage(ctx, page)
+	runs, lerr := pager.ListRunsKeyset(ctx, after, limit)
 	if lerr != nil {
-		return 0, 0, lerr
+		return 0, 0, after, lerr
 	}
 	swept, _ = s.sweepTerminalSandboxRuns(ctx, runs)
-	return swept, len(runs), nil
+	if len(runs) > 0 {
+		last := runs[len(runs)-1]
+		next = store.RunCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+	return swept, len(runs), next, nil
 }
 
 // sweepTerminalSandboxRuns is SweepTerminalSandboxes and
-// SweepTerminalSandboxesPage's shared body: for every TERMINAL run in runs
+// SweepTerminalSandboxesAfter's shared body: for every TERMINAL run in runs
 // (never a page's non-terminal rows — a ticker's page can include live runs,
 // which this simply skips, exactly as the unbounded sweep always has),
 // probe/recover it. Returns how many it swept and how many terminal rows it
@@ -264,7 +263,7 @@ func (s *Server) runnerProvenRevoked(ctx context.Context, run types.AgentRun) bo
 
 // handleSweepSandboxes is the operator-triggered counterpart to the boot pass
 // and to cmd/wardynd's periodic ticker (runTerminalSandboxSweeper, #710),
-// which calls SweepTerminalSandboxesPage on its own bounded cadence instead.
+// which calls SweepTerminalSandboxesAfter on its own bounded cadence instead.
 // This route stays unbounded (SweepTerminalSandboxes, ListRuns UNPAGED,
 // probing Runner.Status for every terminal run carrying a SandboxRef) on
 // purpose: an operator asking for it once, right now, wants the whole table

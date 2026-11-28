@@ -123,6 +123,8 @@ func authoredGrantRefusal(path string, g types.GrantSpec) error {
 // validatePolicySpecUnresolved is validatePolicySpec for a surface that must read no file of this host: a mount
 // source is judged by its spelling alone, and a symlink on the control plane is never followed. Grading uses it, so
 // an answer cannot tell a caller whether a path exists here or where a link points; the save door still resolves.
+// The run path uses it before the seed for a run that attaches workspaces, and the seed then resolves every mount
+// no attached workspace binds to a runner (validateRunPolicyBeforeSeed).
 func validatePolicySpecUnresolved(spec types.RunPolicySpec) error {
 	return validatePolicySpecMode(spec, true, false)
 }
@@ -132,6 +134,21 @@ func validatePolicySpecUnresolved(spec types.RunPolicySpec) error {
 // as every read is, so a stored row with a stray key still loads.
 func validatePolicySpecLenient(spec types.RunPolicySpec) error {
 	return validatePolicySpecMode(spec, false, true)
+}
+
+// validateDomainEntries refuses the first allowed or denied domain entry the proxy's matcher cannot match.
+func validateDomainEntries(spec types.RunPolicySpec) error {
+	for i, d := range spec.AllowedDomains {
+		if err := proxy.ValidDomainEntry(d); err != nil {
+			return fmt.Errorf("allowed_domains[%d]: %w", i, err)
+		}
+	}
+	for i, d := range spec.DeniedDomains {
+		if err := proxy.ValidDomainEntry(d); err != nil {
+			return fmt.Errorf("denied_domains[%d]: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool) error {
@@ -176,15 +193,8 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	// protection but allows/denies nothing — reject it at every ingest point
 	// (stored policy write, inline run policy, WARDYN_DEFAULT_POLICY file,
 	// composer/profile clamp) rather than ship a policy that lies.
-	for i, d := range spec.AllowedDomains {
-		if err := proxy.ValidDomainEntry(d); err != nil {
-			return fmt.Errorf("allowed_domains[%d]: %w", i, err)
-		}
-	}
-	for i, d := range spec.DeniedDomains {
-		if err := proxy.ValidDomainEntry(d); err != nil {
-			return fmt.Errorf("denied_domains[%d]: %w", i, err)
-		}
+	if err := validateDomainEntries(spec); err != nil {
+		return err
 	}
 	if err := types.ValidateHostRuleSets(spec.HostRules); err != nil {
 		return err
@@ -224,6 +234,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateDataOut(spec.DataOut); err != nil {
 		return err
 	}
+	if err := validateLocalFolders(spec.LocalFolders); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}
@@ -231,6 +244,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 		return err
 	}
 	if err := validateResources(spec.Resources); err != nil {
+		return err
+	}
+	if err := types.ValidateOutageControls(spec.Outage); err != nil {
 		return err
 	}
 	return validateADOCapabilities(spec.AzureDevOpsCapabilities)
@@ -441,6 +457,9 @@ func validateUIApps(apps []types.UIApp) error {
 		}
 		if err := validateUIAppCallers(a); err != nil {
 			return fmt.Errorf("ui_apps[%d]: %w", i, err)
+		}
+		if a.Kind != "" && a.Kind != types.UIAppKindDesktop {
+			return fmt.Errorf("ui_apps[%d]: invalid kind %q (want %q or none)", i, a.Kind, types.UIAppKindDesktop)
 		}
 	}
 	return nil
@@ -882,7 +901,7 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool, onRu
 	// an onboarded source here — gating a run to only ONBOARDED workspaces is a
 	// later, security-critical wave (validateWorkspaceSources); this stays the
 	// PURE structural check (no store access).
-	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts)+len(spec.WorkspaceRepos))
+	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts))
 	for i, wm := range spec.WorkspaceMounts {
 		validateSource := runner.ValidateMountSource
 		if !resolveMounts || onRunner[i] {

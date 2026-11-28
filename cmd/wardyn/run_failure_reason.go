@@ -12,6 +12,10 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// maxReasonPages caps the audit pages runFailureReason reads: at the server's
+// 1000-event page that is 100,000 failure rows, far past any real run.
+const maxReasonPages = 100
+
 // runFailureReason surfaces WHY a FAILED run failed. The cause is the run's own
 // failure_hint, a sentence the platform wrote for the operator ("the sandbox could
 // not be created: pull ...: not found"). The audit row only names the step that
@@ -31,7 +35,8 @@ import (
 //
 // ?outcome=failure for agentExitCode's reason: an unfiltered per-run read is
 // capped at 1000 events, so on a chatty run the dispatch error that explains an
-// otherwise opaque "FAILED" was simply not on the page.
+// otherwise opaque "FAILED" was simply not on the page. Pages are walked on the
+// server's truncation flag, so refused reads ahead of the cause do not hide it.
 func runFailureReason(ctx context.Context, c *sdk.Client, run types.AgentRun) string {
 	if run.FailureHint == "" {
 		if again, err := c.GetRun(ctx, run.ID); err == nil {
@@ -42,23 +47,34 @@ func runFailureReason(ctx context.Context, c *sdk.Client, run types.AgentRun) st
 		return run.FailureHint
 	}
 	runID := run.ID
-	events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{Outcome: "failure"})
-	if err != nil {
-		return ""
-	}
-	for _, e := range events {
-		if e.Outcome != "failure" || len(e.Data) == 0 {
-			continue
+	// The failure-only read is still oldest-first and capped per page, so a run
+	// with a page of refused output reads ahead of its dispatch failure needs the
+	// next page. maxReasonPages bounds the walk so it always ends.
+	offset := 0
+	for page := 0; page < maxReasonPages && ctx.Err() == nil; page++ {
+		events, truncated, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{Outcome: "failure"}, sdk.ListOpts{Offset: offset})
+		if err != nil {
+			return ""
 		}
-		var d map[string]any
-		if json.Unmarshal(e.Data, &d) != nil {
-			continue
-		}
-		for _, k := range []string{"error", "reason", "detail"} {
-			if v, ok := d[k].(string); ok && v != "" {
-				return fmt.Sprintf("%s: %s", e.Action, v)
+		for _, e := range events {
+			// A run.output.refuse row records a refused read of the output, not a cause of the run's failure.
+			if e.Outcome != "failure" || len(e.Data) == 0 || e.Action == "run.output.refuse" {
+				continue
+			}
+			var d map[string]any
+			if json.Unmarshal(e.Data, &d) != nil {
+				continue
+			}
+			for _, k := range []string{"error", "reason", "detail"} {
+				if v, ok := d[k].(string); ok && v != "" {
+					return fmt.Sprintf("%s: %s", e.Action, v)
+				}
 			}
 		}
+		if !truncated || len(events) == 0 {
+			break
+		}
+		offset += len(events)
 	}
 	return ""
 }

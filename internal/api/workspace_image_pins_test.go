@@ -44,12 +44,13 @@ const (
 // reports a pin file. digests answers by the ref exactly as asked; a ref with no entry is not found.
 type pinningBuilder struct {
 	recordingBuilder
-	pmu     sync.Mutex
-	digests map[string]string
-	errs    map[string]error
-	asked   []string
-	pinFile []byte
-	found   bool // LocalImage answer: the host still has the image
+	pmu      sync.Mutex
+	digests  map[string]string
+	errs     map[string]error
+	asked    []string
+	pinFile  []byte
+	found    bool  // LocalImage answer: the host still has the image
+	localErr error // LocalImage fails with it when set
 }
 
 func (b *pinningBuilder) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, tag string, w io.Writer) (BuiltImage, error) {
@@ -59,6 +60,9 @@ func (b *pinningBuilder) BuildFromDevcontainerFiles(ctx context.Context, files m
 }
 
 func (b *pinningBuilder) LocalImage(context.Context, string) (string, bool, error) {
+	if b.localErr != nil {
+		return "", false, b.localErr
+	}
 	return recImageID, b.found, nil
 }
 
@@ -229,6 +233,36 @@ func TestResolveWorkspaceImage_MissingImageRebuildsFromTheRecord(t *testing.T) {
 	}
 	if !rec.Resolved {
 		t.Error("a rebuild from a fully pinned record stays reproducible")
+	}
+}
+
+// The image is known missing before the rebuild starts, so a builder that cannot answer a second inspection
+// does not cost the record its pins.
+func TestResolveWorkspaceImage_MissingImageKeepsPinsWhenTheBuilderCannotAnswer(t *testing.T) {
+	b := &pinningBuilder{
+		digests: map[string]string{
+			pinBaseRef: pinNewDigest, pinGoRef: pinNewDigest,
+			pinBaseRepo + "@" + pinBaseDigest: pinBaseDigest, pinGoRepo + "@" + pinGoDigest: pinGoDigest,
+		},
+		pinFile:  []byte("9.9.9 linux-x64 " + strings.Repeat("9", 64) + "\n"),
+		localErr: errors.New("builder unreachable"),
+	}
+	st := &recordingBuildStore{}
+	srv, _ := missingImageServer(t, st, b)
+	ws := pinnedRecord(t, nil)
+	previous := ws.ImageBuild.Inputs
+
+	if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil); !ok {
+		t.Fatal("the rebuild failed")
+	}
+	for _, ref := range b.askedRefs() {
+		if ref == pinBaseRef || ref == pinGoRef {
+			t.Errorf("the resolver was asked for %q: the record's pins were dropped", ref)
+		}
+	}
+	rec := st.snapshot()[0].rec
+	if rec.Reason != types.ImageBuildReasonImageMissing || rec.Inputs.Base != previous.Base {
+		t.Errorf("reason %q, base %q; want image_missing rebuilt on the previous base %q", rec.Reason, rec.Inputs.Base, previous.Base)
 	}
 }
 

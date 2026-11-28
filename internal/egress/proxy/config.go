@@ -322,6 +322,11 @@ type Config struct {
 	// WARDYN_PUSH_HOLD_CANONICAL_REPOS at dispatch; false (the default) names
 	// the path as git spelled it.
 	CanonicalPushRepos bool `json:"canonical_push_repos,omitempty"`
+	// PushHoldRemovals has the review rules also hold a push that removes a
+	// path they claim from a branch it updates (forgeRepo.removedFromTip), on
+	// a forge the broker reads. WARDYN_PUSH_HOLD_REMOVALS at dispatch; false
+	// (the default) judges only what a push introduces.
+	PushHoldRemovals bool `json:"push_hold_removals,omitempty"`
 	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
 	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
 	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set only
@@ -408,6 +413,15 @@ type Config struct {
 	// (policy:no-network) and no egress dial is made, while the proxy's own control-plane calls go on.
 	// An older proxy refuses the key, so such a run never starts on one.
 	NoNetwork bool `json:"no_network,omitempty"`
+	// Outage is the run's outage terms (#4082): how long the proxy keeps serving without reaching the control plane,
+	// and whether it then ends instead of pausing. Absent for the default terms: one hour, not strict.
+	Outage *OutageConfig `json:"outage,omitempty"`
+}
+
+// OutageConfig is Config.Outage.
+type OutageConfig struct {
+	AllowanceS int64 `json:"allowance_s"`
+	Strict     bool  `json:"strict,omitempty"`
 }
 
 // MCPServerConfig is one remote MCP server on the broker route.
@@ -488,6 +502,8 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	c := raw.Config
 	switch {
+	case c.Outage != nil && (c.Outage.AllowanceS < 30*60 || c.Outage.AllowanceS > 24*60*60):
+		return nil, fmt.Errorf("outage.allowance_s %d is outside 1800 to 86400", c.Outage.AllowanceS)
 	case len(raw.LegacyADOGrants) > 1:
 		return nil, fmt.Errorf("config: ado_grants carries %d grants; a sidecar holds one Azure DevOps grant", len(raw.LegacyADOGrants))
 	case len(raw.LegacyADOGrants) == 1 && c.ADOGrant != nil:

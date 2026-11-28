@@ -47,6 +47,7 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/approvals/{id}/expire":          true,
 	"POST /api/v1/internal/approvals/{id}/sent":            true,
 	"POST /api/v1/internal/token/renew":                    true,
+	"POST /api/v1/internal/token/recover":                  true, // a runner's proxy recovers through its relay
 	"POST /api/v1/internal/proxy/loaded":                   true, // the run proxy's readback, on its run token
 	"GET /api/v1/internal/injection/{grantID}":             true, // delivery = own only: refuseRelayedDelivery
 	"POST /api/v1/internal/credentials/mint":               true, // delivery = own only: refuseRelayedDelivery
@@ -64,6 +65,10 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/groundtruth":                    false, // no host sensor on a laptop
 	"POST /api/v1/internal/desktop-signin/check":           false, // sign-ins never run on a runner (signinTarget)
 	"POST /api/v1/internal/gateway-identity":               false, // placement refuses a gateway route on a person's runner
+	"GET /api/v1/internal/assistant/turns":                 false, // an assistant run is placed remote, never on a person's runner
+	"POST /api/v1/internal/assistant/events":               false,
+	"GET /api/v1/internal/assistant/tools":                 false,
+	"POST /api/v1/internal/assistant/tools/{name}":         false,
 }
 
 type relayRunnerKey struct{}

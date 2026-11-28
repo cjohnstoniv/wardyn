@@ -115,7 +115,7 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "CreateRunWith", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "EditRunEgress", "ExecRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "GetRunMachine", "RequestSupport", "SupportStatus", "AcceptSupport", "DeclineSupport", "EndSupport"},
+		"runs":        {"CreateRun", "CreateRunWith", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "EditRunEgress", "ExecRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "OpenLocalWindow", "GetRunMachine", "RequestSupport", "SupportStatus", "AcceptSupport", "DeclineSupport", "EndSupport"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "ListApprovalsDecidable", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetPolicyDocument", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
@@ -133,7 +133,8 @@ func routeFamilies() map[string][]string {
 		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
 			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "PutUnitDeciders", "CheckGovernance", "GovernanceDryRun", "SetEnvelope", "ClearEnvelope",
 			"GetGovernanceUnder", "PlanGovernanceUnder", "ApplyGovernanceResultUnder", "UnitModelUsage"},
-		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange", "NoteGovernanceChange"},
+		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange", "NoteGovernanceChange", "GetGovernanceChangeImpact", "ApproveGovernanceChangeWithReason", "TakeBackGovernanceApproval"},
+		"approval-counts": {"GetApprovalCounts", "PutApprovalCounts"},
 		"gov.requests":    {"ListGovernanceRequests", "RequestElevation", "RequestImage", "ApproveGovernanceRequest", "RejectGovernanceRequest"},
 		"setup":           {"SetupStatus"},
 		"identity":        {"Me"},

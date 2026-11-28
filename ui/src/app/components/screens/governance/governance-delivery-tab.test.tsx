@@ -24,8 +24,17 @@ const deliveryGetMock = vi.fn();
 vi.mock("../../../lib/api/credential-delivery", () => ({
   credentialDelivery: { get: () => deliveryGetMock(), put: vi.fn(), runnersEnabled: () => Promise.resolve(true) },
 }));
+// The assistant's settings and availability answer off, with the stored defaults.
+vi.mock("../../../lib/api/assistant", () => ({
+  assistant: {
+    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
+    getMyAssistant: () => Promise.resolve({ state: "off" }),
+  },
+}));
 
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { APPROVALS_NEEDED } from "../../../lib/approvals-needed-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
 
@@ -60,7 +69,7 @@ describe("GovernanceScreen — the Runner credentials tab", () => {
   it("sits between Profiles and Changes for a security operator, beside Baseline hosts", async () => {
     renderAt("/");
     await screen.findByText(GREENFIELD.name);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([GOV.PROFILES_TITLE, DELIVERY.TAB, BASELINE.TAB, CHANGES.TAB]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([GOV.PROFILES_TITLE, DELIVERY.TAB, BASELINE.TAB, APPROVALS_NEEDED.TITLE, CHANGES.TAB]);
   });
 
   it("is absent without the security tier, and a typed URL falls back to Profiles", async () => {

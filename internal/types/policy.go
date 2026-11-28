@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -236,12 +237,17 @@ type RunPolicySpec struct {
 	// Desktop sets the desktop's clipboard and file-transfer rules by direction (#2967). Nil is
 	// the defaults: paste in and upload allowed, copy out and download blocked.
 	Desktop *DesktopControls `json:"desktop,omitempty"`
+	// Outage is the policy's say over its runs' outage terms (#4082): a shorter allowance than the site's, strict, and
+	// what a long outage does to an unattended run. Nil takes the site's allowance, not strict, kept.
+	Outage *OutageControls `json:"outage,omitempty"`
 	// Recording is how much of a run under this policy is recorded (RecordingLevel); empty chooses
 	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
 	// minimum: a policy under it may record more, never less.
 	Recording RecordingLevel `json:"recording,omitempty"`
 	// DataOut is the run's rule for content leaving it (docs/POLICIES.md#data_out). "" is allowed.
 	DataOut TransferRule `json:"data_out,omitempty"`
+	// LocalFolders are the walls for folders from a person's computer (docs/POLICIES.md#local_folders). nil is none.
+	LocalFolders *LocalFolderRules `json:"local_folders,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice
@@ -490,17 +496,33 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 		d := *s.Desktop
 		out.Desktop = &d
 	}
+	if s.Outage != nil {
+		o := *s.Outage
+		out.Outage = &o
+	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = append([]string(nil), s.PushRules.DenyPaths...)
 		pr.RequireReviewPaths = append([]string(nil), s.PushRules.RequireReviewPaths...)
 		out.PushRules = &pr
 	}
+	out.LocalFolders = s.LocalFolders.Clone()
 	return out
 }
 
 // DetectorSidecarFormatPresidio is the one detector_sidecar_format other than Wardyn's own.
 const DetectorSidecarFormatPresidio = "presidio"
+
+// AuthoredSecretValuesProblem refuses raw workspace_secret_values on a write: only dispatch fills them, in memory,
+// on the copy handed to the proxy, and a writer names the secrets in workspace_secret_names instead. nil when
+// li is nil or carries none.
+func (li *LLMInspectionSpec) AuthoredSecretValuesProblem() error {
+	if li == nil || len(li.WorkspaceSecretValues) == 0 {
+		return nil
+	}
+	return errors.New("llm_inspection.workspace_secret_values may not be set on a policy write " +
+		"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
+}
 
 // LLMInspectionSpec configures optional outbound LLM prompt inspection for a
 // run. The zero value (or a nil *LLMInspectionSpec on the policy) means OFF.
@@ -627,6 +649,8 @@ type UIApp struct {
 	Path    string   `json:"path,omitempty"`
 	Inbound bool     `json:"inbound,omitempty"`
 	Callers []string `json:"callers,omitempty"`
+	// Kind is UIAppKindDesktop for an app that serves a desktop, "" for any other (IsDesktop).
+	Kind string `json:"kind,omitempty"`
 }
 
 // PathOrRoot is Path with the empty default applied.
@@ -636,6 +660,17 @@ func (a UIApp) PathOrRoot() string {
 	}
 	return a.Path
 }
+
+// UIAppKindDesktop is the one UIApp.Kind. The app serves a desktop, so the UI gateway relays it as it relays the
+// noVNC app, whatever its name: its WebSockets are RFB under the run's desktop rules or they close, it is recorded
+// as a desktop, and deny_interactive closes it (docs/UI-SANDBOXES.md). The kind only adds those rules to an app.
+const UIAppKindDesktop = "desktop"
+
+// UIAppDesktopName is the noVNC image's app (deploy/images/novnc): a desktop with or without the kind.
+const UIAppDesktopName = "novnc"
+
+// IsDesktop is whether a serves a desktop: declared with the desktop kind, or the noVNC image's app.
+func (a UIApp) IsDesktop() bool { return a.Kind == UIAppKindDesktop || a.Name == UIAppDesktopName }
 
 // ResourceLimits caps a sandbox's resource consumption. A ZERO field means "use
 // the platform default": the dispatch path fills conservative defaults (e.g.

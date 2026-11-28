@@ -90,7 +90,7 @@ func (s *Server) presetContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, driveSelectionRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal, runShapeRefusal, serviceRefusal, runEndShapeRefusal, repoURLUserinfoShapeRefusal, correlationIDRefusal,
+	runModeShapeRefusal, runShapeRefusal, serviceRefusal, containersShapeRefusal, runEndShapeRefusal, repoURLUserinfoShapeRefusal, correlationIDRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {

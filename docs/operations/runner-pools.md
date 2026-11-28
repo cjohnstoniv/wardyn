@@ -38,6 +38,7 @@
 | The launch names | Pool it runs in |
 |---|---|
 | A pool (`runner_pool_id`, `wardyn run --pool`) | That pool, when you may use it. |
+| No pool, sites on, and the run's homed drives at one site | That [site](sites.md)'s default pool, when you may use it; otherwise the next row applies. |
 | No pool, and you have a default | Your default pool (`wardyn runner pool default set <pool>`). |
 | No pool, and only the organization has a default | The organization's (`wardyn runner pool org-default set --pool <pool>`, admin). |
 | No pool, and no default applies | Refused `runner_pool_required`. |
@@ -107,6 +108,7 @@ The pool list's `barrier_options` always answers Fence, Wall and Vault (`CC1`, `
 - A pool with an empty `barriers` list allows every barrier its runners offer.
 - A launch that names no barrier gets the organization's default barrier when it is available (`default_source: organisation`), otherwise the strongest available one (`default_source: server`).
 - An admin sets the organization's default barrier with `wardyn runner pool org-default set --barrier CC1|CC2|CC3|none`, or `PUT /api/v1/runner-pool-defaults` with `barrier`. That `PUT` replaces the document, so one that leaves `barrier` out clears it; one that leaves `recording` out keeps it.
+- With no organization default barrier set and a runner offering CC2 or CC3, an operator's `/setup/status` shows an info row, `default_barrier_unset`, naming the strongest class offered: the most a launch naming no barrier can get. The row reads this server's sandbox classes and its claimed runners' classes; remote runners' classes are not counted.
 - The organization's default has a `revision` (migration `0185_runner_pool_org_default_revision`). A `PUT` naming a revision that has moved on is refused `runner_pool_stale` (409); one naming none writes unconditionally.
 - A person's own default names a pool only; it cannot set a barrier.
 
@@ -137,7 +139,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 
 ### Scheduled runs
 
-With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can be scheduled to start once, later. Repeating schedules are not built.
+With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can be scheduled to start once, later, or [repeat](#repeating-schedules).
 
 - `start_at` and `start_time_zone` on `POST /api/v1/runs` (`wardyn run --start-at 2026-10-21T02:00 --time-zone Europe/London`): a date and time in an IANA zone, or an RFC 3339 time.
 - It must be in the future and leave the run its wait before the 7-day cap: at most 6 days ahead for a background task, 6 days 23 hours for an interactive environment. Else `start_at_past`, or `start_at_too_far` naming the latest start; switched off, `scheduled_runs_off`.
@@ -148,6 +150,27 @@ With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can b
 - Two cases end the run at the start instead: a renewal the provider did not answer (`model_provider_unavailable`), and a stored sign-in Wardyn knows is spent (`model_credential`). For the second, sign in again and book a new run.
 - Cancel it like any waiting run. Switching scheduled runs off also binds runs already booked: at its time such a run ends `FAILED` `scheduled_runs_off`.
 - A profile's [`deny_scheduled_runs`](../POLICIES.md#deny_scheduled_runs) refuses a start time with `scheduled_runs_denied`, and ends a booked run with it at its time.
+
+### Repeating schedules
+
+With `WARDYN_SCHEDULED_RUNS` set, a person signed in with single sign-on keeps up to 20 repeating schedules (`/api/v1/run-schedules`, [API](../sdk.md#repeating-schedules)), on the Runs board's Schedules page.
+
+- A schedule repeats daily, on weekdays (Monday to Friday) or weekly, at a local time in an IANA zone. A weekly one repeats on the weekday of its first start.
+- Each start is booked as one scheduled run 2 minutes ahead, and shows on the Runs board from then. It starts like any scheduled run, after the same checks.
+- A booking acts with the owner's stored groups, less any the latest sign-in dropped. A group gained since instead pauses the schedule.
+- A schedule pauses when its owner or an admin pauses it, or a refused booking does (`refused:<reason>`). It also pauses when its owner is deactivated or their sessions are signed out (`identity_inactive`), or has not signed in for 30 days (`owner_idle`). It pauses too when they gained a group since the last create or resume (`groups_changed`).
+- A schedule whose owner loses the group that allowed the run pauses before its next start.
+- A schedule whose stored rule or owner this server cannot read, such as a time zone its time zone data lacks, pauses `refused:unreadable`.
+- Without SCIM, a group removed at the identity provider is seen at the owner's next sign-in, or else at the 30-day idle pause.
+- A group added at the identity provider is seen at the owner's next sign-in, which pauses the schedule until they resume it.
+- A deployment-wide session revoke pauses every schedule, and each owner resumes their own.
+- A resume runs the create's checks again as you and stores your session's groups, so sign in again before resuming a schedule paused because its groups changed.
+- Pausing or deleting a schedule leaves a start already booked in place; cancel it like any waiting run.
+- Erasing a person's `run_tasks` or `credentials`, or a leaver purge, deletes their schedules.
+- A start refused for a reason not about the owner, such as a full queue, is skipped, and the schedule stays active.
+- A start missed while no server ran is skipped, never started late.
+- One server books at most 50 schedules every 30 seconds, and a start it cannot book by its time is skipped and logged, never started late.
+- An API token, a service or a delegate cannot make or resume a schedule (`run_schedule_owner_unsupported`), and nor can an admin in the Admin view.
 
 ## Your own pools
 

@@ -211,9 +211,14 @@ const envMacOSVMs = "WARDYN_MACOS_VMS"
 // support_off, and the console is told the option is off (SetupFeatures.SupportSessions).
 const envSupportSessions = "WARDYN_SUPPORT_SESSIONS"
 
+// envAttachForward turns on port forwarding over the organisation (attach_forward.go): GET /runs/{id}/attach/forward
+// relays one TCP connection to a port on the sandbox's own loopback, for a deployment whose SSH gateway is off. Off, the default,
+// the route answers 409 run_forward_off and writes a run.port.forward failure row. Read only through attachForwardOn.
+const envAttachForward = "WARDYN_ATTACH_FORWARD"
+
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs, envSupportSessions}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPOwnSandbox, envMacOSVMs, envSupportSessions, envAttachForward}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -226,6 +231,19 @@ func ValidateEnvToggles() {
 	if err := validateApprovalRulesSwitch(); err != nil {
 		fmt.Fprintln(flag.CommandLine.Output(), err)
 		os.Exit(2)
+	}
+	if err := validateIdentityNarrowingSwitch(); err != nil {
+		fmt.Fprintln(flag.CommandLine.Output(), err)
+		os.Exit(2)
+	}
+	warnRemovedMCPLocalServers()
+}
+
+// warnRemovedMCPLocalServers logs, at boot, that the removed switch is still set. It never exits: the
+// deployment keeps running, and its servers meet WARDYN_MCP_OWN_SANDBOX and the organisation's setting.
+func warnRemovedMCPLocalServers() {
+	if os.Getenv("WARDYN_MCP_LOCAL_SERVERS") != "" {
+		slog.Warn("WARDYN_MCP_LOCAL_SERVERS is no longer read: an MCP server that starts from a command runs only in a sandbox of its own, behind WARDYN_MCP_OWN_SANDBOX and the organisation's Local MCP servers setting")
 	}
 }
 
@@ -406,6 +424,10 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// scan.
 	if (run.WorkspaceID != nil || run.SourceID != nil) && !p.Interactive {
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
+	}
+	// An assistant run: agent-run starts the relay that carries the session's turns, never the agent's own task loop.
+	if run.Task == assistantRunTask && run.WorkspaceID == nil && run.SourceID == nil {
+		sandboxEnv["WARDYN_ASSISTANT"] = "1"
 	}
 	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell
 	// command instead of the agent harness. Only the discriminator rides env —
@@ -707,7 +729,11 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount) {
+//
+// A drive the run got through its issuer portal adds `portal`, the portal's id. portals, when given, maps each such drive
+// id to that portal, set at create from the fold: a team drive mounted through a group allocation names none, so it is
+// never inferred from the portal that created the run.
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount, portals ...map[uuid.UUID]uuid.UUID) {
 	for i := range drives {
 		drive := &drives[i]
 		target := drive.Target
@@ -725,6 +751,11 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 		}
 		if drive.Team {
 			data["team"], data["mounted_by"] = true, mountedBy
+		}
+		for _, byDrive := range portals {
+			if portal, ok := byDrive[drive.DriveID]; ok {
+				data["portal"] = portal
+			}
 		}
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
 			driveAuditTarget(drive), "success", mustJSON(data)))
@@ -806,6 +837,7 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 	s.recordDesktopVMSignIns(ctx, run, sb)
 	s.auditKeychainTrust(ctx, run, sb)
 	s.auditNoNetworkProxyOnly(ctx, run, sb)
+	s.auditSandboxStart(ctx, run, sb)
 	return nil
 }
 

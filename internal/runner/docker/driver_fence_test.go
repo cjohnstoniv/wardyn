@@ -557,3 +557,127 @@ func TestFenceProxy_StartAfterFenceStaysCut(t *testing.T) {
 		t.Fatalf("a fenced agent started again has %d endpoints; want 0 (inspect networks: %+v)", n, res.Container.NetworkSettings.Networks)
 	}
 }
+
+// stopAgent is a lease end's stop of the agent's container.
+func (r fencedRun) stopAgent(t *testing.T) {
+	t.Helper()
+	timeout := 1
+	if _, err := r.d.cli.ContainerStop(context.Background(), r.ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		t.Fatalf("stop agent: %v", err)
+	}
+}
+
+// starts counts the starts of the agent's container.
+func (r fencedRun) starts() int {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	n := 0
+	for _, id := range r.f.startedNames {
+		if id == r.ref {
+			n++
+		}
+	}
+	return n
+}
+
+func (r fencedRun) running(t *testing.T) bool {
+	t.Helper()
+	res, err := r.d.cli.ContainerInspect(context.Background(), r.ref, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect %s: %v", r.ref, err)
+	}
+	return res.Container.State != nil && res.Container.State.Running
+}
+
+// A stopped task agent is cut off every network and started again, still with no endpoint (#3486).
+func TestStartFenced_StartsAStoppedTaskAgentWithNoNetwork(t *testing.T) {
+	r := newFencedRun(t)
+	r.stopAgent(t)
+	before := r.starts()
+	if err := r.d.StartFenced(context.Background(), r.ref); err != nil {
+		t.Fatalf("StartFenced: %v", err)
+	}
+	if r.starts() != before+1 || !r.running(t) {
+		t.Errorf("starts %d -> %d, running %v; want one start and the agent running", before, r.starts(), r.running(t))
+	}
+	if n := r.endpoints(t, r.ref); n != 0 {
+		t.Errorf("agent endpoints after StartFenced = %d; want 0", n)
+	}
+}
+
+// A container whose main process is not the task idle script, one with an entrypoint, one running, or one that cannot
+// be cut off a network is refused and not started.
+func TestStartFenced_RefusesAnythingButAStoppedTaskAgent(t *testing.T) {
+	cases := map[string]func(r fencedRun){
+		"an interactive idle": func(r fencedRun) {
+			r.f.mu.Lock()
+			r.f.containers[r.ref].cfg.Cmd = []string{"agent-run", "--idle"}
+			r.f.mu.Unlock()
+		},
+		"an entrypoint": func(r fencedRun) {
+			r.f.mu.Lock()
+			r.f.containers[r.ref].cfg.Entrypoint = []string{"docker-entrypoint.sh"}
+			r.f.mu.Unlock()
+		},
+		"a network it cannot leave": func(r fencedRun) {
+			r.f.failDisconnect = map[string]bool{internalNetName(testSpec().RunID): true}
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newFencedRun(t)
+			r.stopAgent(t)
+			setup(r)
+			before := r.starts()
+			if err := r.d.StartFenced(context.Background(), r.ref); err == nil {
+				t.Fatal("StartFenced = nil; want a refusal")
+			}
+			if r.starts() != before || r.running(t) {
+				t.Errorf("starts %d -> %d, running %v; want no start", before, r.starts(), r.running(t))
+			}
+		})
+	}
+	t.Run("running", func(t *testing.T) {
+		r := newFencedRun(t)
+		before := r.starts()
+		if err := r.d.StartFenced(context.Background(), r.ref); err == nil {
+			t.Fatal("StartFenced of a running agent = nil; want a refusal")
+		}
+		if r.starts() != before {
+			t.Errorf("starts %d -> %d; want none", before, r.starts())
+		}
+		if n := r.endpoints(t, r.ref); n == 0 {
+			t.Error("StartFenced of a running agent cut it off; want it untouched")
+		}
+	})
+}
+
+// A start that brings an endpoint back (a daemon that reconnects on start) is an error, and the agent is stopped
+// again: a sandbox started for a pass back never runs with a network (#3486).
+func TestStartFenced_AStartThatReachesANetworkStopsTheAgentAgain(t *testing.T) {
+	r := newFencedRun(t)
+	r.stopAgent(t)
+	r.f.onStart = func(c *createdContainer) {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		if c.name == r.ref {
+			c.cut = nil
+		}
+	}
+	err := r.d.StartFenced(context.Background(), r.ref)
+	if err == nil || !strings.Contains(err.Error(), "came back on") {
+		t.Fatalf("StartFenced of an agent the start reconnected = %v; want its endpoint named", err)
+	}
+	if r.running(t) {
+		t.Error("the agent that came back on a network is still running; want it stopped again")
+	}
+}
+
+func TestStartFenced_VMIsUnsupported(t *testing.T) {
+	d := newTestDriver(newFakeDocker())
+	ref := agentContainerName(uuid.New())
+	d.vms.Store(ref, &vmRun{})
+	if err := d.StartFenced(context.Background(), ref); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Fatalf("StartFenced of a VM = %v; want runner.ErrEndUnsupported", err)
+	}
+}

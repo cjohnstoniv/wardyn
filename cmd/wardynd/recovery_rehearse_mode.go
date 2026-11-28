@@ -42,7 +42,7 @@ func rehearseSetOf(dir string, m recoveryManifest) rehearseSet {
 		ID: m.SetID, Dir: dir, HeadSeq: m.Snapshot.AuditHeadSeq, HeadHash: m.Snapshot.AuditHeadHash,
 		Migration:    m.Snapshot.SchemaMigration,
 		Source:       dsnIdentity{Host: m.Source.Host, Port: uint16(m.Source.Port), Database: m.Source.Database},
-		AgeRecipient: m.Keys.AgeRecipient, KEKMode: m.Keys.KEKMode, KeyClasses: m.Keys.Classes, Spool: m.AuditSpool, Recordings: m.Recordings, Drives: m.Drives,
+		AgeRecipient: m.Keys.AgeRecipient, PlatformRecipient: m.Keys.PlatformRecipient, KEKMode: m.Keys.KEKMode, KeyClasses: m.Keys.Classes, Spool: m.AuditSpool, Recordings: m.Recordings, Drives: m.Drives,
 	}
 }
 

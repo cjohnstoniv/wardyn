@@ -139,6 +139,10 @@ var envDocShellOnly = map[string]bool{
 	// service_state): a seam for scripts/test-service-supervisor.sh only. wardynd
 	// reads the default path over exec and never sets or reads this var.
 	"WARDYN_SERVICE_STATE_FILE": true,
+	// The repository clones' state-file path (deploy/images/common/agent-run-lib.sh
+	// _clone_state_write): a seam for scripts/test-clone-state.sh only. wardynd
+	// reads the default path and never sets or reads this var.
+	"WARDYN_CLONE_STATE_FILE": true,
 	// The store-mode and Transit compose overlays' host directory holding the
 	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
 	// the mounted file.
@@ -245,8 +249,6 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_NOVNC_GEOMETRY": true, "WARDYN_REC_WRAP": true,
 	"WARDYN_SESSION_START": true, "WARDYN_SSH_AGENT_DIR": true,
 	"WARDYN_WALK_ADO_MEMBER_EMAIL": true, "WARDYN_WALK_ADO_PROXY_URL": true,
-	// The agent-run belt's wait bound (agent-run-lib.sh wait_for_proxy); no run sets it, Go never reads it.
-	"WARDYN_PROXY_WAIT_SECS": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

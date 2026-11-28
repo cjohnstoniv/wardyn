@@ -182,7 +182,7 @@ func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
 	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits, StrictPins: st.launch.StrictPins}
-	st.ctx = withPromotedStart(withFrozenPoolUnit(bindAuthority(st.prep, a, choice), st.launch.UnitID), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	st.ctx = withPortalDriveModes(withPromotedStart(withFrozenPoolUnit(bindAuthority(st.prep, a, choice), st.launch.UnitID), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal), st.launch.DriveModes)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
@@ -209,6 +209,9 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 		return &queueEnd{token: string(types.RunEndScheduledRunsOff), hint: types.RunEndScheduledRunsOff.Sentence()}
 	}
 	if end := s.queueOwnerStanding(st); end != nil {
+		return end
+	}
+	if end := queuePortalRunScope(st.run, st.auth); end != nil {
 		return end
 	}
 	if end := s.queueCurrentRole(st); end != nil {
@@ -538,7 +541,8 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
 		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
 		ImageInput:     &imageInput,
-		ImageAdmission: f.admission, // the start checked the image again; it dispatches under this verdict
+		ImageAdmission: f.admission,  // the start checked the image again; it dispatches under this verdict
+		Containers:     f.containers, // the start checked each extra's image again; it dispatches under these verdicts
 		WallPreset:     f.source.wallPreset,
 		Binding:        st.auth.Binding,
 	})

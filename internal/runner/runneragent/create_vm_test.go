@@ -34,7 +34,7 @@ func TestDispatcherCreateMethodsStartOnlyTheirOwnKind(t *testing.T) {
 		{"VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineLinuxVM, true, false, false, "needs create_vm"},
 		{"container by create_vm", runnerwire.MethodCreateVM, "", true, true, false, "VM sandboxes only"},
 		{"VM on a runner that does not offer VMs", runnerwire.MethodCreateVM, types.MachineLinuxVM, false, false, false, "does not offer Linux VM sandboxes"},
-		{"unknown kind", runnerwire.MethodCreateVM, "windows_vm", true, true, false, "machine_kind"},
+		{"unknown kind", runnerwire.MethodCreateVM, "plan9_vm", true, true, false, "machine_kind"},
 		{"VM by create_vm", runnerwire.MethodCreateVM, types.MachineLinuxVM, true, false, true, ""},
 		{"macOS VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineMacOSVM, true, true, false, "needs create_vm"},
 		{"macOS VM on a runner that offers Linux VMs only", runnerwire.MethodCreateVM, types.MachineMacOSVM, true, false, false, "does not offer macOS VM sandboxes"},
@@ -97,5 +97,47 @@ func TestDispatcherRefusesACreateVMOnADroppedLink(t *testing.T) {
 	}
 	if len(fake.Created) != 0 || intents != 0 {
 		t.Fatalf("a refused create reached the substrate (%d) or recorded an intent (%d)", len(fake.Created), intents)
+	}
+}
+
+// A Windows VM needs its own switch: a runner that offers Linux and macOS VMs but not Windows ones
+// refuses it before any intent is recorded, and one that offers Windows VMs hands it to the substrate.
+func TestDispatchRefusesWindowsWhenOff(t *testing.T) {
+	id := uuid.NewString()
+	for _, on := range []bool{false, true} {
+		fake := runnertest.NewFake()
+		intents := 0
+		d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake, LinuxVM: true, MacOSVM: true, WindowsVM: on,
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { intents++; return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, b := runnerwire.Loopback()
+		p := runnerwire.NewPeer(a, runnerwire.PeerConfig{})
+		data, _ := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: id, MachineKind: types.MachineWindowsVM}})
+		_, err = d.Call(context.Background(), p, 2, runnerwire.MethodCreateVM, data)
+		p.Close()
+		_ = b.Close()
+		if !on {
+			if err == nil || !strings.Contains(err.Error(), "does not offer Windows VM sandboxes") || len(fake.Created) != 0 || intents != 0 {
+				t.Fatalf("off: create = %v, created %d, intents %d: want a refusal before any intent", err, len(fake.Created), intents)
+			}
+			continue
+		}
+		if err != nil || len(fake.Created) != 1 || fake.Created[0].MachineKind != types.MachineWindowsVM {
+			t.Fatalf("on: create = %v, created %+v", err, fake.Created)
+		}
+		// create_sandbox never starts one, on or off.
+		data, _ = runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: id, MachineKind: types.MachineWindowsVM}})
+		a, b = runnerwire.Loopback()
+		p = runnerwire.NewPeer(a, runnerwire.PeerConfig{})
+		_, err = d.Call(context.Background(), p, 2, runnerwire.MethodCreateSandbox, data)
+		p.Close()
+		_ = b.Close()
+		if err == nil || !strings.Contains(err.Error(), "needs create_vm") {
+			t.Fatalf("create_sandbox of a Windows VM = %v, want a refusal", err)
+		}
 	}
 }

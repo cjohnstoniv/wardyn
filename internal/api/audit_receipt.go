@@ -150,6 +150,7 @@ func receiptEvent(row store.AuditPartitionRow, project func(string, []byte) ([]b
 	ev := auditreceipt.Event{Row: auditreceipt.Row{
 		Seq: l.Seq, ID: l.ID, TimeUS: l.TimeUS, RunID: l.RunID, ActorType: l.ActorType, Actor: l.Actor, Action: l.Action,
 		Target: &l.Target, Outcome: l.Outcome, SourceIP: &l.SourceIP, Data: l.Data, PrevHash: l.PrevHash, RowHash: l.RowHash,
+		HashFormat: l.HashFormat, HashSalt: l.HashSalt,
 	}}
 	if *redacted > before {
 		ev.RedactedFields = redactedFieldsOf(l.Data)
@@ -204,8 +205,11 @@ func (s *Server) handleAuditReceipt(w http.ResponseWriter, r *http.Request) {
 	var redacted int64
 	project := partitionProjector(s.isOperator(ctx), &redacted)
 	events := make([]auditreceipt.Event, len(rows))
+	withheld := make([]bool, len(rows)) // per row, so the audit row counts only the events the receipt carries
 	for i, row := range rows {
+		before := redacted
 		events[i] = receiptEvent(row, project, &redacted)
+		withheld[i] = redacted > before
 	}
 	cps, err := ck.AuditCheckpoints(ctx, events[0].Row.Seq-1, auditreceipt.CheckpointLookahead)
 	if err != nil {
@@ -257,8 +261,14 @@ func (s *Server) handleAuditReceipt(w http.ResponseWriter, r *http.Request) {
 		resp.NextAfterSeq = events[asm.Included-1].Row.Seq
 	}
 	target, runData := receiptAuditTarget(req, events, asm.Included)
+	served := 0
+	for _, w := range withheld[:asm.Included] {
+		if w {
+			served++
+		}
+	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "audit.receipt.create", target, "success",
-		mustJSON(map[string]any{"events": asm.Included, "run_id": runData, "checkpoints": len(asm.Bundle.Checkpoints), "redacted": redacted})))
+		mustJSON(map[string]any{"events": asm.Included, "run_id": runData, "checkpoints": len(asm.Bundle.Checkpoints), "redacted": served})))
 	writeJSON(w, http.StatusOK, resp)
 }
 

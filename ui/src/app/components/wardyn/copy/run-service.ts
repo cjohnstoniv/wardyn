@@ -60,6 +60,7 @@ export const SERVICE_PANEL = {
   LEASE_RENEWED: (ends: string) => `Renewed while healthy · ends ${ends} if it stays unhealthy`,
   LEASE_NONE: "No end",
   NO_CAP: "No lifetime limit applies to this run, so Wardyn will not keep renewing it: the service ends at its lease like any run. Ask your admin to set a lifetime limit on the pool to keep a service up.",
+  NO_END: "This run has no end time and no lifetime limit applies, so the service keeps running until someone stops it. Ask your admin to set a lifetime limit on the pool if it should not run forever.",
   REASON_RESTARTING: "The service exited with an error. It restarts after a pause that grows up to 5 minutes.",
   REASON_PROBE_RESTARTED: (failures: number) => `The health check failed ${failures} times in a row, so the service was restarted.`,
   REASON_PROBE_FAILING: "The health check is failing.",
@@ -81,6 +82,7 @@ export const SERVICE_PANEL = {
   DISAGREE_SANDBOX_FAILS: (port: number) => `The sandbox says the service is unhealthy, but port ${port} answers Wardyn's check. The lease is not renewed while the two disagree.`,
   LEASE_BOTH: (ends: string) => `Renewed while both checks say healthy or starting · ends ${ends} if renewal stops`,
   LEASE_NOT_NOW: (ends: string) => `Not renewed now · ends ${ends}`,
+  LEASE_NO_RENEWAL: (ends: string) => `Ends ${ends} · not renewed: no renewal length is set for this run`,
   FOOTNOTE_PROBE: "Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.",
 } as const;
 
@@ -109,6 +111,11 @@ function missingHealth(run: ServiceRunTimes, now: number): ServiceHealthState {
   return now - since < SERVICE_SUPERVISOR_GRACE_MS ? "starting" : "unknown";
 }
 
+/** The sandbox's own reading as it is shown: what it reported, or with none yet the grace rule renewal reads (Go's renewalHealth). */
+export function shownSandboxHealth(run: ServiceRunTimes & Pick<AgentRun, "service_status">, now: number): ServiceHealthState {
+  return run.service_status ? run.service_status.health : missingHealth(run, now);
+}
+
 /**
  * Wardyn's check as it is shown, for a spec that opted in: its reading, or with none yet the grace rule renewal reads
  * (Go's probeRenewalHealth). Undefined when the spec did not opt in.
@@ -117,6 +124,15 @@ export function shownProbeHealth(run: ServiceRunTimes & Pick<AgentRun, "service"
   if (!probeOn(run.service)) return undefined;
   const p = run.service_status?.probe;
   return p ? worseHealth(p.health, undefined) : missingHealth(run, now);
+}
+
+/**
+ * Whether the run captured a renewal length: Go's planServiceRenewal declines when both the longest end ahead and
+ * the default end its governance settings gave it are zero, whatever the health. A run response with no run_limits
+ * carries none.
+ */
+export function serviceRenewalLength(run: Pick<AgentRun, "run_limits">): boolean {
+  return !!(run.run_limits?.max_end_ahead_sec || run.run_limits?.default_end_sec);
 }
 
 /**
@@ -180,7 +196,7 @@ export const SERVICE_HEALTH: Record<"starting" | "healthy" | "unhealthy" | "unkn
 export function serviceBadge(run: ServiceRunTimes & Pick<AgentRun, "state" | "service" | "service_status">, now = Date.now()): ServiceBadge | undefined {
   if (run.state !== "RUNNING" || !run.service) return undefined;
   const st = run.service_status;
-  const sandbox = st ? st.health : "starting";
+  const sandbox = shownSandboxHealth(run, now);
   const base = SERVICE_HEALTH[worseHealth(sandbox, probeOn(run.service) ? shownProbeHealth(run, now) : st?.probe?.health)];
   const n = st?.restarts ?? 0;
   return n > 0 ? { ...base, word: `${base.word} · ${n} ${n === 1 ? "restart" : "restarts"}` } : base;

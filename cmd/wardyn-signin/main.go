@@ -15,7 +15,7 @@
 // sandbox, not a sandbox boundary.
 //
 //	person: start | serve | hold | stop | export --site S | cdp METHOD [PARAMS]
-//	agent:  pause-agent | resume-agent | import --site S | browser [URL] | cdp --agent METHOD [PARAMS]
+//	agent:  pause-agent | resume-agent | import --site S | browser [URL] | cdp --agent [--session ID] METHOD [PARAMS]
 package main
 
 import (

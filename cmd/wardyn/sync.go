@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
@@ -55,6 +57,7 @@ type syncFlags struct {
 	maxPullDeletes  int
 	git             bool
 	pullCommits     bool
+	key             bool
 }
 
 func syncCmd(client clientFn) *cobra.Command {
@@ -95,7 +98,10 @@ refs/remotes/laptop/<branch>. --pull-commits brings the sandbox's commits
 since then back as a bundle and fetches them into the branch
 wardyn/sync-<run-id> here, for you to review; your working tree and other
 branches are never touched. Both need the top of a git work tree, and both
-run git in the sandbox over an SSH exec channel.
+run git in the sandbox over an SSH exec channel. A bundle carries every
+committed file whole, so if your organisation set patterns and any path in the
+branch's history, in any commit, matches one, --git sends nothing and says
+which path and pattern; the working-tree sync is not affected.
 
 --remote-dir (default /home/agent/work) must exist in the sandbox. The
 directory is where the transfer starts, not a boundary: the sandbox's sftp
@@ -103,6 +109,13 @@ server can reach whatever the agent user can.
 
 When the deployment advertises a ProxyCommand, connecting runs it on this
 computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
+
+When the deployment turns SSH tickets on (WARDYN_SSH_TICKETS), no key is
+needed: the sync takes a 30-second single-use ticket and connects over the HTTPS
+API (GET /api/v1/runs/{id}/ssh), checking the gateway's host key against its
+advertised fingerprint; the advertised ProxyCommand is not run. The ticket stays
+in this process. Plain sync's ticket opens only the sync; with --git or
+--pull-commits it also runs git in the sandbox. --key uses the key instead.
 `,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -119,6 +132,7 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 	cmd.Flags().BoolVar(&f.pullCommits, "pull-commits", false, "after the first pass, fetch the sandbox's new commits into the branch wardyn/sync-<run> here (never into your working tree)")
 	cmd.Flags().Int64Var(&f.maxPullBytes, "max-pull-bytes", foldersync.DefaultMaxPullBytes, "most bytes one pass may pull from the sandbox (a single file over 256 MiB is always refused)")
 	cmd.Flags().BoolVar(&f.advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
+	cmd.Flags().BoolVar(&f.key, "key", false, "connect with the SSH key even when the deployment offers SSH tickets")
 	return cmd
 }
 
@@ -184,15 +198,16 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
-	if err := checkSyncGateway(gw, runID, f.advertisedProxy); err != nil {
+	useTicket := gw.tickets && !f.key
+	// The ticket path dials the HTTPS API, never the advertised ProxyCommand.
+	if err := checkSyncGateway(gw, runID, f.advertisedProxy || useTicket); err != nil {
 		return err
 	}
 	rules, err := c.GetRunSyncRules(cmd.Context(), id)
 	if err != nil {
 		return fmt.Errorf("sync: read the run's sync rules: %w", err)
 	}
-	signer, err := loadSyncSigner()
-	if err != nil {
+	if err := applySyncRules(&f, rules); err != nil {
 		return err
 	}
 	// The first Ctrl-C cancels ctx; stop() then restores the default, so a
@@ -200,7 +215,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 	go func() { <-ctx.Done(); stop() }()
-	sshc, err := dialSyncGateway(ctx, gw, runID, signer)
+	sshc, err := dialSync(ctx, c, gw, runID, f, useTicket)
 	if err != nil {
 		return err
 	}
@@ -239,15 +254,14 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 			w = cmd.ErrOrStderr() // stdout stays one JSON object per pass
 		}
 		gitStep = func() error {
+			var send, pull func() error
 			if f.git {
-				if err := foldersync.SendGit(ctx, w, sy, sshc, runID, root); err != nil {
-					return err
-				}
+				send = func() error { return foldersync.SendGit(ctx, w, sy, sshc, runID, root) }
 			}
 			if f.pullCommits {
-				return foldersync.PullCommits(ctx, w, sy, sshc, runID, root)
+				pull = func() error { return foldersync.PullCommits(ctx, w, sy, sshc, runID, root) }
 			}
-			return nil
+			return runGitSteps(send, pull)
 		}
 	}
 	runErr := runSyncLoop(ctx, cmd, sy, sess, f, gitStep)
@@ -295,6 +309,51 @@ func portOr22(port string) string {
 	return port
 }
 
+// applySyncRules holds this sync to the run's folder walls before it connects: a --pull or --pull-commits sync of a
+// run whose walls keep the sandbox's changes in exits with their sentence, and one pass pulls at most the smaller of
+// the flag and the run's cap. The server holds both anyway.
+func applySyncRules(f *syncFlags, rules sdk.RunSyncRules) error {
+	if (f.pull || f.pullCommits) && rules.DenyPull {
+		return errors.New(rules.DenyPullText)
+	}
+	if rules.MaxPullBytes > 0 {
+		f.maxPullBytes = min(f.maxPullBytes, rules.MaxPullBytes)
+	}
+	return nil
+}
+
+// runGitSteps runs the send (nil when --git is off) and then the pull (nil when --pull-commits is off). A send
+// the organisation's patterns refuse does not stop the pull, which needs no send; the refusal is returned after it.
+func runGitSteps(send, pull func() error) error {
+	var refused error
+	if send != nil {
+		err := send()
+		var denied *foldersync.HistoryDeniedError
+		if !errors.As(err, &denied) && err != nil {
+			return err
+		}
+		refused = err
+	}
+	if pull != nil {
+		if err := pull(); err != nil {
+			return err
+		}
+	}
+	return refused
+}
+
+// keepWatchingAfterRefusal is nil, after a warning on w, for a refused history under --watch: the refused
+// history is the only thing lost, so the working tree keeps syncing. Any other error, or any error without
+// --watch, comes back as it is.
+func keepWatchingAfterRefusal(w io.Writer, watch bool, err error) error {
+	var denied *foldersync.HistoryDeniedError
+	if !watch || !errors.As(err, &denied) {
+		return err
+	}
+	fmt.Fprintf(w, "warning: %s\n", err)
+	return nil
+}
+
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
 	warned := false // a durability warning is printed once, however many passes hit it
 	for first := true; ; first = false {
@@ -327,7 +386,9 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer,
 				if ctx.Err() != nil {
 					return errors.New("sync: interrupted")
 				}
-				return fmt.Errorf("sync: %w", err)
+				if err := keepWatchingAfterRefusal(cmd.ErrOrStderr(), f.watch, err); err != nil {
+					return fmt.Errorf("sync: %w", err)
+				}
 			}
 		}
 		if !f.watch {
@@ -384,6 +445,19 @@ func loadSyncSigner() (ssh.Signer, error) {
 	return signer, nil
 }
 
+// dialSync connects over a ticket, or with the registered key when useTicket is false.
+func dialSync(ctx context.Context, c *sdk.Client, gw sshGateway, runID string, f syncFlags, useTicket bool) (*ssh.Client, error) {
+	if useTicket {
+		// --pull-commits runs git over exec as --git does, so either takes the ticket that opens exec.
+		return dialSyncTicket(ctx, c, gw, runID, f.git || f.pullCommits)
+	}
+	signer, err := loadSyncSigner()
+	if err != nil {
+		return nil, err
+	}
+	return dialSyncGateway(ctx, gw, runID, signer)
+}
+
 // dialSyncGateway connects to the gateway as the run, trusting only the host
 // key whose fingerprint /healthz advertised.
 func dialSyncGateway(ctx context.Context, gw sshGateway, runID string, signer ssh.Signer) (*ssh.Client, error) {
@@ -400,16 +474,27 @@ func dialSyncGateway(ctx context.Context, gw sshGateway, runID string, signer ss
 		return nil, fmt.Errorf("sync: connect to the gateway: %w", err)
 	}
 	cfg := &ssh.ClientConfig{
-		User: runID,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			if got := ssh.FingerprintSHA256(key); got != gw.fingerprint {
-				return fmt.Errorf("gateway host key %s is not the advertised %s", got, gw.fingerprint)
-			}
-			return nil
-		},
-		Timeout: syncDialTimeout,
+		User:            runID,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: syncHostKeyCallback(gw),
+		Timeout:         syncDialTimeout,
 	}
+	return syncHandshake(conn, gw, cfg)
+}
+
+// syncHostKeyCallback trusts only the host key whose fingerprint /healthz advertised.
+func syncHostKeyCallback(gw sshGateway) ssh.HostKeyCallback {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if got := ssh.FingerprintSHA256(key); got != gw.fingerprint {
+			return fmt.Errorf("gateway host key %s is not the advertised %s", got, gw.fingerprint)
+		}
+		return nil
+	}
+}
+
+// syncHandshake is the SSH handshake over conn, bounded by syncHandshakeTimeout.
+func syncHandshake(conn net.Conn, gw sshGateway, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	port := portOr22(gw.port)
 	// Closing the connection ends the handshake on either transport: a ProxyCommand's
 	// pipes take no deadline, so a socket deadline alone would not bound it.
 	timer := time.AfterFunc(syncHandshakeTimeout, func() { _ = conn.Close() })
@@ -423,6 +508,43 @@ func dialSyncGateway(ctx context.Context, gw sshGateway, runID string, signer ss
 		return nil, fmt.Errorf("sync: ssh handshake with the gateway: %w", err)
 	}
 	return ssh.NewClient(cc, chans, reqs), nil
+}
+
+// dialSyncTicket connects to the run over the ticket door, GET /api/v1/runs/{id}/ssh: a single-use ticket of
+// purpose ssh-sync, or ssh-sync-git when git runs too, in a header and never in the URL, then the SSH handshake
+// with no key (the door accepts "none" after the ticket) against the advertised host key. The ticket stays in
+// this function.
+func dialSyncTicket(ctx context.Context, c *sdk.Client, gw sshGateway, runID string, git bool) (*ssh.Client, error) {
+	door, err := sshDoorURL(c.BaseURL, runID)
+	if err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
+	}
+	purpose := "ssh-sync"
+	if git {
+		purpose = "ssh-sync-git"
+	}
+	tok, err := mintSSHTicket(ctx, c, "sync", runID, url.Values{"purpose": {purpose}})
+	var ae *sdk.APIError
+	if git && errors.As(err, &ae) && ae.Reason == "ssh_ticket_channel_off" {
+		return nil, errors.New("sync: this deployment's SSH gateway does not serve exec (WARDYN_SSH_CHANNELS), which --git and --pull-commits run over; run again without them")
+	}
+	if err != nil {
+		return nil, err
+	}
+	ws, resp, err := websocket.Dial(ctx, door, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Wardyn-Ticket": []string{tok}},
+		HTTPClient: orgClient(c.BaseURL, 0),
+	})
+	if err != nil {
+		if resp != nil {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			de := sdk.NewAPIError(resp.StatusCode, body)
+			return nil, &doorRefusal{verb: "sync", msg: apiSentence(de), err: de}
+		}
+		return nil, fmt.Errorf("sync: connect to the gateway: %w", err)
+	}
+	conn := websocket.NetConn(ctx, ws, websocket.MessageBinary)
+	return syncHandshake(conn, gw, &ssh.ClientConfig{User: runID, HostKeyCallback: syncHostKeyCallback(gw), Timeout: syncDialTimeout})
 }
 
 // procConn is the connection a ProxyCommand provides: its stdout and stdin.

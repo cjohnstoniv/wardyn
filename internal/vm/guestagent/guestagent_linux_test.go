@@ -155,7 +155,7 @@ func newRigAt(t *testing.T, markerDir string) *rig {
 	}
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
-	hs := &http.Server{Handler: h, Protocols: &protocols}
+	hs := &http.Server{Handler: h, Protocols: &protocols, HTTP2: agentHTTP2Config()}
 	go func() { _ = hs.Serve(l) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	return r
@@ -503,7 +503,7 @@ func TestAWriteThePortHoldsEndsWithItsHost(t *testing.T) {
 // A Read on a closed session takes no chunk: the next one is the next session's, or the end-of-file
 // Accept drains to. Both select cases are ready here, so 64 rounds catch a Read that can pick either.
 func TestAClosedSessionTakesNoChunk(t *testing.T) {
-	l := &portListener{ctx: ctxT(t), chunks: make(chan chunk, 1), done: make(chan struct{})}
+	l := &portListener{ctx: ctxT(t), w: io.Discard, chunks: make(chan chunk, 1), done: make(chan struct{})}
 	for i := range 64 {
 		c := &portConn{l: l, closed: make(chan struct{})}
 		_ = c.Close()
@@ -533,7 +533,7 @@ func TestAcceptSeesTheEOFAClosingSessionTook(t *testing.T) {
 		end  chunk
 	}{{"end-of-file", chunk{eof: true}}, {"hello", chunk{start: true}}} {
 		ctx := ctxT(t)
-		l := &portListener{ctx: ctx, chunks: make(chan chunk), done: make(chan struct{})}
+		l := &portListener{ctx: ctx, w: io.Discard, chunks: make(chan chunk), done: make(chan struct{})}
 		go func() { l.chunks <- chunk{start: true}; l.chunks <- chunk{data: []byte("one")} }()
 		c1, err := l.Accept()
 		if err != nil {
@@ -572,6 +572,34 @@ func TestAcceptSeesTheEOFAClosingSessionTook(t *testing.T) {
 			t.Fatalf("%s: Accept dropped the next session's first chunk, waiting for a hello c1 took", tc.name)
 		}
 	}
+}
+
+// When the agent closes a session whose host is still connected (an HTTP/2 protocol error, or the server's
+// Close), the host's next read fails at once, so it closes its socket and a redial is served instead of
+// waiting behind it. The next host's session then starts as usual.
+func TestAClosedSessionEndsItsHostsConnection(t *testing.T) {
+	ctx := ctxT(t)
+	port := &fakePort{}
+	h1 := port.connect()
+	l := newPortListener(ctx, port, time.Millisecond)
+	r1 := open(ctx, t, h1)
+	c1, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() { _, err := r1.Read(make([]byte, 8)); read <- err }()
+	_ = c1.Close()
+	select {
+	case err := <-read:
+		if !errors.Is(err, errRecord) {
+			t.Fatalf("the host's read after the agent closed its session = %v; want errRecord", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the host's connection stayed open after the agent closed its session")
+	}
+	_ = h1.Close()
+	handOver(ctx, t, l, c1, port.connect())
 }
 
 // A host that connects before the agent has read the last one's end-of-file leaves none between the

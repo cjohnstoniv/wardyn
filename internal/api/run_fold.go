@@ -83,6 +83,7 @@ type runFold struct {
 	enforced           types.ConfinementClass
 	placed             backendPlacement                // the barriers the placement enforces, as stepConfinement read them (Review's backend row)
 	confinementDefault runnerpool.BarrierDefaultSource // who chose enforced when the request named no class
+	confinementRaised  bool                            // the blast-radius floor lifted enforced to CC3 (dry doors only)
 	mpChoice           runProviderChoice
 	modelCred          modelCredentialFacts
 	autonomy           types.AutonomyResolution
@@ -125,7 +126,10 @@ type runFold struct {
 	localDelivery localJudgement
 	// admission is the image admission verdict for the member's image (stepImageAdmission), which the run row
 	// and the run.create row carry; nil when no check applied.
-	admission *types.ImageAdmissionVerdict
+	admission  *types.ImageAdmissionVerdict
+	containers []types.RunExtraContainer // the run's extras with their verdicts (stepContainerAdmission); nil for none
+	// windowsFold is stepWindowsImage's: a windows_vm run's registered image and the seat it takes.
+	windowsFold
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -196,6 +200,8 @@ type runFoldStep struct {
 //     so it sits after placement and refuses before capacity.
 //   - Image admission after every cheaper gate, since it is the one step that reads a registry,
 //     and before capacity, so its refusal also leaves no identity and no run row.
+//   - The extras' budget right after the resources it reads, their placement right after the run's placement
+//     capability, and their image admission right after the run's, for the same reason.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 //   - The dry doors' derived egress after every gate: create adds those hosts
@@ -205,7 +211,9 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPortalUnit, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
+	{(*Server).stepWindowsImage, foldAll},
 	{(*Server).stepComputerFolderDataOut, foldAll},
+	{(*Server).stepLocalFolderWalls, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepADOOverride, foldAll},
 	{(*Server).stepDrive, foldAll},
@@ -218,12 +226,18 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepComponents, foldAll},
 	{(*Server).stepPlacementDenied, foldAll},
 	{(*Server).stepPlacement, foldAll},
+	{(*Server).stepLocalFolderWallsPlaced, foldAll},
 	{(*Server).stepScheduleDoor, foldAll},
 	{(*Server).stepDriveEligibility, foldAll},
 	{(*Server).stepResources, foldAll},
+	{(*Server).stepContainersBudget, foldAll},
+	{(*Server).stepContainersRecording, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepContainersPlacement, foldAll},
+	{(*Server).stepMCPSandbox, foldAll},
+	{(*Server).stepWindowsPlacement, foldAll},
 	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepDenyLists, foldAll},
@@ -241,6 +255,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
 	{(*Server).stepRunEnd, foldAll},
 	{(*Server).stepImageAdmission, foldCreate | foldPreflight},
+	{(*Server).stepContainerAdmission, foldCreate | foldPreflight},
 	{(*Server).stepHostCapacity, foldCreate | foldPreflight},
 	{(*Server).stepRunCap, foldCreate | foldPreflight},
 	{(*Server).stepRunFit, foldCreate | foldPreflight},

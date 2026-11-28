@@ -65,6 +65,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.dispatchStartable(ctx, run, ceiling, p) {
 		return
 	}
+	// The start's phases are timed from here (metrics_latency.go).
+	dispatchedAt := s.cfg.Now()
 	p.modelLimit = ceiling.modelLimit // from the ceiling alone, whatever the lane passed
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
@@ -185,7 +187,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	// Codex's own sandbox, when the run's walls froze one (#2822).
 	codexFiles, cxErr := s.codexSandbox(ctx, run, sandboxEnv)
-	if apErr = cmp.Or(apErr, cxErr); apErr != nil {
+	browserFiles, brErr := s.browserLockdown(ctx, run)
+	if apErr = cmp.Or(apErr, cxErr, brErr); apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
 		// error) — logged here for the operator, never handed to the member
@@ -240,26 +243,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	adoRun := adoDecision.run
 	adoInject := adoRun.rowID != ""
 
-	var artifactPlan artifactRedirectPlan
-	if siteCfgErr == nil {
-		// Capture the run's PRE-substitution egress: it decides which redirects are
-		// in scope for THIS run (GAP-EGRESS-2), used by both the egress substitution
-		// and the token-injection plan so they can never disagree.
-		preDomains := append([]string(nil), policy.AllowedDomains...)
-		policy.AllowedDomains = substituteArtifactEgress(policy.AllowedDomains, siteCfg)
-		// Deny each network-only redirect's From host so an allow_all_egress run
-		// cannot keep reaching the public host the operator redirected away
-		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
-		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, p.RedirectProbe)
-		artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
-		for k, v := range artifactPlan.env {
-			sandboxEnv[k] = v
-		}
-		if artifactPlan.configB64 != "" {
-			sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
-		}
-	}
+	artifactPlan := s.planArtifactRedirection(ctx, run, siteCfg, siteCfgErr, p.RedirectProbe, adoRun, adoInject, &policy, sandboxEnv)
 	// Apple's background boot hosts are denied quietly on a macOS VM, so the guest's first minutes raise
 	// no approval (run_macos_egress.go). A deny only: no allowed domain is added.
 	policy.DeniedDomains = appendMacOSBootDenials(run.MachineKind, policy)
@@ -416,6 +400,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image, p.SigninImageUngranted)
 	p.Image = image
 
+	extras, outage, ok := s.dispatchExtrasAndOutage(ctx, run, siteCfg, siteCfgErr, policy)
+	if !ok {
+		return
+	}
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            p.Image,
@@ -436,7 +424,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// The managed settings this run's autonomy level generates and the
 		// started harness's approval credential; nil for a run with neither, or
 		// on a runner that cannot deliver them.
-		ManagedFiles: slices.Concat(agentPolicy.files, codexFiles, credFiles, mcp.files),
+		ManagedFiles: slices.Concat(agentPolicy.files, codexFiles, credFiles, mcp.files, browserFiles),
+		Containers:   extras,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -539,6 +528,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Unattended:         runUnattended(p, policy),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
+			PushHoldRemovals:   s.cfg.PushHoldRemovals,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			// The code hosts the proxy refuses while deny_all is in force (nil
@@ -563,6 +553,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The person's sign-in listener; false, so no key is written,
 			// unless `signins` above.
 			DesktopSignins: signins,
+			// The run's outage terms; nil, so no key is written, for the default ones: an older proxy refuses the key.
+			Outage: proxyOutage(outage),
 		},
 		DesktopSignins: signins,
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
@@ -599,7 +591,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// proxy config is final, so the host marks it carries describe the config the runner is sent.
 	envelope := effectivePolicyDatum{
 		RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
-		Provenance: p.Provenance,
+		Provenance: p.Provenance, LocalFolderLayers: p.LocalFolderLayers,
 	}
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
@@ -621,6 +613,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// member-drive delete would read as a create still in flight until the heartbeat aged out.
 	// Deferred first, so it runs after the create lease's ticker has stopped.
 	created := false
+	// A macOS VM run that ends before its Mac is asked to create the sandbox claims the drive it kept in the
+	// statement that ends it (store.EndUnstartedRun); the cleanup below finishes that claim. The marker is on both
+	// contexts: the delivery's refusal fails the run on createCtx.
+	if run.MachineKind.IsMacOSVM() {
+		unstarted := &unstartedEnd{}
+		ctx, createCtx = withUnstartedEnd(ctx, unstarted), withUnstartedEnd(createCtx, unstarted)
+	}
 	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
@@ -654,7 +653,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
 		return
 	}
-	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
+	s.keepRunSandboxSpec(ctx, run.ID, spec, resident, orgConfigKeys, agentPolicy)
+	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, siteCfgErr, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
@@ -665,10 +665,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
+	createStart := s.cfg.Now()
 	execution, sb, start, ok := s.createRunSandbox(ctx, createCtx, run, spec, resident, kept, p.RunToken, func() { endStartWait(); stopCreateLease() })
 	if !ok {
 		return
 	}
+	createEnd := s.cfg.Now()
 	created = true
 	s.keptMachineUp(ctx, run, kept, sb)
 
@@ -683,7 +685,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, run.CreatedBy, run.MachineKind, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, run.MachineKind, p.Drives, p.PortalDrives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()
@@ -735,7 +737,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The run is live: record how long creation -> RUNNING took (image pull,
 	// devcontainer build, sandbox create). This is the one operational number the
 	// audit stream does not carry.
-	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
+	running := s.cfg.Now()
+	s.metrics.sandboxLaunched(running.Sub(run.CreatedAt))
+	s.metrics.runStarted(run.CreatedAt, dispatchedAt, createStart, createEnd, running)
+
+	// A boot seed held for the readback starts now, after it (run_held_seed.go).
+	if !s.releaseHeldSeed(ctx, run, sb.Ref, spec) {
+		return
+	}
 
 	onPrepared := s.macWindowAtStartOrAfterPrep(ctx, run, p.Interactive, p.DesktopWindowAtStart) // the run is RUNNING
 
@@ -750,16 +759,25 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // reads the envelope. The digest is recorded before the row, so the row is stamped too, and the
 // run row's data_out rule is stored before it (keepRunDataOut). False when the run was refused or
 // failed, which has answered.
-func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, siteCfg types.SiteConfig,
+func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, siteCfg types.SiteConfig, siteCfgErr error,
 	spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, p dispatchParams, envelope *effectivePolicyDatum,
 	stopLease func(),
 ) bool {
+	// A local run is judged against the organisation's machine_kind_denials, which an unreadable site config would
+	// read as none: it fails closed here, as a revive does.
+	if siteCfgErr != nil && !remotePlacement(run.Placement) {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: the organisation's site configuration could not be read")
+		return false
+	}
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, spec, orgConfigKeys, llm, p) {
+		return false
+	}
+	if !s.holdReclaimableDrives(ctx, run, p.Drives) {
 		return false
 	}
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec)
-	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease)
+	return s.keepRunDataOut(ctx, run, envelope.DataOut, stopLease) && s.keepRunLocalFolderWalls(ctx, run, envelope.LocalFolders, envelope.Provenance["local_folders"], envelope.LocalFolderLayers, stopLease)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only
@@ -812,6 +830,37 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 // The local placement parity test reads the same list, so a key added here needs a placement origin.
 func dispatchSecretEnvKeys(envSecretKeys []string, llm llmTransport) []string {
 	return slices.Concat(envSecretKeys, llm.secretEnvKeys, []string{codexMCPEnv})
+}
+
+// planArtifactRedirection is dispatch's artifact-repository redirection phase: with the site config read, it
+// substitutes the corp mirror for the public registry hosts in policy's egress, denies each network-only
+// redirect's From host, plans the redirect and puts its per-tool config in sandboxEnv. policy and sandboxEnv
+// are changed in place. A failed site-config read (siteCfgErr) plans nothing and returns the zero plan.
+func (s *Server) planArtifactRedirection(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
+	probe *types.EgressRedirect, adoRun adoEntraRun, adoInject bool, policy *types.RunPolicySpec, sandboxEnv map[string]string,
+) artifactRedirectPlan {
+	var artifactPlan artifactRedirectPlan
+	if siteCfgErr != nil {
+		return artifactPlan
+	}
+	// Capture the run's PRE-substitution egress: it decides which redirects are
+	// in scope for THIS run (GAP-EGRESS-2), used by both the egress substitution
+	// and the token-injection plan so they can never disagree.
+	preDomains := append([]string(nil), policy.AllowedDomains...)
+	policy.AllowedDomains = substituteArtifactEgress(policy.AllowedDomains, siteCfg)
+	// Deny each network-only redirect's From host so an allow_all_egress run
+	// cannot keep reaching the public host the operator redirected away
+	// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
+	policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
+	planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, probe)
+	artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
+	for k, v := range artifactPlan.env {
+		sandboxEnv[k] = v
+	}
+	if artifactPlan.configB64 != "" {
+		sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
+	}
+	return artifactPlan
 }
 
 // redirectPlanScope is what planArtifactRedirect plans over: the site config
@@ -871,4 +920,17 @@ func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.Agen
 		return execution, sb, start, false
 	}
 	return execution, sb, start, true
+}
+
+// dispatchExtrasAndOutage reads the run's extra containers, then fixes and records its outage terms (#4082,
+// run_outage.go). false when either fails; the run is then already failed.
+func (s *Server) dispatchExtrasAndOutage(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
+	policy types.RunPolicySpec) ([]runner.ExtraContainer, types.OutageTerms, bool) {
+	extras, err := s.dispatchContainers(ctx, run.ID)
+	if err != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's extra containers could not be read")
+		return nil, types.OutageTerms{}, false
+	}
+	outage, ok := s.recordOutageTerms(ctx, run, siteCfg, siteCfgErr, policy)
+	return extras, outage, ok
 }

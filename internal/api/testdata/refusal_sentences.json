@@ -6,6 +6,11 @@
   },
   {
     "reason": "admin_surface",
+    "target": "\"drive.grant.portal\"",
+    "sentence": "portalDriveAllocationAdminMsg"
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"governance.unit.\" + e.field",
     "sentence": "e.sentence"
   },
@@ -58,6 +63,11 @@
     "reason": "attach_ticket_foreign_run",
     "target": "run.ID.String()",
     "sentence": "\"approval not found\""
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
   },
   {
     "reason": "attach_ticket_foreign_run",
@@ -140,6 +150,11 @@
     "sentence": "\"image \" + req.Image + \" is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
   },
   {
+    "reason": "byoi_user",
+    "target": "\"runs.image\"",
+    "sentence": "fmt.Sprintf(\"containers[%d]: image %s is not granted to you — ask an admin for an image grant that covers it\", i, c.Image)"
+  },
+  {
     "reason": "capKinds[capAgent].reason",
     "target": "\"runs.agent\"",
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
@@ -173,6 +188,11 @@
     "reason": "capKinds[capFeature].reason",
     "target": "\"runs.component\"",
     "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"runs.ssh_ticket\"",
+    "sentence": "sshTicketFeatureRefusal"
   },
   {
     "reason": "capKinds[capFeature].reason",
@@ -270,9 +290,9 @@
     "sentence": "fmt.Sprintf(\"the deciders of unit %s allow this %s request to be decided up to %q; %q reaches further\", v.unit, v.kind, limit, scope)"
   },
   {
-    "reason": "delegation_scope",
+    "reason": "decision_scope_above_rule",
     "target": "id.String()",
-    "sentence": "(audit only)"
+    "sentence": "fmt.Sprintf(\"the unit deciders could not be read, so this %s request is decided once at most; %q reaches further\", v.kind, scope)"
   },
   {
     "reason": "delegation_scope",
@@ -283,11 +303,31 @@
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "delegation_scope",
+    "target": "r.URL.Path",
+    "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "drive_not_allocated_to_portal",
+    "target": "\"runs.drive\"",
+    "sentence": "portalDriveNotAllocatedMsg"
   },
   {
     "reason": "drive_not_found",
     "target": "\"drives.member.delete\"",
     "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_found",
+    "target": "\"drives.member.seed\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_found",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
   },
   {
     "reason": "drive_not_found",
@@ -316,6 +356,21 @@
   },
   {
     "reason": "event_stream_cap",
+    "target": "\"walls\"",
+    "sentence": "fmt.Sprintf(\"too many open Walls view organisation streams (max %d) — close one and retry\", wallsOrgStreamsMax)"
+  },
+  {
+    "reason": "event_stream_cap",
+    "target": "\"walls\"",
+    "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
+  },
+  {
+    "reason": "event_stream_cap",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
+  },
+  {
+    "reason": "event_stream_cap",
     "target": "id.String()",
     "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
   },
@@ -332,6 +387,16 @@
   {
     "reason": "governance_overlay_unsatisfiable",
     "target": "\"runs.desktop_window\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "\"runs.desktop_window\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "\"runs.ui_apps\"",
     "sentence": "u.Error()"
   },
   {
@@ -358,6 +423,11 @@
     "reason": "governance_unit",
     "target": "\"runs.component\"",
     "sentence": "deniedComponentMsg(cand.components[i].name)"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.containers\"",
+    "sentence": "fmt.Sprintf(\"extra containers are not allowed by your governance profile %q — an extra container runs what the agent sends it inside the sandbox, outside tool approvals, unattended the way exec does. Launch without containers.\", name)"
   },
   {
     "reason": "governance_unit",
@@ -418,6 +488,11 @@
     "reason": "governance_unit",
     "target": "\"runs.placement\"",
     "sentence": "placementDeniedMsg(p, ceiling.Unit.Name)"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.schedule\"",
+    "sentence": "runScheduleResumeDeniedMsg"
   },
   {
     "reason": "governance_unit",
@@ -677,6 +752,11 @@
   {
     "reason": "sponsor_not_entitled",
     "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
+    "reason": "sponsor_not_entitled",
+    "target": "t.RunID.String()",
     "sentence": "\"run not found\""
   },
   {

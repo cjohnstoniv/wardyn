@@ -31,8 +31,9 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingLocalModels: func(pc *runner.ProxyConfig) {
 		pc.LocalModels = map[string]types.LocalModelSettings{"http://models.internal:11434": {}}
 	},
-	runnerwire.ProxySettingKubeAPI:        func(pc *runner.ProxyConfig) { pc.KubeAPI = &proxy.KubeAPIGrant{} },
-	runnerwire.ProxySettingCanonicalRepos: func(pc *runner.ProxyConfig) { pc.CanonicalPushRepos = true },
+	runnerwire.ProxySettingKubeAPI:          func(pc *runner.ProxyConfig) { pc.KubeAPI = &proxy.KubeAPIGrant{} },
+	runnerwire.ProxySettingCanonicalRepos:   func(pc *runner.ProxyConfig) { pc.CanonicalPushRepos = true },
+	runnerwire.ProxySettingPushHoldRemovals: func(pc *runner.ProxyConfig) { pc.PushHoldRemovals = true },
 	runnerwire.ProxySettingGatewayIdentity: func(pc *runner.ProxyConfig) {
 		pc.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}
 	},
@@ -46,6 +47,7 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 		pc.MCPApproveEach = &proxy.MCPApproveEachConfig{SendOnce: true}
 	},
 	runnerwire.ProxySettingNoNetwork: func(pc *runner.ProxyConfig) { pc.NoNetwork = true },
+	runnerwire.ProxySettingOutage:    func(pc *runner.ProxyConfig) { pc.Outage = &proxy.OutageConfig{AllowanceS: 1800, Strict: true} },
 	runnerwire.ProxySettingRefuseIPLiterals: func(pc *runner.ProxyConfig) {
 		pc.Policy.RefuseIPLiterals, pc.Policy.AllowAllEgress = true, true
 	},
@@ -241,6 +243,32 @@ func TestCreateSandboxRefusesHostRulesOnARunnerWithoutThem(t *testing.T) {
 	}
 }
 
+// A runner without the outage setting is refused a run with non-default outage terms, and still gets a default run,
+// whose proxy config carries no outage key (nil Outage).
+func TestCreateSandboxRefusesOutageTermsOnARunnerWithoutThem(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	older := slices.DeleteFunc(slices.Clone(runnerwire.ProxySettings), func(s string) bool { return s == runnerwire.ProxySettingOutage })
+	named, err := json.Marshal(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"0.10.4","proxy_settings":`+string(named)+`}`)
+	spec := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1}
+	spec.ProxyConfig.Outage = &proxy.OutageConfig{AllowanceS: 1800, Strict: true}
+	_, err = rig.Sub.CreateSandbox(ctxT(t), spec)
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingOutage {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingOutage)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	spec.RunID, spec.ProxyConfig.Outage = uuid.New(), nil
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
+		t.Fatalf("a run with the default outage terms was refused: %v", err)
+	}
+}
+
 // The person allows a laptop local model's port on their own runner (--local-model-port): a runner that
 // relays local models but does not list the port, or lists none, is refused before anything is sent, with
 // the port named; one that lists it is sent the run.
@@ -343,6 +371,96 @@ func TestAllowedModelsNeedARunnerThatCarriesThem(t *testing.T) {
 	}
 	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, []byte(`{"stripped":true}`)); err != nil {
 		t.Fatalf("a revive with no list was refused: %v", err)
+	}
+}
+
+// A revive's replacement config is checked against the runner's caps for every run proxy setting, as a create is:
+// a runner that restarted as an older build would otherwise rebuild the proxy without a setting it does not know.
+func TestReplaceProxyRefusesAProxySettingAnOldRunnerDropsUnread(t *testing.T) {
+	for name, set := range proxySettingCases {
+		t.Run(name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			sb, _ := create(t, rig, nil)
+			publishCaps(t, rig, oldCapsJSON)
+			var pc runner.ProxyConfig
+			set(&pc)
+			cfg, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg)
+			var pe *remote.ProxySettingError
+			if !errors.As(err, &pe) || pe.Setting != proxySettingsOf(name)[0] {
+				t.Fatalf("replace = %v, want a ProxySettingError naming %s", err, proxySettingsOf(name)[0])
+			}
+			if rig.Fake.Called("replace_proxy "+string(cfg), strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")) {
+				t.Fatal("the refused replace reached the runner")
+			}
+		})
+	}
+}
+
+// The same configs go through to a runner that carries every setting.
+func TestReplaceProxyAdmitsAProxySettingTheRunnerCarries(t *testing.T) {
+	for name, set := range proxySettingCases {
+		t.Run(name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			sb, _ := create(t, rig, nil)
+			var pc runner.ProxyConfig
+			set(&pc)
+			cfg, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); err != nil {
+				t.Fatalf("replace = %v, want it admitted", err)
+			}
+			if !rig.Fake.Called("replace_proxy "+string(cfg), strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")) {
+				t.Fatal("the admitted replace never reached the runner")
+			}
+		})
+	}
+}
+
+// A revive of a laptop local model meets the same relay and port checks a create does: the relay setting first,
+// then the port the person has allowed on their own runner.
+func TestReplaceProxyRefusesALaptopModelPortThePersonHasNotAllowed(t *testing.T) {
+	pc := runner.ProxyConfig{LocalModels: map[string]types.LocalModelSettings{
+		"http://host.docker.internal:11434": {Models: []string{"m"}, AllowOnLaptopRunners: true}}}
+	cfg, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, err := json.Marshal(append(slices.Clone(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := func(version, ports string) string {
+		return `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"` + version + `","proxy_settings":` + string(named) + ports + `}`
+	}
+	rig := runnertest.NewRig(t, rid)
+	sb, _ := create(t, rig, nil)
+	local := strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")
+
+	// The rig's own caps carry every ProxySettings entry and not the relay.
+	var se *remote.ProxySettingError
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); !errors.As(err, &se) || se.Setting != runnerwire.ProxySettingLocalModelRelay {
+		t.Fatalf("replace without the relay = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingLocalModelRelay)
+	}
+	publishCaps(t, rig, caps("other port", `,"local_model_ports":[8080]`))
+	var pe *remote.LocalModelPortError
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); !errors.As(err, &pe) || pe.Port != 11434 {
+		t.Fatalf("replace = %v, want a LocalModelPortError naming port 11434", err)
+	}
+	if rig.Fake.Called("replace_proxy "+string(cfg), local) {
+		t.Fatal("a refused replace reached the runner")
+	}
+	publishCaps(t, rig, caps("allowed", `,"local_model_ports":[8080,11434]`))
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); err != nil {
+		t.Fatalf("a runner allowing port 11434 refused the replace: %v", err)
+	}
+	if !rig.Fake.Called("replace_proxy "+string(cfg), local) {
+		t.Fatal("the admitted replace never reached the runner")
 	}
 }
 

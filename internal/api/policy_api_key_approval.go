@@ -41,10 +41,22 @@ func hasGatedAPIKey(grants []types.GrantSpec) bool {
 // before this rule still loads, clamps, overlays and launches as it always did,
 // its key left out of every run, and no launch refuses one. Only a save does.
 // held is what an earlier write already carried; a grant equal to one of them is
-// not added by this save and is left alone.
+// not added by this save and is left alone, each held entry covering one submitted grant.
 func authoredAPIKeyApprovalRefusal(grants, held []types.GrantSpec) error {
+	// Each held entry covers one submitted grant at most: two copies against one stored copy add one.
+	used := make([]bool, len(held))
 	for i, g := range grants {
-		if g.Kind != types.GrantAPIKey || !g.RequiresApproval || slices.ContainsFunc(held, func(h types.GrantSpec) bool { return sameGrant(h, g) }) {
+		if g.Kind != types.GrantAPIKey || !g.RequiresApproval {
+			continue
+		}
+		covered := false
+		for j, h := range held {
+			if !used[j] && sameGrant(h, g) {
+				used[j], covered = true, true
+				break
+			}
+		}
+		if covered {
 			continue
 		}
 		return fmt.Errorf("eligible_grants[%d]: api_key cannot require approval — every door that injects a key drops an "+

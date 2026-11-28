@@ -8,7 +8,7 @@
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
 import { KEPT_MACHINE_REASON, type KeptMachineReason } from "../../../../lib/kept-machine-refusals";
-import type { ImageAdmissionReason, NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
+import type { ComponentGateReason, ImageAdmissionReason, NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
 import type { ScheduleReason } from "../../../../lib/schedule-refusals";
@@ -26,7 +26,7 @@ const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
   "allowed_methods host_rules eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
-const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection recording data_out refuse_ip_literals min_confinement_class workspace_mounts workspace_repos resources";
+const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection recording data_out outage local_folders refuse_ip_literals min_confinement_class workspace_mounts workspace_repos resources";
 
 /**
  * Policy rows go to Review, never to Tools and access: that step writes only
@@ -39,10 +39,10 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("files", "workspaces drive drives start_folder no_repositories_or_drives"),
   ...homes("tools", "components overrides"),
   ...homes("review", "resources inline_policy"),
-  ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
+  ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id containers " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window wall_preset"),
+  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base windows_image desktop_window wall_preset"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -59,17 +59,21 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 };
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
-  ...groups("run", policy("ui_apps") + " shape experience workload service interactive task_mode interactive_start agent task preset preset_version title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
-  ...groups("where", "machine machine_kind macos_base desktop_window run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
+  ...groups("run", policy("ui_apps") + " shape experience workload service interactive task_mode interactive_start agent task preset preset_version title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder containers"),
+  ...groups("where", "machine machine_kind macos_base windows_image desktop_window run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives keep_work_folder repo workspace_id " + policy("workspace_mounts workspace_repos")),
   ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals wall_preset " + policy("desktop")),
-  ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording data_out refuse_ip_literals`)),
+  ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording data_out outage local_folders refuse_ip_literals`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
 
+/** The request-rule refusals of a run (internal/api/reasons_component_request_rules.go): the person fixes each by removing a component on the Tools step. */
+export const COMPONENT_REQUEST_RULES_REASONS = ["component_request_rules_off", "component_request_rules_limit"] as const;
+export type ComponentRequestRulesReason = (typeof COMPONENT_REQUEST_RULES_REASONS)[number];
+
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = ComponentGateReason | ComponentRequestRulesReason | ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -81,12 +85,15 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   workspace_repo_not_admitted: "files", repo_url_credentials: "files", capability_workspace: "files", capability_workspace_provider: "files",
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
+  // The way out is the Tools step, where the component can be removed; the run's image is set in the run document.
+  component_image_unmet: "tools",
   placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",
   runner_offline: "run", runner_at_capacity: "run", runner_limits_unset: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
   runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_trust_changed: "run", runner_trust_required: "run", runner_keystore_unavailable: "run",
   runner_recording_off: "run", recording_store_off: "run",
   runner_action_pending: "run", relay_runner_mismatch: "run", relay_required: "run", relay_route_refused: "run",
   placement_credential: "run", placement_component_self_defined: "tools", placement_capability: "tools",
+  component_request_rules_off: "tools", component_request_rules_limit: "tools",
   delivery_via_org: "tools", delivery_runner_resident: "tools", delivery_not_via_org: "tools",
   via_org_destination_refused: "tools", via_org_cap_exceeded: "tools",
   placement_local_path: "files",

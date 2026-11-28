@@ -159,9 +159,10 @@ func TestNoPlanLabelsInShippedDocs(t *testing.T) {
 }
 
 // TestConnectionBudgetCountsTheListeners pins the per-replica connection budget to the two LISTEN
-// connections wardynd dials outside the pool.
+// connections wardynd dials outside the pool, beside the two fence connections a run's start locks share
+// (db.LockFenceConns).
 func TestConnectionBudgetCountsTheListeners(t *testing.T) {
 	wantAll(t, "docs/ENV.md WARDYN_PG_DSN row", readRepo(t, "docs/ENV.md"),
-		"**at least 4**", "`pool_max_conns` plus up to 3 dedicated lifetime connections per replica", "`pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 listener connections per replica")
+		"**at least 4**", "`pool_max_conns` plus up to 3 dedicated lifetime connections per replica", "`pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 fence connections plus 2 listener connections per replica")
 	wantAll(t, "docs/releases/0.8.md [0.8.6]", changelog086(t), "two more database connections", "LISTEN wardyn_mask")
 }

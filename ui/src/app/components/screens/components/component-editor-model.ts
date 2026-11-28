@@ -6,7 +6,7 @@
 // The admin editor's draft and its conversion to the wire. The server refuses a
 // delivery that carries another mode's fields, so requestOf writes only the
 // fields the chosen mode uses, and `shared` only on a header delivery.
-import type { Component, ComponentDeliveryMode, ComponentMCP, ComponentRequest, ComponentSecret } from "../../../lib/types";
+import type { Component, ComponentDeliveryMode, ComponentMCP, ComponentRequest, ComponentSecret, HostRule } from "../../../lib/types";
 
 export interface SecretDraft {
   // Stable React key; never sent.
@@ -34,8 +34,12 @@ export interface ComponentDraft {
   description?: string;
   // One host per line.
   hosts: string;
+  // The image a run must use to attach the component (#1972); empty for none.
+  image?: string;
   secrets: SecretDraft[];
   settings: SettingDraft[];
+  // The definition's request rules, sent as they stand: the form's rules always win over the stored ones.
+  requestRules?: HostRule[];
 }
 
 let nextKey = 1;
@@ -56,11 +60,12 @@ export const blankSecret = (): SecretDraft => ({
 export const blankSetting = (): SettingDraft => ({ key: nextKey++, name: "", value: "" });
 
 export function draftOf(c: Component | null): ComponentDraft {
-  if (!c) return { name: "", description: "", hosts: "", secrets: [], settings: [] };
+  if (!c) return { name: "", description: "", hosts: "", image: "", secrets: [], settings: [] };
   return {
     name: c.name,
     description: c.definition.description ?? "",
     hosts: c.definition.hosts.join("\n"),
+    image: c.definition.image ?? "",
     secrets: (c.definition.secrets ?? []).map((s) => ({
       ...blankSecret(),
       secret_name: s.secret_name,
@@ -74,7 +79,32 @@ export function draftOf(c: Component | null): ComponentDraft {
       file: s.delivery.file ?? "",
     })),
     settings: Object.entries(c.definition.config ?? {}).map(([name, value]) => ({ ...blankSetting(), name, value })),
+    requestRules: c.definition.request_rules ?? [],
   };
+}
+
+// Whether an image reference names a tag or a digest: the repository alone meets any tag or digest of it.
+export const imageNamesTagOrDigest = (ref: string): boolean => ref.includes("@") || ref.slice(ref.lastIndexOf("/") + 1).includes(":");
+/** The most rules one component may carry (types.MaxHostRulesPerSet). */
+export const MAX_REQUEST_RULES = 64;
+
+/** Which rule, and which of its parts, a server sentence names; neither for a sentence about the rules as a whole. */
+export interface RuleRefusal {
+  /** 0-based, as the server counts request_rules[i]. */
+  index?: number;
+  part?: "host" | "methods" | "paths" | "effect";
+}
+
+// The sentences of the off and unread refusals (internal/api/components_request_rules.go) start alike.
+const RULES_SWITCH_SENTENCE = /^This component carries request rules, and /;
+const RULE_PATH = /^request_rules(?:\[(\d+)\](?:\.(host|methods|paths|effect))?)?(?!\w)/;
+
+/** The rules a server refusal is about, or null when it is about something else (a conflict, the hosts, a secret). */
+export function requestRulesRefusal(message: string): RuleRefusal | null {
+  if (RULES_SWITCH_SENTENCE.test(message)) return {};
+  const m = RULE_PATH.exec(message.replace(/^invalid component:\s*/, "").replace(/^definition\./, ""));
+  if (!m) return null;
+  return { ...(m[1] !== undefined && { index: Number(m[1]) }), ...(m[2] && { part: m[2] as RuleRefusal["part"] }) };
 }
 
 export const hostLines = (text: string): string[] =>
@@ -116,13 +146,17 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
   const choices = headerHostChoices(hosts);
   const config = Object.fromEntries(d.settings.filter((s) => s.name.trim()).map((s) => [s.name.trim(), s.value]));
   const description = d.description?.trim() ?? "";
+  const image = d.image?.trim() ?? "";
+  const requestRules = d.requestRules ?? [];
   return {
     name: d.name.trim(),
     definition: {
       ...(description ? { description } : {}),
       hosts,
+      ...(image ? { image } : {}),
       ...(d.secrets.length > 0 && { secrets: d.secrets.map((s) => secretOf(s, choices)) }),
       ...(Object.keys(config).length > 0 && { config }),
+      ...(requestRules.length > 0 && { request_rules: requestRules }),
     },
   };
 }

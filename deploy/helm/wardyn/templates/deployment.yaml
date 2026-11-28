@@ -31,8 +31,8 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
   - read-only root FS, all Linux capabilities dropped, no privilege escalation
   - liveness/startup probes on /healthz (wardynd serves it even when the admin
     token is unset — it is one of two always-on endpoints); readiness on
-    /readyz, which additionally pings Postgres so a dead DB actually takes
-    the pod out of the Service's endpoints
+    /healthz too by default, or /readyz (a Postgres ping) when
+    readinessProbe.path names it
 */}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
@@ -129,6 +129,18 @@ chart can read.
 {{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $eff (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $eff (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
 {{- $xeLast := dict -}}
 {{- range $i, $e := .Values.extraEnv }}{{ $_ := set $xeLast ($e.name | toString) $i }}{{ end -}}
+{{- /*
+wardynd serves TLS on its public listener when WARDYN_TLS_CERT and WARDYN_TLS_KEY are both non-empty, and answers a
+plaintext probe with 400: the pod would never become ready and the startup probe would restart it. $tlsEff is env, then
+extraEnv (last wins), with an entry set only by a non-empty value or a valueFrom: a name-only extraEnv entry is an empty
+variable in the pod and reads as unset, unlike $eff, whose guards refuse it. A valueFrom marked optional whose key is
+missing resolves empty in the pod yet reads as set here, so point such a reference at a key that exists. Behind a
+terminating ingress (WARDYN_TLS_TERMINATED) the listener stays plain HTTP and the probes keep the default scheme.
+*/ -}}
+{{- $tlsEff := dict -}}
+{{- range $k, $v := .Values.env }}{{ $_ := set $tlsEff $k (toString $v) }}{{ end -}}
+{{- range .Values.extraEnv }}{{ if hasKey . "valueFrom" }}{{ $_ := set $tlsEff (.name | toString) "<valueFrom>" }}{{ else }}{{ $_ := set $tlsEff (.name | toString) (toString (.value | default "")) }}{{ end }}{{ end -}}
+{{- $nativeTLS := and (ne (get $tlsEff "WARDYN_TLS_CERT") "") (ne (get $tlsEff "WARDYN_TLS_KEY") "") -}}
 {{- if hasKey $eff "WARDYN_HA" -}}
 {{- fail "wardyn: WARDYN_HA is set through env or extraEnv. Do not set it by hand: the chart's multi-replica guards read ha.enabled, so a hand-set WARDYN_HA would lift the daemon's single-instance lock without them. Set ha.enabled=true instead." -}}
 {{- end -}}
@@ -172,6 +184,23 @@ than at render — the fail-closed invariant lives there now, not here.
 */ -}}
 {{- if and .Values.k8s.enabled (include "wardyn.groundtruthEnabled" .) (hasKey $eff "WARDYN_GROUNDTRUTH_TOKEN_FILE") -}}
 {{- fail "wardyn: groundtruth.k8s.enabled delivers the sensor token through a Secret, so WARDYN_GROUNDTRUTH_TOKEN_FILE must not be set in env or extraEnv: wardynd refuses to boot with both." -}}
+{{- end -}}
+{{- /* spire: the chart's form of wardynd's boot checks (docs/operations/spire.md). `default dict` keeps a
+--reuse-values upgrade from a release without the block rendering. */ -}}
+{{- $spire := .Values.spire | default dict -}}
+{{- if $spire.enabled -}}
+{{- if not .Values.k8s.enabled -}}
+{{- fail "wardyn: spire.enabled needs k8s.enabled=true. The spire identity provider attests each run's proxy pod on Kubernetes and needs the k8s runner in this release; wardynd refuses to boot with it on any other runner." -}}
+{{- end -}}
+{{- if or (not $spire.proxyServiceAccount) (eq $spire.proxyServiceAccount "default") -}}
+{{- fail "wardyn: spire.proxyServiceAccount must name a dedicated account, not be empty or \"default\". The agent pod runs as default, so a proxy on default could not be told apart from it." -}}
+{{- end -}}
+{{- if eq (include "wardyn.serviceAccountName" .) "default" -}}
+{{- fail "wardyn: spire.enabled needs wardynd on its own ServiceAccount, not \"default\". Its admin entry selects on that account. Set serviceAccount.create=true or serviceAccount.name." -}}
+{{- end -}}
+{{- if eq $spire.proxyServiceAccount (include "wardyn.serviceAccountName" .) -}}
+{{- fail "wardyn: spire.proxyServiceAccount equals wardynd's ServiceAccount. A proxy pod would then match wardynd's admin entry and could take its SVID. Give the proxies their own account." -}}
+{{- end -}}
 {{- end -}}
 {{- /*
 One entry per env name. `helm upgrade` patches a Deployment's env by name, and an
@@ -793,25 +822,30 @@ spec:
             httpGet:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           readinessProbe:
-            # /readyz, NOT /healthz: it pings Postgres, so a dead DB actually
-            # takes the pod out of the Service's endpoints instead of reading
-            # healthy forever (/healthz reports process-liveness only — a
-            # readiness check that shares its path with liveness/startup would
-            # restart-loop a pod on a transient DB blip instead of just
-            # marking it not-ready).
+            # /healthz by default: it answers while Postgres refuses connections,
+            # so a DB outage leaves the pod in the Service and the console up to
+            # show its database banner (the console polls /readyz itself).
+            # readinessProbe.path=/readyz pings Postgres and takes the pod out
+            # while the ping fails; that endpoint exists from the 0.6 images on,
+            # so an older image's probe would 404 forever.
             #
-            # Overridable because /readyz only EXISTS from the 0.6 images
-            # onward: point an older image at it and every probe 404s, so the
-            # pod never becomes Ready and a rollout to it stalls forever
-            # (readinessProbe.path=/healthz pins it back — see values.yaml).
+            # The fallback below serves a values map with no readinessProbe
+            # block (a --reuse-values upgrade from 0.5: the default dict note
+            # at the top of this file).
             httpGet:
-              path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/readyz") | quote }}
+              path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/healthz") | quote }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 3
             periodSeconds: 10
             timeoutSeconds: 3
@@ -828,6 +862,9 @@ spec:
             httpGet:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 5
             # 5s periods over 30s connect + WARDYN_MIGRATE_TIMEOUT + 120s slack (see $startupFailureThreshold).
             failureThreshold: {{ $startupFailureThreshold }}
@@ -884,6 +921,12 @@ spec:
             {{- if $dps.existingSecret }}
             - name: daemon-proxy-secret
               mountPath: {{ $dps.mountPath | default "/etc/wardyn/daemon-proxy-secret" }}
+              readOnly: true
+            {{- end }}
+            {{- if $spire.enabled }}
+            # The SPIRE agent's Workload API socket (spire.socketPath lives under it).
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
               readOnly: true
             {{- end }}
             {{- with .Values.extraVolumeMounts }}
@@ -988,6 +1031,12 @@ spec:
               - key: {{ $dps.existingSecretKey | default "proxy-url" }}
                 path: {{ $dps.existingSecretKey | default "proxy-url" }}
         {{- end }}
+        {{- if $spire.enabled }}
+        - name: spiffe-workload-api
+          csi:
+            driver: {{ $spire.csiDriver | quote }}
+            readOnly: true
+        {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -1082,6 +1131,10 @@ $ is the root here too.
             - name: WARDYN_K8S_SANDBOX_PLACEMENT
               value: {{ toJson $placement | quote }}
             {{- end }}
+            # Always written, after env and extraEnv, so the chart's run Service setting is the one wardynd reads
+            # (off: the agent starts after its proxy is Ready and pins the proxy pod's IP).
+            - name: WARDYN_K8S_RUN_SERVICE
+              value: {{ ternary "on" "off" (eq (include "wardyn.runService" .) "true") | quote }}
             {{- if .Values.k8s.readNodes }}
             # The node-size advisory (internal/runner/k8s/fit_nodes.go); rbac.yaml grants the matching nodes list.
             - name: WARDYN_K8S_READ_NODES
@@ -1127,6 +1180,30 @@ $ is the root here too.
               value: {{ .Release.Namespace | quote }}
             - name: WARDYN_K8S_CONTROL_PLANE_POD_LABELS
               value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/name=%s,app.kubernetes.io/component=control-plane" .Release.Name (include "wardyn.name" .) | quote }}
+            {{- $spire := .Values.spire | default dict }}
+            {{- if $spire.enabled }}
+            {{- $srv := $spire.server | default dict }}
+            # The spire identity provider (docs/operations/spire.md). The selectors name the same runs namespace as
+            # WARDYN_K8S_NAMESPACE and the proxies' account; wardynd refuses to boot if they do not.
+            - name: WARDYN_IDENTITY
+              value: "spire"
+            - name: WARDYN_SPIRE_AGENT_SOCKET
+              value: {{ printf "unix://%s" $spire.socketPath | quote }}
+            - name: WARDYN_SPIRE_SERVER_ADDRESS
+              value: {{ printf "%s:%d" (required "wardyn: spire.server.address is required when spire.enabled=true" $srv.address) (int $srv.port) | quote }}
+            - name: WARDYN_SPIRE_PARENT_ID
+              value: {{ required "wardyn: spire.parentId is required when spire.enabled=true" $spire.parentId | quote }}
+            - name: WARDYN_SPIRE_SELECTORS
+              value: {{ printf "k8s:ns:%s,k8s:sa:%s,k8s:pod-label:wardyn.component:proxy,k8s:pod-label:wardyn.run-id:{run_id}" (.Values.k8s.runsNamespace | default .Release.Namespace) $spire.proxyServiceAccount | quote }}
+            - name: WARDYN_POD_SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            - name: WARDYN_K8S_SPIFFE_CSI_DRIVER
+              value: {{ $spire.csiDriver | quote }}
+            - name: WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT
+              value: {{ $spire.proxyServiceAccount | quote }}
+            {{- end }}
             {{- end }}
             {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN

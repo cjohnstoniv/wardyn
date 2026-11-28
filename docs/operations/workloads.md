@@ -154,6 +154,22 @@ A Kubernetes organisation runner can watch namespaces for `WardynWorkload` resou
 - The resource is only an authorisation key and a status carrier. Its run pods go to the pool's runs namespace on that runner, not to the resource's namespace.
 - A resource's workload is owned by the bound service identity, as `service:<name>`, with source `k8s`.
 
+A platform that can hand pod construction to Wardyn governs a workload by rendering a `WardynWorkload` in place of its
+own Deployment. Wardyn builds the pod, so every container in it is held by the run's walls. A workload made of
+several containers puts them in `intent.containers` ([Extra containers](../sdk.md#extra-containers)); the
+namespace's service identity needs an image grant for each image. Wardyn does not take over pods it did not create.
+What the platform gives up:
+
+- Its pod spec. An extra container takes a name, an image, a command, ports and a size: no env, probes, init
+  containers or volumes of its own. It runs as user 1000, and Wardyn picks the node and the sandbox class.
+- Its namespace. The run's pod is in the pool's runs namespace on the runner, so nothing reading pods, logs or
+  readiness in the resource's namespace sees it. A service there reaches the agent only through a `ui_apps`
+  app declared `inbound: true`.
+- A runner-less install. The resource needs an organisation runner on Kubernetes.
+- Kubernetes volume drives. A `k8s_pvc` drive is refused on a runner placement in this release.
+- Fast feedback at scale. A status can lag a change by up to 30 seconds, and a namespace with more than 1000
+  resources sends no full-list sync (see [Known limits](#known-limits)).
+
 ### Bind a namespace
 
 A binding says: the resources of namespace N, on the runners of pool P, launch as service identity S. It is standing authority, so it is made by a signed-in person with the security role, never with an API token or the admin token.
@@ -194,7 +210,7 @@ To bind the namespace again, delete the binding and create it again with the ide
 - The runner reports every resource when a namespace's informer has synced, when its session to the organisation comes up, and every 10 minutes.
 - Between those it reports a resource that is added, or whose `metadata.generation` changed, and one that is deleted. A status write changes no generation, so it reports nothing.
 - Each full report ends with the names the namespace holds. The organisation deletes the workloads of that namespace the list omits, with audit `via` `k8s_sync`. This catches a delete missed while the runner was down.
-- The organisation takes at most 10 workload events a second from one runner on one replica, with room for a full report of about 6000 resources at once. Past that, an event is refused (`runner.event.refuse`, code `rate_limited`) and the next full report carries it. A runner that watches more resources loses the end of each full report.
+- Events from one runner draw on an allowance on each replica that refills at 10 events a second and holds up to 6000 events. Past that, an event is refused (`runner.event.refuse`, code `rate_limited`). A busy runner can lose the end of a full report, and a later full report sends the current resources again.
 - A refused delete is the exception when its namespace holds over 1000 names, which sends no sync, or lies in the lost end of a runner's full report. That workload stays until the resource changes again or an admin deletes it. Split such a runner's namespaces across runners.
 - Deleting a resource deletes its workload and ends its run. There is no finalizer on the resource.
 - An admin or security admin may delete a `k8s` workload through the API. The resource writes it back at the next full report unless it is gone too. Anyone else gets `409` `workload_managed_by_k8s`.
@@ -309,6 +325,7 @@ Do not use the `Ready` condition for health: a completed workload is `Ready=Fals
 - A replacement that waited in the queue of the pool its old run held a slot in has already ended that run. If its start is refused for the pin, the workload has no run until its next launch.
 - `wardyn apply --dry-run` prints a launch policy digest only for a workload that is owed a launch: a new or changed one, or one whose latest spec has not launched. To read the digest of an unchanged workload, dry-run the file with its `restart_key` changed.
 - A launch the dry run refuses before its policy is fully resolved, for example because no runner can take it, shows no digest.
+- Extra containers run on Kubernetes runners only; a workload with `intent.containers` bound to a pool of Docker runners is refused at each launch with `placement_capability`.
 
 ## Audit
 

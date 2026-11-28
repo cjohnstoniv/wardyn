@@ -6,6 +6,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,12 @@ func TestServiceIdentity_SponsorFieldsSealed(t *testing.T) {
 			ev.ActorType = types.ActorSystem
 			return ev
 		}(), map[string]string{"target": "bob"}},
+		{func() types.AuditEvent {
+			ev := serviceEvent("session.revoke.hold", "wardyn/oidcCallback", `{"state":"queued","sub_verified":false,"sub_unverified":"alice","token_sha256":"ab"}`)
+			ev.ActorType = types.ActorSystem
+			ev.Target = "logout_token:ab"
+			return ev
+		}(), map[string]string{"sub_unverified": "alice"}},
 	}
 	for _, c := range cases {
 		sealed, pending, err := s.Seal(t.Context(), c.ev)
@@ -90,6 +97,17 @@ func TestServiceIdentity_SponsorFieldsSealed(t *testing.T) {
 	back, err := s.Unseal(t.Context(), []types.AuditEvent{sealed})
 	if err != nil || dataField(t, back[0], "sponsor") != ErasedValue {
 		t.Errorf("sponsor after erasure = %q (%v), want %q", dataField(t, back[0], "sponsor"), err, ErasedValue)
+	}
+	// A held logout's sub_unverified is erased with the person; the row's token-hash target is not a person.
+	held := serviceEvent("session.revoke.hold", "wardyn/oidcCallback", `{"state":"unverifiable","sub_unverified":"alice"}`)
+	held.ActorType, held.Target = types.ActorSystem, "logout_token:cd"
+	heldSealed, _, _ := s.Seal(t.Context(), held)
+	mk.destroy("alice")
+	dir.destroyed["alice"] = heldSealed.Time.Add(time.Minute)
+	heldBack, err := s.Unseal(t.Context(), []types.AuditEvent{heldSealed})
+	if err != nil || dataField(t, heldBack[0], "sub_unverified") != ErasedValue || heldBack[0].Target != "logout_token:cd" {
+		t.Errorf("session.revoke.hold after erasure: sub_unverified %q, target %q (%v); want the sub erased and the target kept",
+			dataField(t, heldBack[0], "sub_unverified"), heldBack[0].Target, err)
 	}
 	// A sponsor with no identity row keeps their name, as an actor does.
 	kept, _, err := s.Seal(t.Context(), serviceEvent("run.create", "service:ci", `{"sponsor":"never-signed-in"}`))
@@ -149,5 +167,56 @@ func TestServiceIdentity_SponsorStaysClearOutsideSealFull(t *testing.T) {
 	sealed, pending, err := s.Seal(t.Context(), serviceEvent("run.create", "service:ci", `{"sponsor":"alice"}`))
 	if err != nil || pending || dataField(t, sealed, "sponsor") != "alice" {
 		t.Errorf("without SealActor: sponsor %q pending %v (%v), want it unchanged", dataField(t, sealed, "sponsor"), pending, err)
+	}
+}
+
+// TestSealFull_PseudonymizesRunOwner: a row whose only personal field is run_owner is sealed to the person's
+// subject, read back as the person, and read as erased once their key is destroyed; the workload stays.
+func TestSealFull_PseudonymizesRunOwner(t *testing.T) {
+	s, mk, dir := newFullSealer(t, "alice")
+	ev := serviceEvent("proxy.decision", "service:proxy", `{"run_owner":"alice","run_workload":"spiffe://t/agent-run/1"}`)
+	sealed, pending, err := s.Seal(t.Context(), ev)
+	if err != nil || pending {
+		t.Fatalf("Seal = pending %v, %v", pending, err)
+	}
+	if got, want := dataField(t, sealed, RunOwnerKey), SubjectActorPrefix+dir.ids["alice"]; got != want {
+		t.Fatalf("stored run_owner = %q, want %q (data %s)", got, want, sealed.Data)
+	}
+	if dataField(t, sealed, RunWorkloadKey) != "spiffe://t/agent-run/1" {
+		t.Errorf("run_workload changed: %s", sealed.Data)
+	}
+	back, err := s.Unseal(t.Context(), []types.AuditEvent{sealed})
+	if err != nil || dataField(t, back[0], RunOwnerKey) != "alice" {
+		t.Fatalf("read run_owner = %q (%v), want alice", dataField(t, back[0], RunOwnerKey), err)
+	}
+	mk.destroy("alice")
+	dir.destroyed["alice"] = sealed.Time.Add(time.Minute)
+	back, err = s.Unseal(t.Context(), []types.AuditEvent{sealed})
+	if err != nil || dataField(t, back[0], RunOwnerKey) != ErasedValue {
+		t.Errorf("run_owner after erasure = %q (%v), want %q", dataField(t, back[0], RunOwnerKey), err, ErasedValue)
+	}
+	// A service owner keeps its name, as an actor does.
+	kept, _, err := s.Seal(t.Context(), serviceEvent("proxy.decision", "service:proxy", `{"run_owner":"service:ci"}`))
+	if err != nil || dataField(t, kept, RunOwnerKey) != "service:ci" {
+		t.Errorf("service run_owner = %q (%v), want the name", dataField(t, kept, RunOwnerKey), err)
+	}
+}
+
+// TestSealFull_OwnerKeyNeverSealed: "owner" names a namespace on secret.read and an erased subject on
+// principal_key.destroyed; SealFull leaves both as stored and sponsorFieldNames never offers it.
+func TestSealFull_OwnerKeyNeverSealed(t *testing.T) {
+	s, _, _ := newFullSealer(t, "alice", "team-a")
+	for _, c := range []struct{ action, data string }{
+		{"secret.read", `{"purpose":"run","owner":"team-a","name":"x"}`},
+		{"principal_key.destroyed", `{"owner":"alice","purpose":"audit","generations":[1]}`},
+	} {
+		ev := serviceEvent(c.action, "service:x", c.data)
+		sealed, _, err := s.Seal(t.Context(), ev)
+		if err != nil || dataField(t, sealed, "owner") != dataField(t, ev, "owner") {
+			t.Errorf("%s: owner = %q (%v), want it as stored (%s)", c.action, dataField(t, sealed, "owner"), err, sealed.Data)
+		}
+		if slices.Contains(sponsorFieldNames(ev), "owner") {
+			t.Errorf("%s: sponsorFieldNames offers owner", c.action)
+		}
 	}
 }

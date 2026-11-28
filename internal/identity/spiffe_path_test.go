@@ -121,3 +121,37 @@ func TestParseRunPathRefusesAnyOtherForm(t *testing.T) {
 		}
 	}
 }
+
+// WorkloadFromSPIFFEID and RunIDFromSPIFFEID read a run's SPIFFE ID back: an escaped owner round-trips,
+// the ad-hoc form gives a zero workload, and a foreign trust domain or a non-run path is refused.
+func TestWorkloadFromSPIFFEID(t *testing.T) {
+	run := uuid.New()
+	w := Workload{Owner: "service:ci-bot", Name: "nightly"}
+	path, err := RunPath(w, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := WorkloadFromSPIFFEID("spiffe://wardyn.local"+path, "wardyn.local")
+	if err != nil || got != w {
+		t.Fatalf("WorkloadFromSPIFFEID = (%+v, %v), want %+v", got, err, w)
+	}
+	if id, err := RunIDFromSPIFFEID("spiffe://wardyn.local"+path, "wardyn.local"); err != nil || id != run {
+		t.Fatalf("RunIDFromSPIFFEID = (%s, %v), want %s", id, err, run)
+	}
+	adhoc := "spiffe://wardyn.local/agent-run/" + run.String()
+	if got, err := WorkloadFromSPIFFEID(adhoc, "wardyn.local"); err != nil || got != (Workload{}) {
+		t.Fatalf("ad-hoc = (%+v, %v), want a zero workload", got, err)
+	}
+	for _, bad := range []string{
+		"spiffe://other.test" + path,
+		"spiffe://wardyn.local" + ControlPlanePath,
+		"not a spiffe id",
+	} {
+		if _, err := WorkloadFromSPIFFEID(bad, "wardyn.local"); err == nil {
+			t.Errorf("WorkloadFromSPIFFEID(%q) accepted a non-run or foreign id", bad)
+		}
+		if _, err := RunIDFromSPIFFEID(bad, "wardyn.local"); err == nil {
+			t.Errorf("RunIDFromSPIFFEID(%q) accepted a non-run or foreign id", bad)
+		}
+	}
+}

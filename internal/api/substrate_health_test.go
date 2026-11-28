@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -396,12 +397,15 @@ func TestHealthSweeps_StartConditions(t *testing.T) {
 		t.Fatalf("no runner and no sweeping builder registered %+v", got)
 	}
 	withRunner := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}}).HealthSweeps()
-	if len(withRunner) != 1 || withRunner[0].Name != sweephealth.RunWatcher || withRunner[0].Interval != watcherSweepInterval {
-		t.Fatalf("with a runner: %+v, want run_watcher at %s", withRunner, watcherSweepInterval)
+	if len(withRunner) != 2 || withRunner[0].Name != sweephealth.RunWatcher || withRunner[0].Interval != watcherSweepInterval ||
+		withRunner[1].Name != sweephealth.RunMove || withRunner[1].Interval != moveSweepInterval {
+		t.Fatalf("with a runner: %+v, want run_watcher at %s and run_move at %s", withRunner, watcherSweepInterval, moveSweepInterval)
 	}
 	both := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}, ImageBuilder: &sweepableImageBuilder{}}).HealthSweeps()
-	if len(both) != 2 || both[1].Name != sweephealth.OrphanedBuild || both[1].Interval != buildSweepInterval {
-		t.Fatalf("with a sweeping builder: %+v, want orphaned_build at %s", both, buildSweepInterval)
+	wantBoth := []sweephealth.Sweep{{Name: sweephealth.RunWatcher, Interval: watcherSweepInterval},
+		{Name: sweephealth.RunMove, Interval: moveSweepInterval}, {Name: sweephealth.OrphanedBuild, Interval: buildSweepInterval}}
+	if !slices.Equal(both, wantBoth) {
+		t.Fatalf("with a sweeping builder: %+v, want %+v", both, wantBoth)
 	}
 }
 

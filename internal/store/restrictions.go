@@ -117,6 +117,14 @@ func GetRestrictionQ(ctx context.Context, q Querier, id uuid.UUID) (types.Restri
 
 // PutRestrictionQ writes r on q: the row, then its members replaced. ErrConflict when the name is taken.
 func PutRestrictionQ(ctx context.Context, q Querier, r types.Restriction, by string) (types.Restriction, error) {
+	for _, m := range r.Members {
+		if m.SubjectType != types.CapabilitySubjectUser {
+			continue
+		}
+		if err := ruleDelegatePersonSubject(ctx, q, "governance_restriction_members.subject", m.Subject); err != nil {
+			return types.Restriction{}, err
+		}
+	}
 	spec, err := json.Marshal(r.Spec)
 	if err != nil {
 		return types.Restriction{}, fmt.Errorf("store: marshal restriction spec: %w", err)

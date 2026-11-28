@@ -24,7 +24,8 @@ import (
 // proves the two things a fake clientset cannot: the guest runs a kernel of its own, and from inside
 // it the apiserver is unreachable while the run's proxy is reachable (the coded probe above). It
 // needs a cluster whose nodes run Kata (WARDYN_TEST_K8S_KATA_RUNTIMECLASS names the class) and
-// /dev/kvm on this host; hosted conformance-k8s installs no Kata, so it skips there.
+// /dev/kvm on this host; hosted conformance-k8s installs no Kata, so it skips there. A class whose
+// scheduling tolerates a pool's taint needs a scheduling.nodeSelector too, or the driver refuses to boot.
 func TestConformanceK8sKata(t *testing.T) {
 	rc := os.Getenv("WARDYN_TEST_K8S_KATA_RUNTIMECLASS")
 	if os.Getenv("WARDYN_TEST_K8S") != "1" || rc == "" {

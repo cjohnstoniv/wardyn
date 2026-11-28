@@ -5,10 +5,7 @@ package api
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
-	"fmt"
 	"maps"
 	"net/http"
 	"regexp"
@@ -213,67 +210,6 @@ func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, com
 	return nil
 }
 
-// localMCPRulesRefusal refuses a run whose rules hold or block a tool of a
-// local MCP server turned on for a harness that cannot apply them: Codex CLI
-// in any mode (it cannot pause a call, and Wardyn cannot block a tool whose
-// calls never leave the sandbox), or any harness a command starts (off the
-// gated lane, with no managed settings). The broker never sees a local
-// server's calls, so the rule would otherwise be dropped silently. A rule
-// names the server's tools by its prefix, or every tool by "*"; the person's
-// own rules and default for that harness count with the policy's. An allow is
-// what happens anyway, so it stands.
-func localMCPRulesRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
-	if refused := approveEachLocalMCPRefusal(req, spec, comps); refused != nil {
-		return refused
-	}
-	keys := mcpServerKeys(comps.attached)
-	for i, a := range comps.attached {
-		if !a.snapshot.Definition.LocalMCP() {
-			continue
-		}
-		for _, h := range a.snapshot.MCPHarnesses {
-			if h != codexHarness && req.TaskMode != "exec" {
-				continue
-			}
-			rules := slices.Clone(spec.ToolRules)
-			for _, t := range req.Tools {
-				if t.ID == h && t.Kind == client.IncludedToolHarness {
-					rules = append(rules, t.ToolRules...)
-					if t.DefaultEffect != "" {
-						rules = append(rules, types.ToolRule{Tool: "*", Effect: t.DefaultEffect})
-					}
-				}
-			}
-			if mcpServerRestricted(rules, keys[i]) {
-				name := h
-				if d, ok := harnessByID(h); ok {
-					name = d.Display
-				}
-				return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, localMCPRulesSentence(name, keys[i]))
-			}
-		}
-	}
-	return nil
-}
-
-// localMCPRulesSentence is localMCPRulesRefusal's text, the F1MCP board's
-// refused state and Review blocker verbatim, for harness's display name and
-// the server's key.
-func localMCPRulesSentence(harness, server string) string {
-	return fmt.Sprintf("%s can't apply rules for %s's tools, so this run would be refused. Turn %s off for %s, or remove its rules for %s.",
-		harness, server, server, harness, harness)
-}
-
-// mcpServerRestricted reports whether a rule holds or blocks a tool of the
-// MCP server key, by its prefix or by the "*" default.
-func mcpServerRestricted(rules []types.ToolRule, key string) bool {
-	prefixes := proxy.MCPToolPrefixes(key)
-	return slices.ContainsFunc(rules, func(r types.ToolRule) bool {
-		return (r.Effect == types.ToolHold || r.Effect == types.ToolDeny) &&
-			(r.Tool == "*" || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) }))
-	})
-}
-
 // policyHoldsMCPServer reports whether rules explicitly hold a tool of the MCP
 // server key: a hold naming one of its tools, or a hold default ("*"). The
 // broker takes the exact rule for the tool called, else the default, and the
@@ -430,8 +366,7 @@ func mintHarnessCredentials(sets []types.HarnessToolRules, agents []string) (dig
 			return nil, nil, err
 		}
 		cred := base64.RawURLEncoding.EncodeToString(raw)
-		sum := sha256.Sum256([]byte(cred))
-		digests = append(digests, types.HarnessCredential{Harness: s.Harness, SHA256: hex.EncodeToString(sum[:])})
+		digests = append(digests, types.HarnessCredential{Harness: s.Harness, SHA256: types.TokenDigest(cred)})
 		if slices.Contains(agents, s.Harness) {
 			agentCredentials[s.Harness] = cred
 		}
@@ -461,5 +396,10 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 	policy.Recording = ""
 	// data_out is kept by the control plane's doors, never the proxy, and a previous release's proxy refuses the key.
 	policy.DataOut = ""
+	// The proxy reads the run's effective outage terms from its own outage key, and a previous release's proxy refuses this one.
+	policy.Outage = nil
+	// Walls on folders from a person's computer are kept by the control plane's doors, never the proxy, and a
+	// previous release's proxy refuses the key.
+	policy.LocalFolders = nil
 	return policy
 }

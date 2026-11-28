@@ -33,9 +33,9 @@ func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stamp, ok := plain.(audit.DelegationRecorder).Inner.(audit.DryRunRecorder)
+	stamp, ok := belowDelegation(t, plain).(audit.DryRunRecorder)
 	if !ok {
-		t.Fatalf("below the delegation stamp = %T, want audit.DryRunRecorder", plain.(audit.DelegationRecorder).Inner)
+		t.Fatalf("below the delegation stamp = %T, want audit.DryRunRecorder", belowDelegation(t, plain))
 	}
 	if _, ok := stamp.Inner.(maskingRecorder); !ok {
 		t.Errorf("a chain built without a coalescer has %T below the stamp, want maskingRecorder", stamp.Inner)
@@ -48,7 +48,7 @@ func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := head.(audit.DelegationRecorder).Inner.(audit.DryRunRecorder).Inner; got != audit.Recorder(denials) {
+	if got := belowDelegation(t, head).(audit.DryRunRecorder).Inner; got != audit.Recorder(denials) {
 		t.Fatalf("below the stamp = %T, want the coalescer", got)
 	}
 	masking, ok := denials.Inner.(maskingRecorder)
@@ -80,16 +80,29 @@ func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
 	}
 }
 
+// belowDelegation returns the recorder under the chain's head: the run identity stamp, then the delegation
+// stamp directly inside it.
+func belowDelegation(t *testing.T, head audit.Recorder) audit.Recorder {
+	t.Helper()
+	ri, ok := head.(audit.RunIdentityRecorder)
+	if !ok {
+		t.Fatalf("audit chain head = %T, want audit.RunIdentityRecorder", head)
+	}
+	d, ok := ri.Inner.(audit.DelegationRecorder)
+	if !ok {
+		t.Fatalf("below the run identity stamp = %T, want audit.DelegationRecorder", ri.Inner)
+	}
+	return d.Inner
+}
+
 // TestAuditChainStampsDelegation: the chain every writer shares is headed by
-// audit.DelegationRecorder, so a row the identity provider or the broker
-// records under a portal's delegated request names the portal too (#1142),
-// not only the rows the API writes itself.
+// the run identity stamp with audit.DelegationRecorder directly inside it, so a
+// row the identity provider or the broker records under a portal's delegated
+// request names the portal too (#1142), not only the rows the API writes itself.
 func TestAuditChainStampsDelegation(t *testing.T) {
 	rec, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := rec.(audit.DelegationRecorder); !ok {
-		t.Fatalf("audit chain head = %T, want audit.DelegationRecorder", rec)
-	}
+	belowDelegation(t, rec)
 }

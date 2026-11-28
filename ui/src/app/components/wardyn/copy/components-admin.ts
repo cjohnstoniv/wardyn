@@ -32,6 +32,8 @@ export const COMPONENTS_ADMIN = {
   WHO: "Choose who",
   WHO_ARIA: (name: string) => `Choose who may use ${name}`,
   DELETE: "Delete",
+  NEEDS_IMAGE: "Needs image",
+  NEEDS_IMAGE_ANY: "any tag or digest",
   DELETE_ARIA: (name: string) => `Delete ${name}`,
   DELETE_TITLE: (name: string) => `Delete ${name}?`,
   DELETE_BODY:
@@ -57,6 +59,9 @@ export const COMPONENTS_ADMIN = {
   DESCRIPTION_HINT: "One line on the component's card in New Run, such as what it lets a run do. Up to 500 characters.",
   HOSTS: "Hosts",
   HOSTS_HINT: "One per line, such as api.example.com or *.example.com. A run that uses this component can reach these hosts.",
+  IMAGE: "Image",
+  IMAGE_PLACEHOLDER: "ghcr.io/acme/tools:1.2",
+  IMAGE_HINT: "Optional. A run must use this image to attach the component. With no tag or digest, any tag or digest of the repository meets it. Wardyn never pulls or changes the run's image because of a component.",
   SECRETS_LABEL: "Secrets",
   SECRETS_HINT: "Named here, stored on the Secrets page. The value is never part of the component.",
   ADD_SECRET: "Add a secret",

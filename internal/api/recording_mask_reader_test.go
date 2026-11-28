@@ -113,12 +113,15 @@ func TestBuildMaskingBody_ByteBoundaryAndEscapedSecrets(t *testing.T) {
 	}
 }
 
-func TestBuildMaskingBody_EmptyRegistryPassesThrough(t *testing.T) {
-	for _, reg := range []*secretmask.Registry{nil, secretmask.NewRegistry()} {
-		src := strings.NewReader("unmasked without registered secrets")
-		if got := buildMaskingBody(src, reg, uuid.New()); got != src {
-			t.Fatal("empty registry did not return the original reader")
-		}
+// No registry passes the body through. An empty one does not: a secret registered later is still masked
+// (TestBuildMaskingBody_MasksASecretRegisteredAfterConstruction).
+func TestBuildMaskingBody_NilRegistryPassesThrough(t *testing.T) {
+	src := strings.NewReader("unmasked without a registry")
+	if got := buildMaskingBody(src, nil, uuid.New()); got != src {
+		t.Fatal("a nil registry did not return the original reader")
+	}
+	if got := buildMaskingBody(src, secretmask.NewRegistry(), uuid.New()); got == src {
+		t.Fatal("an empty registry returned the original reader")
 	}
 }
 

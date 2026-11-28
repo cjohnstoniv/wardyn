@@ -222,7 +222,7 @@ func TestPG_SuspendIdentity_WritesPendingJobsWithTheCutoff(t *testing.T) {
 			t.Errorf("job %+v: only the cutoff is done", j)
 		}
 	}
-	pending, err := st.PendingLeavers(ctx, 0, 10)
+	pending, err := st.PendingLeavers(ctx, idIssuer, idTenant, 0, 10)
 	if err != nil || len(pending) != 1 || pending[0].ID != leaver.ID {
 		t.Errorf("pending leavers = %+v (%v), want the suspension", pending, err)
 	}
@@ -251,11 +251,11 @@ func TestPG_PendingLeavers_FewestFailedAttemptsFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	pending, err := st.PendingLeavers(ctx, 0, 1)
+	pending, err := st.PendingLeavers(ctx, idIssuer, idTenant, 0, 1)
 	if err != nil || len(pending) != 1 || pending[0].ID != newer.ID {
 		t.Fatalf("first pending leaver = %+v (%v), want the newer one no step has tried", pending, err)
 	}
-	if all, err := st.PendingLeavers(ctx, 0, 10); err != nil || len(all) != 2 || all[1].ID != older.ID {
+	if all, err := st.PendingLeavers(ctx, idIssuer, idTenant, 0, 10); err != nil || len(all) != 2 || all[1].ID != older.ID {
 		t.Fatalf("pending leavers = %+v (%v), want the retried one listed after", all, err)
 	}
 }
@@ -403,6 +403,35 @@ func queryIDs(t *testing.T, pool *pgxpool.Pool, q string, args ...any) []uuid.UU
 	return ids
 }
 
+// A SCIM email rename replaces the address the identity answers with; the old one stays an alias a removal finds,
+// an update that names no primary leaves the address alone, and the next sign-in records the email it carries.
+func TestPG_ScimEmailRenameReplacesTheAddress(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	row, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, leaverOID,
+		store.IdentityUpdate{ExternalID: leaverOID, Emails: []string{"Old@corp.example"}, PrimaryEmail: "Old@corp.example"}, now)
+	if err != nil || row.EmailLower != "old@corp.example" {
+		t.Fatalf("create = %+v, %v; want old@corp.example", row, err)
+	}
+	row, err = st.ApplyIdentityUpdate(ctx, row.ID, store.IdentityUpdate{Emails: []string{"New@corp.example"}, PrimaryEmail: "New@corp.example"}, now)
+	if err != nil || row.EmailLower != "new@corp.example" {
+		t.Fatalf("rename = %+v, %v; want new@corp.example", row, err)
+	}
+	if aliases, err := st.IdentityAliasValues(ctx, row.ID); err != nil || !slices.Contains(aliases, "old@corp.example") || !slices.Contains(aliases, "new@corp.example") {
+		t.Errorf("aliases = %v, %v; want both addresses", aliases, err)
+	}
+	if found, err := st.SearchIdentities(ctx, idIssuer, store.SearchEmail, "old@corp.example", 10); err != nil || len(found) != 1 || found[0].ID != row.ID {
+		t.Errorf("search by the old address = %+v, %v; want the identity", found, err)
+	}
+	if row, err = st.ApplyIdentityUpdate(ctx, row.ID, store.IdentityUpdate{Emails: []string{"third@corp.example"}}, now); err != nil || row.EmailLower != "new@corp.example" {
+		t.Errorf("an update that names no primary = %+v, %v; want the address kept", row, err)
+	}
+	if signed := signedIn(t, st, "sub-renamed", "Login@corp.example", leaverOID); signed.EmailLower != "login@corp.example" {
+		t.Errorf("after a sign-in = %q, want the email the sign-in carries", signed.EmailLower)
+	}
+}
+
 // The SCIM lookups were rewritten from an OR over an alias sub-select into a UNION of indexable arms; this
 // holds them to the answers of the OR form over a corpus that tells the arms apart.
 func TestPG_ScimLookupsMatchTheirOrForm(t *testing.T) {
@@ -521,4 +550,75 @@ func TestPG_ScimLookupsUseTheirIndexes(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The sweeper's mark is refused under the row lock for an identity of another issuer, or of another tenant
+// than the one given, whatever its schedule: nothing is marked and no purge step is recorded. The same row
+// is marked for its own issuer and tenant, and the candidate reads list it for them only.
+func TestMarkIdentityPurged_RefusesForeignRow(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	leaver := signedIn(t, st, "sub-foreign", "foreign@corp.example", leaverOID)
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-foreign", Principals: []string{"sub-foreign"},
+		PurgePrincipals: []string{"sub-foreign"}, PurgeAfter: time.Hour, PendingJobs: []store.JobKey{{Step: "audit_deactivate"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool.Exec(ctx, `UPDATE principal_identities SET purge_after = now() - interval '1 minute' WHERE id = $1`, leaver.ID); err != nil {
+		t.Fatal(err)
+	}
+	// An owed refusal row, idle, beside the pending suspension step.
+	if _, err := st.Pool.Exec(ctx, `INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, last_error, updated_at)
+		VALUES ($1, 'suspend', $2, '', 'pending', 1, $3, now() - interval '1 hour')`, leaver.ID, store.JobStepRefusalAudit+"denied/test_reason", store.RefusalAuditOwedMsg); err != nil {
+		t.Fatal(err)
+	}
+	if err := idleLedger(ctx, st, leaver.ID); err != nil {
+		t.Fatal(err)
+	}
+	const otherIssuer, otherTenant = "https://other-issuer.example/v2.0", "99999999-2222-3333-4444-555555555555"
+	for _, c := range []struct{ name, issuer, tenant string }{
+		{"another issuer", otherIssuer, idTenant}, {"another issuer, no tenant", otherIssuer, ""}, {"another tenant", idIssuer, otherTenant},
+	} {
+		for _, requireDue := range []bool{true, false} {
+			if marked, err := st.MarkIdentityPurged(ctx, leaver.ID, requireDue, c.issuer, c.tenant); err != nil || marked {
+				t.Fatalf("%s, requireDue %v: marked = %v (%v), want it refused", c.name, requireDue, marked, err)
+			}
+		}
+		if due, err := st.PurgeDueIdentities(ctx, c.issuer, c.tenant, 10); err != nil || len(due) != 0 {
+			t.Errorf("%s: due = %+v (%v), want none listed", c.name, due, err)
+		}
+		if pending, err := st.PendingLeavers(ctx, c.issuer, c.tenant, time.Minute, 10); err != nil || len(pending) != 0 {
+			t.Errorf("%s: pending leavers = %+v (%v), want none listed", c.name, pending, err)
+		}
+		if owed, err := st.PendingRefusalAudits(ctx, c.issuer, c.tenant, time.Minute, 10); err != nil || len(owed) != 0 {
+			t.Errorf("%s: owed refusal rows = %+v (%v), want none listed", c.name, owed, err)
+		}
+	}
+	got, err := st.GetIdentity(ctx, leaver.ID)
+	if err != nil || got.PurgedAt != nil {
+		t.Fatalf("identity after the refusals = %+v (%v), want it not purged", got, err)
+	}
+	if jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindPurge); err != nil || len(jobs) != 0 {
+		t.Fatalf("purge ledger after the refusals = %+v (%v), want none", jobs, err)
+	}
+	if pending, err := st.PendingLeavers(ctx, idIssuer, idTenant, time.Minute, 10); err != nil || len(pending) != 1 || pending[0].ID != leaver.ID {
+		t.Fatalf("control: pending leavers for the own issuer and tenant = %+v (%v), want the identity", pending, err)
+	}
+	if owed, err := st.PendingRefusalAudits(ctx, idIssuer, idTenant, time.Minute, 10); err != nil || len(owed) != 1 || owed[0].IdentityID != leaver.ID {
+		t.Fatalf("control: owed refusal rows for the own issuer and tenant = %+v (%v), want the identity", owed, err)
+	}
+	if due, err := st.PurgeDueIdentities(ctx, idIssuer, idTenant, 10); err != nil || len(due) != 1 || due[0].ID != leaver.ID {
+		t.Fatalf("control: due for the own issuer and tenant = %+v (%v), want the identity", due, err)
+	}
+	if marked, err := st.MarkIdentityPurged(ctx, leaver.ID, true, idIssuer, idTenant); err != nil || !marked {
+		t.Fatalf("control: the own issuer and tenant mark = %v (%v), want it marked", marked, err)
+	}
+	if jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindPurge); err != nil || len(jobs) != 1 {
+		t.Fatalf("control: purge ledger = %+v (%v), want its one pending step", jobs, err)
+	}
+}
+
+// idleLedger ages every ledger row of identity id past the idle time the sweeper's reads ask for.
+func idleLedger(ctx context.Context, st store.PG, id uuid.UUID) error {
+	_, err := st.Pool.Exec(ctx, `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id)
+	return err
 }

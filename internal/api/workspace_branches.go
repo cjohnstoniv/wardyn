@@ -36,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -92,29 +94,14 @@ func (s *Server) handleListWorkspaceBranches(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	repo := r.URL.Query().Get("repo")
+	ws, ok := s.callerWorkspaceRepo(w, r, id, repo)
 	if !ok {
-		return
-	}
-	if !s.mayLaunchWorkspace(r, ws) {
-		s.denyForeignWorkspace(w, r, ws)
 		return
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
-		return
-	}
-	if !s.workspaceAvailableToCaller(r.Context(), sc, ws) {
-		// The same bytes as a missing id; the audit row keeps the true reason.
-		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonCapabilityWorkspace, ws.ID.String(), "workspace not found"))
-		writeErrorReason(w, http.StatusNotFound, reasonWorkspaceNotFound, "workspace not found")
-		return
-	}
-	repo := r.URL.Query().Get("repo")
-	if !slices.Contains(repoSourceLocators(ws.Sources), repo) {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceRepoUnknown,
-			fmt.Sprintf("%s is not a repository of workspace %s.", repoRecordURL(repo), ws.Name))
 		return
 	}
 	out, err := s.listRepoBranches(r.Context(), sc, repo, runIdentitySubject(r.Context(), principalFromRequest(r)))
@@ -124,6 +111,41 @@ func (s *Server) handleListWorkspaceBranches(w http.ResponseWriter, r *http.Requ
 	}
 	s.auditBranchList(r, ws.ID.String(), repo, out)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// callerWorkspaceRepo is the three checks that admit a caller to read one repository of a workspace, in this
+// order, each answering its own refusal and returning false: the workspace exists, then the caller may launch it
+// (mayLaunchWorkspace; anyone else gets the 404 of a missing id), then it is available to the caller
+// (workspaceAvailableToCaller; a 404 again, the audit row keeping the true reason), then repo is one of its own
+// repository sources (422), never a URL taken from the request. The branch list and a repository draft's build
+// files both read through it, so a person reads only a repository that a workspace available to them carries.
+// The caller sets withCapBatch on r first.
+func (s *Server) callerWorkspaceRepo(w http.ResponseWriter, r *http.Request, wsID uuid.UUID, repo string) (*types.Workspace, bool) {
+	ws, ok := s.getWorkspaceOr404(w, r, wsID)
+	if !ok {
+		return nil, false
+	}
+	if !s.mayLaunchWorkspace(r, ws) {
+		s.denyForeignWorkspace(w, r, ws)
+		return nil, false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
+	if err != nil {
+		writeServerError(w, r, "get site config", err)
+		return nil, false
+	}
+	if !s.workspaceAvailableToCaller(r.Context(), sc, ws) {
+		// The same bytes as a missing id; the audit row keeps the true reason.
+		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonCapabilityWorkspace, ws.ID.String(), "workspace not found"))
+		writeErrorReason(w, http.StatusNotFound, reasonWorkspaceNotFound, "workspace not found")
+		return nil, false
+	}
+	if !slices.Contains(repoSourceLocators(ws.Sources), repo) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceRepoUnknown,
+			fmt.Sprintf("%s is not a repository of workspace %s.", repoRecordURL(repo), ws.Name))
+		return nil, false
+	}
+	return &ws, true
 }
 
 // listRepoBranches picks the arm by the clone lane a run would take: the
@@ -292,7 +314,12 @@ func adoBranchTarget(sc types.SiteConfig, a adoEntraRun, repo string) (base, pro
 // adoBranchAuth is the Authorization value for the person's own credential,
 // or the reason there is none. err is a wardynd-side failure.
 func (s *Server) adoBranchAuth(ctx context.Context, a adoEntraRun) (auth, reason string, err error) {
-	rctx := secretstore.WithPurpose(ctx, secretstore.PurposeBranchList)
+	return s.adoAuthFor(ctx, a, secretstore.PurposeBranchList)
+}
+
+// adoAuthFor is adoBranchAuth for a read that names its own purpose, which the secret.read row records.
+func (s *Server) adoAuthFor(ctx context.Context, a adoEntraRun, purpose secretstore.Purpose) (auth, reason string, err error) {
+	rctx := secretstore.WithPurpose(ctx, purpose)
 	if a.tokenMode == types.ADOTokenModeOwnPAT {
 		blob, found, err := s.readADOOwnPAT(rctx, a.owner, a.rowID)
 		if err != nil {

@@ -86,8 +86,9 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 // eligible runners' classes, candidateTrusts), highest first, and the first that
 // admits it is the run's. Dispatch classifies the actual spec again
 // (classifyLocalDispatch) for what late authoring adds. An unpooled local
-// request has no runner to go to and is refused.
-func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, trusts []types.RunnerTrustClass, owners map[types.RunnerTrustClass]types.RunnerOwnerKind,
+// request has no runner to go to and is refused. pool is the resolved pool, whose site (set only while sites
+// are on) is where a denial keyed to a site is judged.
+func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, pool types.ResolvedRunnerPool, trusts []types.RunnerTrustClass, owners map[types.RunnerTrustClass]types.RunnerOwnerKind,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
 	drives []types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
 ) (localJudgement, *runRefusal) {
@@ -98,6 +99,7 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, po
 	if refusal != nil {
 		return localJudgement{}, refusal
 	}
+	p.SiteID, p.SiteName = pool.SiteID, pool.SiteName
 	if err := s.localPlanFacts(r.Context(), &p, baseline, nil); err != nil {
 		return localJudgement{}, runServerError("read the local placement facts", err)
 	}
@@ -191,6 +193,8 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
 	p.RequireManagedDevice = requiresManagedDevice(sc)
+	p.MachineKind, p.MachineKindDenials = types.MachineKind(req.MachineKind).Normalize(), machineKindDenialsOf(sc)
+	p.MacOSHostGateLater = true // macOSHostGate, in the capability step, answers a macOS VM off a managed Mac
 	// A bound folder's runner is the run's too (kindTargets holds the run to it).
 	mountRunner, refusal := boundMountsRunner(p.Spec.Mounts)
 	if refusal != nil {

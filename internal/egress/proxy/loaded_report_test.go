@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -26,7 +25,7 @@ func reportProxy(t *testing.T, cp *httptest.Server) *Proxy {
 	return newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(cp)),
 		ControlPlaneURL: "https://wardynd.test:8080",
@@ -101,8 +100,37 @@ func TestLoadedReport_RetriesAfterADroppedFirstPOST(t *testing.T) {
 		t.Fatalf("%d POSTs, %d read; want the dropped one and one retry", calls, len(bodies))
 	}
 	m := bodies[0]
-	if len(m) != 3 || string(m["config_sha256"]) != `"`+r.ConfigSHA256+`"` || string(m["proxy_version"]) != `"0.10.0"` || string(m["switches"]) != `{"WARDYN_LLM_SCAN":"off"}` {
+	if len(m) != 3 || string(m["config_sha256"]) != `"`+r.ConfigSHA256+`"` || string(m["proxy_version"]) != `"0.10.0"` || string(m["switches"]) != `{"WARDYN_LLM_SCAN":"off","outage_pause":"on"}` {
 		t.Fatalf("report body %v", m)
+	}
+}
+
+// TestLoadedReport_CarriesOutagePause: every report says this proxy pauses and recovers (outage_pause "on"), with or
+// without environment switches, and the caller's map is left as it was.
+func TestLoadedReport_CarriesOutagePause(t *testing.T) {
+	shortReportBackoff(t)
+	got := make(chan map[string]string, 2)
+	cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Switches map[string]string `json:"switches"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode report: %v", err)
+		}
+		got <- body.Switches
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer cp.Close()
+	p := reportProxy(t, cp)
+	for _, sw := range []map[string]string{nil, {"WARDYN_MODEL_USAGE": "off"}} {
+		p.reportLoaded(context.Background(), LoadedReport{ConfigSHA256: "x", ProxyVersion: "0.10.0", Switches: sw}, loadedReportTiming())
+		posted := <-got
+		if posted["outage_pause"] != "on" || len(posted) != len(sw)+1 {
+			t.Fatalf("switches %v posted for %v; want them plus outage_pause on", posted, sw)
+		}
+		if _, leaked := sw["outage_pause"]; leaked {
+			t.Fatal("the caller's switches map was changed")
+		}
 	}
 }
 

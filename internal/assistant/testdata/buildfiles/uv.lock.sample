@@ -1,0 +1,21 @@
+version = 1
+
+[[package]]
+name = "left-pad-sample"
+version = "1.0.0"
+sdist = { url = "https://files.pythonhosted.org/left-pad-sample.tar.gz", hash = "sha256:98209b11082c0e8c07d19ab9ee33e63818724cca6275f95c93c7206602c21e4d" }
+
+[[package]]
+name = "example-lib"
+version = "1.1.0"
+sdist = { url = "https://files.pythonhosted.org/example-lib.tar.gz", hash = "sha256:66365beeee8ca4476a6328e669520be8db5d7ae178dda54091e60e01dff7d91d" }
+
+[[package]]
+name = "fixture-core"
+version = "1.2.0"
+sdist = { url = "https://files.pythonhosted.org/fixture-core.tar.gz", hash = "sha256:840e4136effa716cb21168e737e05ab873b1123a91735d5a33cf69cdd85c0c7e" }
+
+[[package]]
+name = "demo-utils"
+version = "1.3.0"
+sdist = { url = "https://files.pythonhosted.org/demo-utils.tar.gz", hash = "sha256:363728c7bf0c6b890fa09a3b26f2d9c188b59314e44ad1f5b5386ad058a960bc" }

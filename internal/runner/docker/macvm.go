@@ -162,6 +162,8 @@ func (d *Driver) CoversKind(kind types.MachineKind) bool {
 		return true
 	case types.MachineMacOSVM:
 		return d.macVMConfig() != nil
+	case types.MachineWindowsVM:
+		return d.winVMConfig() != nil
 	}
 	return false
 }
@@ -473,7 +475,11 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return fail(err)
 	}
-	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, insp.proxy, false)
+	version, err := d.engineVersion(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, insp.proxy, false, version)
 	if err != nil {
 		return fail(err)
 	}

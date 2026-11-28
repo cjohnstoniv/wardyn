@@ -39,18 +39,24 @@ func sftpServerPathFor(kind types.MachineKind) string {
 // gone sandbox is named as such, ErrExecStreamUnsupported maps to the shared
 // honest message every primitive here uses, and any other launch failure is
 // read as a BYOI image without the binary and names the image contract (never
-// a hang). fenced starts it as a person's channel does, under the run's start lock
-// on the run as it stands there (execFresh); a computer folder's pass, which an
-// end runs on a run that is no longer live, is never fenced.
-func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced bool, args ...string) (*runner.ExecSession, string, error) {
+// a hang). A non-nil fence starts it as a person's channel does,
+// under the run's start lock on the run as it stands there (execFresh), refused in
+// fence's words; a computer folder's pass, which an end runs on a run that is no
+// longer live, passes nil and is never fenced.
+func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fence *liveRunWords, args ...string) (*runner.ExecSession, string, error) {
 	spec := runner.ExecSpec{Argv: append([]string{sftpServerPathFor(run.MachineKind), "-e"}, args...)}
 	var (
 		sess *runner.ExecSession
 		err  error
 	)
-	if fenced {
-		sess, err = s.execFresh(ctx, run.ID, sshLiveRunWords, spec)
+	if fence != nil {
+		sess, err = s.execFresh(ctx, run.ID, *fence, spec)
 	} else {
+		// A computer folder's pass works only in its folder (its one "-d" argument): a Kubernetes sandbox whose agent
+		// container has ended can then serve it from the pod's main container (runner.ExecSpec.AgentDir).
+		if len(args) == 2 && args[0] == "-d" {
+			spec.AgentDir = args[1]
+		}
 		sess, err = s.cfg.Runner.ExecStream(ctx, run.SandboxRef, spec)
 	}
 	if err == nil {
@@ -64,6 +70,8 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced 
 		reason = "sftp unavailable: the runner for this sandbox is offline; retry when it reconnects"
 	case errors.Is(err, runner.ErrSandboxGone):
 		reason = "sftp unavailable: the sandbox is gone"
+	case errors.Is(err, runner.ErrAgentDirUnshared):
+		reason = "sftp unavailable: the agent's container has ended, and the folder is on no volume the sandbox's main container shares with it"
 	case startCut(err):
 		reason = "sftp unavailable: " + err.Error()
 	default:
@@ -163,7 +171,8 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
+	words := sshLiveRunWords.copyOutFor(principal)
+	sess, reason, err := s.execSFTPServer(ctx, run, &words, "-d", "%d")
 	if err != nil {
 		outcome, data := "failure", map[string]any{}
 		if !sshStartCutByClient(ctx, err) {

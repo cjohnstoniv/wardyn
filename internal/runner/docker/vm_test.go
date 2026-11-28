@@ -414,7 +414,7 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 		want string
 	}{
 		"VMs off":      {off: true, want: "does not offer Linux VM"},
-		"unknown kind": {mut: func(s *runner.SandboxSpec) { s.MachineKind = "windows_vm" }, want: "unknown machine kind"},
+		"unknown kind": {mut: func(s *runner.SandboxSpec) { s.MachineKind = "plan9_vm" }, want: "unknown machine kind"},
 		"a volume drive": {mut: func(s *runner.SandboxSpec) {
 			s.Drives = []types.DriveMount{{ObjectName: "d", Backend: types.DriveBackendDockerVolume}}
 		}, want: "only a drive bound to this runner"},
@@ -1529,5 +1529,38 @@ func TestVMEndWithAFailedWipeStillAnswersAShareCleanup(t *testing.T) {
 	}
 	if !r.container(t, second).removed {
 		t.Fatal("the retry left share 1")
+	}
+}
+
+// A folder inside another writable folder gets its mountpoint made in that folder on the host, as a container's
+// runtime makes it, since the guest's root may not create there. One inside a read-only folder gets none, and a
+// link inside the outer folder cannot carry the mountpoint out of it.
+func TestVMNestedShareGetsItsMountpointOnTheHost(t *testing.T) {
+	ws, ro := t.TempDir(), t.TempDir()
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: ws, Target: "/home/agent/work"}, {Source: t.TempDir(), Target: "/home/agent/work/ref/data", ReadOnly: true},
+		{Source: ro, Target: "/workspace/ref", ReadOnly: true}, {Source: t.TempDir(), Target: "/workspace/ref/in"}}
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(ws, "ref", "data")); err != nil || !fi.IsDir() {
+		t.Fatalf("the nested folder's mountpoint in the outer folder: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(ro, "in")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a mountpoint was made in a read-only folder: %v", err)
+	}
+
+	outside, ws2 := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(ws2, "link")); err != nil {
+		t.Fatal(err)
+	}
+	spec = vmSpec()
+	spec.Mounts = []runner.Mount{{Source: ws2, Target: "/home/agent/work"}, {Source: t.TempDir(), Target: "/home/agent/work/link/in"}}
+	if _, err := newVMRig(t).d.CreateSandbox(context.Background(), spec); err == nil {
+		t.Fatal("a mountpoint behind a link out of the outer folder was accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "in")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the mountpoint was made outside the outer folder: %v", err)
 	}
 }

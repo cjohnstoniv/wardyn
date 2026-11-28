@@ -24,7 +24,7 @@ func requireManagedDevice(t *testing.T, require bool, trusts ...types.RunnerTrus
 	f.srv.cfg.Store = localPlanTestStore{f.st}
 	f.st.siteConfig = types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true, RequireManagedDevice: require}}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
-	return f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, true, trusts, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	return f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, true, types.ResolvedRunnerPool{}, trusts, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 }
 
 // The placement door: with runners.require_managed_device on, a run whose pool holds only personal-trust

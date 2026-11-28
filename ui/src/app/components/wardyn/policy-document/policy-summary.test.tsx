@@ -341,7 +341,10 @@ describe("PolicySummary host marks", () => {
   const INSPECTED_MEANING =
     "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.";
   const TUNNEL_MEANING =
-    "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.";
+    "Wardyn passes this traffic through without reading it. It sees only the host name. Wardyn leaves the TLS connection intact, but a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.";
+  const PARTLY = "Partly inspected";
+  const PARTLY_MEANING =
+    "Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread.";
   const ALLOW_ALL_LINE = "Hosts not listed as Inspected pass through unread.";
   const ALLOW_ALL_TEXT = "Allow-all egress (block-list only)";
   const spec = { allowed_domains: ["artifacts.corp.example", "pypi.org"] } as RunPolicySpec;
@@ -353,8 +356,10 @@ describe("PolicySummary host marks", () => {
     expect(SUMMARY.inspectedMeaning).toBe(INSPECTED_MEANING);
     expect(SUMMARY.tunnelOnlyMeaning).toBe(TUNNEL_MEANING);
     expect(SUMMARY.tunnelOnlyAllowAll).toBe(ALLOW_ALL_LINE);
+    expect(SUMMARY.partlyInspected).toBe(PARTLY);
+    expect(SUMMARY.partlyInspectedMeaning).toBe(PARTLY_MEANING);
     const cli = readFileSync(join(__dirname, "../../../../../../cmd/wardyn/run_policy.go"), "utf8");
-    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(cli).toContain(`"${s}"`);
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE, PARTLY, PARTLY_MEANING]) expect(cli).toContain(`"${s}"`);
   });
 
   it("puts each chip on its own host, and one meaning line per mark present", () => {
@@ -365,6 +370,49 @@ describe("PolicySummary host marks", () => {
     expect(within(row("pypi.org")).queryByText(INSPECTED)).toBeNull();
     expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
     expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("marks a wildcard Partly inspected beside a tunneled sibling, and names what is opened", () => {
+    const wild = { allowed_domains: ["*.corp.example", "build.corp.example", "artifacts.corp.example"] } as RunPolicySpec;
+    render(
+      <PolicySummary
+        spec={wild}
+        hostMarks={{
+          inspected: ["artifacts.corp.example"],
+          partial: { "*.corp.example": ["artifacts.corp.example", "git.corp.example:8443"] },
+          terminated: ["artifacts.corp.example", "git.corp.example:8443"],
+          outside: [],
+        }}
+      />,
+    );
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+    expect(within(row("*.corp.example")).queryByText(INSPECTED)).toBeNull();
+    expect(screen.getByText("Opens artifacts.corp.example, git.corp.example:8443")).toBeInTheDocument();
+    expect(within(row("build.corp.example")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    for (const s of [PARTLY_MEANING, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.getByText(s)).toBeInTheDocument();
+  });
+
+  it("a wildcard in an older server's inspected list is not claimed whole, and a host with a list of none is partial", () => {
+    const old = { allowed_domains: ["*.corp.example", "artifacts.corp.example"] } as RunPolicySpec;
+    const { unmount } = render(
+      <PolicySummary spec={old} hostMarks={{ inspected: ["*.corp.example", "artifacts.corp.example"], terminated: ["artifacts.corp.example"], outside: [] }} />,
+    );
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+    expect(within(row("*.corp.example")).queryByText(INSPECTED)).toBeNull();
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.queryByText(/^Opens /)).toBeNull(); // which destinations is not known
+    unmount();
+    render(<PolicySummary spec={old} hostMarks={{ inspected: [], partial: { "*.corp.example": [] }, terminated: [], outside: [] }} />);
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+  });
+
+  it("a host named like an inherited object key is not read as partial", () => {
+    const keys = { allowed_domains: ["constructor", "toString", "pypi.org"] } as RunPolicySpec;
+    render(<PolicySummary spec={keys} hostMarks={{ inspected: [], partial: { "pypi.org": ["pypi.org:8443"] }, terminated: [], outside: [] }} />);
+    expect(within(row("constructor")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("toString")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("pypi.org")).getByText(PARTLY)).toBeInTheDocument();
   });
 
   it("explains only the marks present", () => {
@@ -654,5 +702,65 @@ describe("PolicySummary: the Host rules row", () => {
     expect(hostRuleSetKey({ rules: [{ host: "a.example.com", effect: "allow", methods: ["POST", "GET", "GET"], paths: ["/b&c", "/a"] }, { host: "b.example.com", effect: "deny", methods: [], paths: [] }] })).toBe(
       '{"rules":[{"host":"a.example.com","methods":["GET","POST"],"paths":["/a","/b\\u0026c"],"effect":"allow"},{"host":"b.example.com","effect":"deny"}]}',
     );
+  });
+});
+
+describe("PolicySummary — folders from your computer (local_folders)", () => {
+  const WALLS = { deny_remote: true, deny_pull: true, max_push_mib: 512, max_pull_mib: 256, deny: ["*.pem", "secrets/"] };
+  const LABEL = "Folders from your computer";
+  const spec = (local_folders: unknown) =>
+    ({ workspace_mounts: [{ source: "/srv/reference", target: "/data", read_only: true }], local_folders }) as unknown as RunPolicySpec;
+  const unit = { layer: "unit", name: "Platform", locked: true };
+
+  it("lists one line per wall after Folders from the host, with sizes in the console's byte form", () => {
+    const { container } = render(<PolicySummary spec={spec(WALLS)} />);
+    const labels = within(section("Files and code")).getAllByText(/.+/, { selector: "dt" }).map((d) => d.textContent);
+    expect(labels).toEqual(["Folders from the host", LABEL]);
+    expect(row("Files and code", LABEL)).toHaveTextContent(
+      "Not allowed for a run on another machine" +
+        "Changes in the sandbox don't sync back to your computer" +
+        "Sends up to 512.0 MB per session" +
+        "Brings back up to 256.0 MB per session" +
+        "Skipped by wardyn sync and the runner" +
+        "*.pem, secrets/",
+    );
+    expect(container).not.toHaveTextContent("local_folders");
+    expect(container).not.toHaveTextContent(/never synced/i);
+    expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
+  });
+
+  it("a draft has no layers, so its lines carry no chip", () => {
+    render(<PolicySummary spec={spec(WALLS)} />);
+    expect(within(row("Files and code", LABEL)).queryByText("Locked")).toBeNull();
+    expect(within(row("Files and code", LABEL)).queryByText("Wardyn boundary")).toBeNull();
+  });
+
+  it("walls one locked unit set share one chip pair, on the first line", () => {
+    const layers = { deny_remote: unit, deny_pull: unit, max_push_mib: unit };
+    render(<PolicySummary spec={spec({ deny_remote: true, deny_pull: true, max_push_mib: 512, deny: ["*.pem", "secrets/"] })} facts={{ localFolderLayers: layers }} />);
+    const cell = row("Files and code", LABEL);
+    expect(within(cell).getAllByText("Platform walls")).toHaveLength(1);
+    expect(within(cell).getAllByText("Locked")).toHaveLength(1);
+    expect(within(cell).getByText("Platform walls").closest("li")).toHaveTextContent("Not allowed for a run on another machine");
+  });
+
+  it("each wall names its own layer, so one row can show two", () => {
+    const layers = { max_push_mib: { layer: "boundary" }, max_pull_mib: unit };
+    render(<PolicySummary spec={spec({ max_push_mib: 512, max_pull_mib: 256 })} facts={{ localFolderLayers: layers }} />);
+    const cell = row("Files and code", LABEL);
+    expect(within(cell).getByText("Wardyn boundary").closest("li")).toHaveTextContent("Sends up to 512.0 MB per session");
+    expect(within(cell).getByText("Platform walls").closest("li")).toHaveTextContent("Brings back up to 256.0 MB per session");
+    expect(within(cell).getAllByText("Locked")).toHaveLength(1);
+  });
+
+  it("a wall the run's own policy set says so", () => {
+    render(<PolicySummary spec={spec({ deny_pull: true })} facts={{ localFolderLayers: { deny_pull: { layer: "member" } } }} />);
+    expect(within(row("Files and code", LABEL)).getByText("This run's policy")).toBeInTheDocument();
+  });
+
+  it("shows no row for walls that set nothing", () => {
+    render(<PolicySummary spec={spec({})} />);
+    expect(within(section("Files and code")).queryByText(LABEL)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
   });
 });

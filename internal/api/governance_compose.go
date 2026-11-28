@@ -118,9 +118,30 @@ func (s *Server) resolveUnitByID(ctx context.Context, id uuid.UUID) (*ResolvedUn
 	return s.composeChain(chain)
 }
 
+// wallsChainRead is the chain of a run's own unit, leaf first, read as resolveUnitByID reads it and
+// refused past the configured depth, for the Walls view's re-fold. A run with no unit has none: nil, nil.
+func (s *Server) wallsChainRead(ctx context.Context, run types.AgentRun) ([]types.GovernanceUnit, error) {
+	if run.UnitID == nil {
+		return nil, nil
+	}
+	chain, err := s.cfg.Store.GetGovernanceUnitChain(ctx, *run.UnitID)
+	if err != nil {
+		return nil, fmt.Errorf("api: read the run's governance unit chain: %w", err)
+	}
+	if err := s.checkConfiguredDepth(ctx, chain); err != nil {
+		return nil, err
+	}
+	return chain, nil
+}
+
 // unitLeafName is the name of the profile id names and nothing else: no chain is composed and no
-// base is returned, so it is safe for a member surface. store.ErrNotFound when the profile is gone.
+// base is returned, so it is safe for a member surface. store.ErrNotFound when the profile is gone. It reads
+// on the transaction ctx carries (withUnitScopeTx), so a held change's apply never asks the pool.
 func (s *Server) unitLeafName(ctx context.Context, id uuid.UUID) (string, error) {
+	if q, inTx := ctx.Value(unitScopeTxKey{}).(store.Querier); inTx {
+		u, err := store.GetGovernanceUnitQ(ctx, q, id, false)
+		return u.Name, err
+	}
 	chain, err := s.cfg.Store.GetGovernanceUnitChain(ctx, id)
 	if err != nil {
 		return "", err
@@ -141,6 +162,14 @@ func (s *Server) unitOutlines(ctx context.Context) ([]types.GovernanceUnit, erro
 		out[i] = types.GovernanceUnit{ID: r.ID, Name: r.Name, Kind: r.Kind, ParentID: r.ParentID}
 	}
 	return out, nil
+}
+
+// unitRowsForWrite is every stored unit row, for the readers that stand in for a profile write without
+// making it (a held change's review and its impact's stand-in). They hand the rows to the write's own
+// build, whose walls are composed here, and hash what units state for a change's base; no reader takes
+// authority from a row it returns.
+func (s *Server) unitRowsForWrite(ctx context.Context) ([]types.GovernanceUnit, error) {
+	return s.cfg.Store.ListGovernanceUnits(ctx)
 }
 
 // unitResolution is one profile of the whole list with what composing it gave. Err is why it
@@ -248,6 +277,13 @@ func checkUnitChain(chain []types.GovernanceUnit, limit int) error {
 // composeChain composes a chain (leaf first) from the top down. Its shape is checked at the store's
 // cap; the configured depth is the caller's (checkConfiguredDepth, chainFromRows).
 func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, error) {
+	return s.composeChainObserved(chain, nil)
+}
+
+// composeChainObserved is composeChain that hands obs each step that sets the chain's walls, top down:
+// the deployment's, when the root is Default or a composed row with no base, then each unit that is not
+// a pass-through. A standalone root is no step. A nil obs is handed nothing, and no step is built for it.
+func (s *Server) composeChainObserved(chain []types.GovernanceUnit, obs wallsObserver) (*ResolvedUnit, error) {
 	if len(chain) == 0 {
 		return nil, errors.New("api: an empty governance profile chain")
 	}
@@ -283,6 +319,9 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		}
 		next = root - 1
 	}
+	if obs != nil && !out.StandaloneRoot {
+		obs(wallsRefoldDeploymentStep(base.Ceiling))
+	}
 	// The path's provenance, step by step. A default-rooted or base-less chain starts from the
 	// deployment's walls with its own size filled in: that fill-in is the deployment's (Default's
 	// root changes nothing), and each step's changes are its unit's. A standalone root's walls are
@@ -312,6 +351,9 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		}
 		last = policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[i].Name}
 		out.PathProvenance.setBy(last, before, base.Ceiling)
+		if obs != nil {
+			obs(wallsRefoldUnitStep(chain[i], before, base.Ceiling))
+		}
 	}
 	out.Ceiling, out.Limits = base.Ceiling, base.Limits
 	if out.Composed {

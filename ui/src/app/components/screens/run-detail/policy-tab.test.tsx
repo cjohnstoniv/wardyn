@@ -19,11 +19,17 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { getPolicy: (...a: unknown[]) => getPolicyMock(...a) },
 }));
 
+// The shell's setup status names the agents; null (the default) is a console that has not read it, so the chip says the id.
+const shell = vi.hoisted(() => ({ harnesses: null as { id: string; display: string }[] | null }));
+vi.mock("../../wardyn/model-access-context", () => ({
+  useShellSetupStatus: () => ({ status: shell.harnesses ? { harnesses: shell.harnesses } : null, refresh: () => undefined }),
+}));
+
 import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
-import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
+import { AS_VALUE, AS_VALUE_CAUSE, CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
 import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 
 const RUN = {
@@ -816,6 +822,38 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     expect(chips).toHaveLength(2);
   });
 
+  it("puts Agent rules: {harness} on the rows an agent's rules decided, one chip per agent", async () => {
+    const rules = policy({
+      provenance: { allowed_domains: { layer: "agent_rules", name: "claude-code" }, push_rules: { layer: "agent_rules", name: "codex-cli" }, first_use_approval: { layer: "deployment" } },
+      wall_preset: undefined,
+    });
+    show(rules);
+    await ready();
+    const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(inSummary("Agent rules: claude-code")).toHaveLength(1);
+    expect(inSummary("Agent rules: codex-cli")).toHaveLength(1);
+  });
+
+  it("names the agent by its display name when the shell's setup status has it", async () => {
+    shell.harnesses = [{ id: "claude-code", display: "Claude Code" }];
+    try {
+      show(policy({ provenance: { allowed_domains: { layer: "agent_rules", name: "claude-code" } }, wall_preset: undefined }));
+      await ready();
+      expect(screen.getAllByText("Agent rules: Claude Code").some((e) => e.closest("[data-testid=policy-summary]"))).toBe(true);
+    } finally {
+      shell.harnesses = null;
+    }
+  });
+
+  it("keeps the wall preset's chip beside an agent's on a row both decided", async () => {
+    const both = policy({ provenance: { allowed_domains: { layer: "wall_preset" }, push_rules: { layer: "agent_rules", name: "claude-code" } } });
+    show(both, { run: withPreset(sealed) });
+    await ready();
+    const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(inSummary("Wall preset: Sealed").length).toBeGreaterThan(0);
+    expect(inSummary("Agent rules: claude-code").length).toBeGreaterThan(0);
+  });
+
   it("draws no chip for a personal preset a non-owner reads, which carries its scope alone", async () => {
     show(policy({ wall_preset: { scope: "person" } }), { run: withPreset({ scope: "person" }) });
     await ready();
@@ -844,5 +882,91 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     const summary = within(screen.getByTestId("policy-summary"));
     expect(summary.queryByText("Pushes can't be stopped on this install.")).toBeNull();
     expect(summary.getByText("Every push refused")).toBeInTheDocument();
+  });
+});
+
+describe("PolicyTab: secrets that went in as their value", () => {
+  const row = (over: Partial<NonNullable<RunPolicyView["secrets_as_value"]>[number]> = {}) => ({
+    kind: "env_secret",
+    secret_name: "DEPLOY_TOKEN",
+    host: "api.example.com",
+    cause: "host_not_allowlisted",
+    reason: "the host is not an exact entry of the run's allowlist",
+    ...over,
+  });
+
+  it("draws nothing without rows", async () => {
+    show(view());
+    await ready();
+    expect(screen.queryByTestId("policy-as-value")).toBeNull();
+    expect(screen.queryByText(AS_VALUE.heading)).toBeNull();
+  });
+
+  it("shows each row with its kind, name, host and the board's sentence for the cause", async () => {
+    show(view({ secrets_as_value: [row(), row({ kind: "file_secret", secret_name: "SIGNING_CERT", host: "build.example.com", cause: "value_multiline" })] }));
+    await ready();
+    const block = within(screen.getByTestId("policy-as-value"));
+    expect(block.getByText("Went in as their value")).toBeInTheDocument();
+    expect(block.getByText(AS_VALUE.lede)).toBeInTheDocument();
+    expect(block.getByText("Environment secret")).toBeInTheDocument();
+    expect(block.getByText("File secret")).toBeInTheDocument();
+    expect(block.getByText("DEPLOY_TOKEN")).toBeInTheDocument();
+    expect(block.getByText("api.example.com")).toBeInTheDocument();
+    expect(block.getByText(AS_VALUE_CAUSE.host_not_allowlisted)).toBeInTheDocument();
+    expect(block.getByText("The value runs over more than one line, so it can't go in a request header.")).toBeInTheDocument();
+    expect(block.queryByText(AS_VALUE.toRunner)).toBeNull();
+  });
+
+  it("falls back to the row's own sentence for a row with no known cause", async () => {
+    show(view({ secrets_as_value: [row({ cause: undefined }), row({ cause: "something_new", reason: "a newer reason" })] }));
+    await ready();
+    const block = within(screen.getByTestId("policy-as-value"));
+    expect(block.getByText("the host is not an exact entry of the run's allowlist")).toBeInTheDocument();
+    expect(block.getByText("a newer reason")).toBeInTheDocument();
+  });
+
+  it("marks a value the runner got", async () => {
+    show(view({ secrets_as_value: [row({ delivery: "runner_resident", cause: "grant_unrecorded" })] }));
+    await ready();
+    expect(within(screen.getByTestId("policy-as-value")).getByText("Sent to the runner")).toBeInTheDocument();
+  });
+
+  it("the hidden name renders the moved HiddenChip, never inline text", async () => {
+    show(view({ secrets_as_value: [row({ secret_name: undefined })] }));
+    await ready();
+    const block = within(screen.getByTestId("policy-as-value"));
+    const chip = block.getByRole("note", { name: "Hidden. Only admins can see this." });
+    expect(chip).toHaveAttribute("tabindex", "0");
+    expect(chip).toHaveTextContent("Hidden");
+    expect(block.queryByText("DEPLOY_TOKEN")).toBeNull();
+  });
+
+  it('shows "Showing the first 50." when truncated', async () => {
+    show(view({ secrets_as_value: [row()], secrets_as_value_truncated: true }));
+    await ready();
+    expect(within(screen.getByTestId("policy-as-value")).getByText("Showing the first 50.")).toBeInTheDocument();
+  });
+
+  it('does not show "Showing the first 50." when the list is whole', async () => {
+    show(view({ secrets_as_value: [row()] }));
+    await ready();
+    expect(screen.queryByText("Showing the first 50.")).toBeNull();
+  });
+});
+
+describe("PolicyTab — folders from your computer", () => {
+  it("gives the summary each wall's layer from the run's sync view", async () => {
+    const run = { ...RUN, sync: { open: [], max_pull_bytes: 256 * 1024 * 1024, wall_layers: { max_pull_mib: { layer: "boundary" } } } } as RunDetail;
+    show(view({ spec: { ...SPEC, local_folders: { max_pull_mib: 256 } } }), { run });
+    const summary = within(await screen.findByTestId("policy-summary"));
+    expect(summary.getByText("Folders from your computer")).toBeInTheDocument();
+    expect(summary.getByText("Wardyn boundary").closest("li")).toHaveTextContent("Brings back up to 256.0 MB per session");
+  });
+
+  it("a run whose sync view names no layer shows the walls with no chip", async () => {
+    show(view({ spec: { ...SPEC, local_folders: { deny_pull: true } } }));
+    const summary = within(await screen.findByTestId("policy-summary"));
+    expect(summary.getByText("Changes in the sandbox don't sync back to your computer")).toBeInTheDocument();
+    expect(summary.queryByText("Wardyn boundary")).toBeNull();
   });
 });

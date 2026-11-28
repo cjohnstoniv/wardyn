@@ -6,6 +6,7 @@
 package k8s
 
 import (
+	"errors"
 	"maps"
 	"os"
 	"slices"
@@ -178,5 +179,41 @@ func TestControlPlanePeerFromEnv(t *testing.T) {
 	}
 	if peer, err := read("wardyn-system", "a="+strings.Repeat("x", 63)); err != nil || peer == nil {
 		t.Errorf("a 63 character value: peer %+v, err %v, want it accepted", peer, err)
+	}
+}
+
+// TestSPIFFEMountFromEnv: both settings give the mount, neither gives none, and one alone refuses boot.
+//
+// COUNTERFACTUAL: drop the both-or-neither check and the two "alone" cases go red.
+func TestSPIFFEMountFromEnv(t *testing.T) {
+	read := func(driver, account string) (SPIFFEMount, error) {
+		t.Setenv("WARDYN_K8S_SPIFFE_CSI_DRIVER", driver)
+		t.Setenv("WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT", account)
+		return spiffeMountFromEnv()
+	}
+	if m, err := read("csi.spiffe.io", "wardyn-proxy"); err != nil || m != (SPIFFEMount{"csi.spiffe.io", "wardyn-proxy"}) {
+		t.Errorf("both set: %+v, %v", m, err)
+	}
+	if m, err := read("", ""); err != nil || m.enabled() {
+		t.Errorf("neither set: %+v, %v, want the zero mount", m, err)
+	}
+	for name, tc := range map[string][2]string{"driver alone": {"csi.spiffe.io", ""}, "account alone": {"", "wardyn-proxy"}} {
+		if m, err := read(tc[0], tc[1]); err == nil || m.enabled() || !strings.Contains(err.Error(), "set together or not at all") {
+			t.Errorf("%s: %+v, %v, want a refusal", name, m, err)
+		}
+	}
+}
+
+// TestNewRunner_RefusesSPIFFEMount: a remote runner's proxies keep the bearer token only, so a runner refuses the
+// SPIRE mount, whole or half set, before its own fields are applied.
+func TestNewRunner_RefusesSPIFFEMount(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "")
+	for _, tc := range [][2]string{{"csi.spiffe.io", "wardyn-proxy"}, {"csi.spiffe.io", ""}} {
+		t.Setenv("WARDYN_K8S_SPIFFE_CSI_DRIVER", tc[0])
+		t.Setenv("WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT", tc[1])
+		applied := false
+		if _, err := NewRunner(substrate.Deps{}, func(*Config) { applied = true }); !errors.Is(err, errSPIFFERunner) || applied {
+			t.Errorf("%v: NewRunner = %v (applied %v), want errSPIFFERunner before apply", tc, err, applied)
+		}
 	}
 }

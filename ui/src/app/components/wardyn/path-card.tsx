@@ -58,7 +58,7 @@ export function PathCard({
         </span>
         {comingSoon ? <Chip>{COMING_SOON}</Chip> : badge && <Chip>{badge}</Chip>}
       </span>
-      <span className="mt-2.5 min-h-[65px] text-[13px] text-muted-foreground max-[760px]:min-h-0">{description}</span>
+      <span className="mt-2.5 min-h-[65px] text-body text-muted-foreground max-[760px]:min-h-0">{description}</span>
       {foot && <span className={cn("mt-auto text-xs", onSelect && !comingSoon ? "font-semibold text-primary" : "text-muted-foreground")}>{foot}</span>}
     </>
   );

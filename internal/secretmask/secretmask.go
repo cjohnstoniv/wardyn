@@ -70,10 +70,9 @@ type Registry struct {
 	// row holding it is swept or dropped.
 	rows map[uuid.UUID]globalRow
 
-	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
-	// is not a change). It is the cache key below: a Masker built at generation
-	// g stays valid until something is registered or evicted.
-	gen uint64
+	// generations is the cache key below, kept per run so one run's change leaves
+	// every other run's Maskers alone (run_generation.go).
+	generations
 	// cached holds the derived Maskers per run, keyed by generation: building
 	// one clones and sorts the whole corpus, and both masking hot-path
 	// consumers do that per event, so this avoids re-deriving an unchanged set
@@ -186,7 +185,7 @@ func (r *Registry) AddLocal(runID uuid.UUID, value []byte) bool {
 		return false
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
-	r.gen++
+	r.bumpRun(runID)
 	return true
 }
 
@@ -453,7 +452,7 @@ func (r *Registry) reflattenLocked() {
 	}
 	r.globals = out
 	r.shared = nil
-	r.gen++
+	r.bumpGlobal()
 }
 
 // Snapshot returns the combined set of secrets for runID (per-run + global).
@@ -479,7 +478,7 @@ func (r *Registry) Masker(runID uuid.UUID) Masker {
 		return Masker{}
 	}
 	r.mu.RLock()
-	if c := r.cached[runID]; c != nil && c.gen == r.gen {
+	if c := r.cached[runID]; c != nil && c.gen == r.runGen(runID) {
 		m := c.plain
 		r.mu.RUnlock()
 		return m
@@ -498,7 +497,7 @@ func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
 		return Masker{}
 	}
 	r.mu.RLock()
-	if c := r.cached[runID]; c != nil && c.gen == r.gen && c.haveVariant {
+	if c := r.cached[runID]; c != nil && c.gen == r.runGen(runID) && c.haveVariant {
 		m := c.variant
 		r.mu.RUnlock()
 		return m
@@ -514,9 +513,9 @@ func (r *Registry) rebuild(runID uuid.UUID, withVariant bool) *runMaskers {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c := r.cached[runID]
-	if c == nil || c.gen != r.gen {
+	if c == nil || c.gen != r.runGen(runID) {
 		g := r.sharedLocked()
-		c = &runMaskers{gen: r.gen, plain: newMaskerOver(r.perRun[runID], g.plain, g.plainSet)}
+		c = &runMaskers{gen: r.runGen(runID), plain: newMaskerOver(r.perRun[runID], g.plain, g.plainSet)}
 		if r.cached == nil {
 			r.cached = map[uuid.UUID]*runMaskers{}
 		}
@@ -604,11 +603,10 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	_, hadSecrets := r.perRun[runID]
 	delete(r.perRun, runID)
 	delete(r.cached, runID)
-	// The bump is CONDITIONAL: gen keys every run's cached Masker, so a bump on
-	// each eviction would invalidate every OTHER run's. An eviction that
-	// deleted no per-run secrets changed nothing any other Masker was built from.
+	// An eviction that deleted no per-run secrets changed nothing a Masker was
+	// built from; one that did moves this run's generation (bumpEvicted).
 	if hadSecrets {
-		r.gen++
+		r.bumpEvicted(runID)
 	}
 	r.mu.Unlock()
 }

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { MEMBER_DRIVES } from "../../../../wardyn/copy/member-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { filesPreflight, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
@@ -94,5 +95,29 @@ describe("where a shared drive mounts from (M10)", () => {
     await openShared();
     expect(await within(dialog()).findByRole("radio", { name: /^Finance archive/ })).toBeDisabled();
     expect(within(dialog()).getByText(DRIVE_MEMBER.NR_ORG_RUNNERS_ONLY("Finance archive"))).toBeInTheDocument();
+  });
+});
+
+describe("a drive whose delete has not finished (#4061)", () => {
+  const OWNED: MeDrive = {
+    id: "55555555-5555-4555-8555-555555555555", name: "Case notes", section: "user", source: "personal", backend: "docker_volume",
+    target: "/home/agent/drives/case-notes", writable: true, enforcement: "none", legacy: false, owned: true, team: false,
+  };
+
+  it("an owned drive whose delete has not finished shows Deleting and Delete again", async () => {
+    catalogue = { pool_checked: true, drives: [
+      { ...OWNED, unavailable_reason: "deleting" },
+      { ...OWNED, id: "66666666-6666-4666-8666-666666666666", name: "Plain notes", target: "/home/agent/drives/plain-notes" },
+    ] };
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
+    await userEvent.click(within(dialog()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    expect(await within(dialog()).findByRole("radio", { name: /^Case notes/ })).toBeDisabled();
+    expect(within(dialog()).getByRole("radio", { name: /^Plain notes/ })).toBeEnabled();
+    expect(within(dialog()).getByText(DRIVE_MEMBER.NR_DELETING)).toBeInTheDocument();
+    expect(within(dialog()).getByText(MEMBER_DRIVES.STATE_DELETING).className).toContain("bg-warning-subtle");
+    const again = within(dialog()).getByRole("button", { name: NR_FILES.DELETE_DRIVE_AGAIN });
+    expect(again).toHaveAccessibleDescription("Case notes");
+    expect(within(dialog()).getAllByRole("button", { name: NR_FILES.DELETE_DRIVE })).toHaveLength(1);
   });
 });

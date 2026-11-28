@@ -1,15 +1,15 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package identity defines the per-run workload identity contract. One provider exists
-// today: embedded, a SPIFFE-shaped JWT issuer (sub-ms mint, denylist+TTL revocation,
+// Package identity defines the per-run workload identity contract. Two providers exist:
+// embedded (the default), a SPIFFE-shaped JWT issuer (sub-ms mint, denylist+TTL revocation,
 // runner-asserted attestation, a strict SPIFFE subset via go-spiffe — no custom attestation
-// or federation). spire (real SPIRE, per-run child entries, node attestation) is planned
-// for v0.5, not yet implemented.
+// or federation); and spire (experimental, off by default, Kubernetes only), which has a
+// SPIRE Server sign each run token as a JWT-SVID and registers one SPIRE entry per run so
+// only that run's proxy is attested for its X.509-SVID.
 //
-// INVARIANT (Confinement gating): cloud STS federation and hostile multi-tenant workloads
-// hard-require the (not-yet-built) spire provider; embedded must refuse to mint identities
-// whose grants include types.GrantCloudSTS.
+// INVARIANT (Confinement gating): cloud STS federation is not built; every provider must
+// refuse to mint identities whose grants include types.GrantCloudSTS.
 package identity
 
 import (
@@ -40,6 +40,11 @@ type Claims struct {
 	Audience string
 	IssuedAt time.Time
 	Expiry   time.Time
+	// Workload is the workload the run was launched for, zero for an ad-hoc run. Every provider derives
+	// it from the token's verified run path (ParseRunPath), never from a stored or presented field, so
+	// nothing but the signed ID can set it. A rule that tells workloads apart compares it whole, as
+	// Workload.String's "<owner>/<name>", never a full SPIFFE ID, which is per run.
+	Workload Workload
 }
 
 // ExpiredTokenError is the typed refusal for a presented token whose ONLY defect is

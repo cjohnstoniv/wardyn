@@ -1,0 +1,39 @@
+#!/bin/sh
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# wardyn-winvm-disk: the Windows VM sandbox steps that run in the QEMU image, each in a one-shot
+# container wardyn-runnerd starts unprivileged, with no network and /out (or nothing) mounted.
+#   info        /out/rootfs.tar (the registered containerDisk image, exported by wardyn-runnerd) must
+#               hold exactly one /disk/*.qcow2. Its content is copied to /out/src.qcow2 (as a regular
+#               file, whatever the tar entry is) and described in /out/info.json by qemu-img info,
+#               which does not open a backing file. wardyn-runnerd refuses a disk that names a
+#               backing file or an external data file from that description.
+#   convert     /out/src.qcow2 becomes /out/disk.qcow2, a standalone copy.
+#   probe C V   the UEFI firmware files C and V are here, /dev/kvm is here, and swtpm runs.
+set -eu
+case "${1:-}" in
+info)
+	cd /out
+	[ -f rootfs.tar ] || { echo "wardyn-winvm-disk: no /out/rootfs.tar" >&2; exit 2; }
+	d=$(tar -tf rootfs.tar | grep -E '^(\./)?disk/[^/]+\.qcow2$' || true)
+	[ "$(printf '%s\n' "$d" | grep -c .)" = 1 ] || { echo "wardyn-winvm-disk: the image must hold exactly one /disk/*.qcow2" >&2; exit 3; }
+	tar -xOf rootfs.tar "$d" > src.qcow2
+	rm rootfs.tar
+	qemu-img info --output=json -f qcow2 src.qcow2 > info.json
+	;;
+convert)
+	cd /out
+	qemu-img convert -f qcow2 -O qcow2 src.qcow2 disk.qcow2
+	rm src.qcow2 info.json
+	;;
+probe)
+	[ -r "${2:-}" ] && [ -r "${3:-}" ] || { echo "wardyn-winvm-disk: no UEFI firmware at ${2:-} and ${3:-}" >&2; exit 4; }
+	[ -c /dev/kvm ] || { echo "wardyn-winvm-disk: no /dev/kvm in the container" >&2; exit 4; }
+	swtpm --version
+	;;
+*)
+	echo "usage: wardyn-winvm-disk info | convert | probe CODE VARS" >&2
+	exit 2
+	;;
+esac

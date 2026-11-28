@@ -47,9 +47,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// defaultMaxTTL caps minted credential lifetime (GrantSpec.TTLSeconds may
+// DefaultMaxTTL caps minted credential lifetime (GrantSpec.TTLSeconds may
 // narrow but never widen). Mirrors types.GrantSpec documentation: max 1h.
-const defaultMaxTTL = time.Hour
+const DefaultMaxTTL = time.Hour
+
+const defaultMaxTTL = DefaultMaxTTL // the name this package's own code uses
 
 // branchNamespaceFormat is the push-branch confinement convention recorded in
 // minted github_token metadata.
@@ -174,6 +176,9 @@ type Minted struct {
 	// OwnerOnly carries an api_key grant's owner_only to the injection sink,
 	// which reads the value itself.
 	OwnerOnly bool `json:"-"`
+	// seal is a github_token's sealed copy, prepared before the mint transaction and written in it (TokenSeal);
+	// commitMint clears it before returning. JSON never carries it.
+	seal *preparedSeal
 }
 
 // GitHubMinter mints a short-lived, down-scoped GitHub App installation token.
@@ -311,6 +316,10 @@ type Broker struct {
 	// trustDomain is the SPIFFE trust domain the run's identity is issued under, for
 	// the actor a synthesized claim set or a revoke row names.
 	trustDomain string
+	// tokenSeal, when non-nil, keeps each github_token's value sealed so the hand-back worker
+	// (RunGitHubTokenRevokes) can return it to GitHub after RevokeRun queues it; revokeKick wakes that worker.
+	tokenSeal  *TokenSeal
+	revokeKick chan struct{}
 }
 
 // envRequireRefRuleset opts IN to refusing a github_token mint whose repo is not
@@ -374,6 +383,25 @@ func (b *Broker) WithMaskRegistry(reg *secretmask.Registry) *Broker {
 func (b *Broker) WithSIEM(sink audit.Sink) *Broker {
 	b.siem = sink
 	return b
+}
+
+// WithTokenSeal attaches the store each github_token is kept sealed in, so RevokeRun can queue it for hand-back to
+// GitHub. A nil seal is accepted (no-op): tokens then expire on GitHub's own TTL. Call before the Broker is used.
+func (b *Broker) WithTokenSeal(s *TokenSeal) *Broker {
+	if s != nil {
+		b.tokenSeal, b.revokeKick = s, make(chan struct{}, 1)
+	}
+	return b
+}
+
+// DeleteOwnerTokenSeals deletes every sealed github_token under owner, a run's masking-manifest owner, and answers how
+// many: a person's erasure. A queued token deleted here is not handed back; it expires on GitHub's TTL. 0, nil with no
+// seal.
+func (b *Broker) DeleteOwnerTokenSeals(ctx context.Context, owner string) (int, error) {
+	if b.tokenSeal == nil {
+		return 0, nil
+	}
+	return b.tokenSeal.DeleteOwner(ctx, owner)
 }
 
 // grantApprovalRow is the joined grant+approval state read under FOR UPDATE.

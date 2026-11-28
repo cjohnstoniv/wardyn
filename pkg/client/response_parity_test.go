@@ -118,6 +118,7 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		{"RunPolicySource", "internal/api/run_policy_view.go", "runPolicySource", client.RunPolicySource{}},
 		{"RunPolicyChange", "internal/api/run_policy_view.go", "runPolicyChange", client.RunPolicyChange{}},
 		{"StoredPolicyNow", "internal/api/run_policy_view.go", "storedPolicyNow", client.StoredPolicyNow{}},
+		{"RunPolicySecretAsValue", "internal/api/run_policy_as_value.go", "runPolicySecretAsValue", client.RunPolicySecretAsValue{}},
 		{"ProvenanceEntry", "internal/api/run_fold_provenance.go", "provenanceRow", client.ProvenanceEntry{}},
 		{"ProvenanceSource", "internal/api/run_fold_provenance.go", "provSource", client.ProvenanceSource{}},
 		{"ComponentFact", "internal/api/components_facts.go", "componentFact", client.ComponentFact{}},

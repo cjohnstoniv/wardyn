@@ -37,10 +37,14 @@ import {
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
 import { cn } from "../../ui/utils";
+import { AGENT_RULES } from "../../wardyn/copy/agent-rules";
 import { WALL_PRESETS } from "../../wardyn/copy/wall-presets";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { audienceOf } from "../../../lib/wall-preset-words";
 import { WallPresetRunLine } from "./wall-preset-run-lines";
-import { CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
+import { YOUR_WALLS } from "../../wardyn/copy/personal-walls";
+import { HiddenChip } from "../../wardyn/policy-document/hidden-chip";
+import { AS_VALUE, AS_VALUE_CAUSE, CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
 
@@ -119,11 +123,15 @@ export function PolicyTab({ run }: { run: RunDetail }) {
 
 // The wall preset's notes on the summary: its chip on the rows it decided (the provenance's wall_preset layer), none
 // for a personal preset a non-owner reads (no name), and the unstoppable-push line when the server says so.
-function presetNotes(view: RunPolicyView): PolicyPresetNotes | undefined {
+function presetNotes(view: RunPolicyView, harnessNames: ReadonlyMap<string, string>): PolicyPresetNotes | undefined {
   const name = view.wall_preset?.name;
   const fields = new Set(Object.entries(view.provenance ?? {}).filter(([, p]) => p.layer === "wall_preset").map(([field]) => field));
   const chip = name && fields.size > 0 ? { label: WALL_PRESETS.CHIP(name), fields } : undefined;
-  return chip || view.pushes_unstoppable ? { chip, pushesUnstoppable: view.pushes_unstoppable } : undefined;
+  // One chip per agent whose rules decided a field (provenance layer agent_rules, named by the harness id).
+  const byAgent = new Map<string, Set<string>>();
+  for (const [field, p] of Object.entries(view.provenance ?? {})) if (p.layer === "agent_rules" && p.name) byAgent.set(p.name, (byAgent.get(p.name) ?? new Set<string>()).add(field));
+  const agentRulesChips = [...byAgent].map(([harness, f]) => ({ label: AGENT_RULES.RUN_CHIP(harnessNames.get(harness) ?? harness), fields: f }));
+  return chip || agentRulesChips.length > 0 || view.pushes_unstoppable ? { chip, agentRulesChips, pushesUnstoppable: view.pushes_unstoppable } : undefined;
 }
 
 function sourceText(s: RunPolicySource): string {
@@ -165,6 +173,8 @@ function RecordedPolicy({
   const changes = React.useMemo(() => view.changes.filter((c) => c.cause !== "wall_preset" || !!presetName), [view.changes, presetName]);
   const groups = groupChanges(changes, ownRun, run.created_by, spec.first_use_hold_seconds, presetName);
   const marks = React.useMemo(() => changeMarks(changes), [changes]);
+  const { status: setup } = useShellSetupStatus();
+  const harnessNames = React.useMemo(() => new Map((setup?.harnesses ?? []).map((h) => [h.id, h.display])), [setup]);
   return (
     <>
       {banner && (
@@ -207,6 +217,27 @@ function RecordedPolicy({
       ))}
       {!view.complete && <p className="mt-3 text-body text-muted-foreground">{POLICY_TAB.incomplete}</p>}
 
+      {view.secrets_as_value && view.secrets_as_value.length > 0 && (
+        <section data-testid="policy-as-value" className="mt-5 min-w-0 rounded-lg border border-border px-3 py-2">
+          <h3 className="text-body font-semibold">{AS_VALUE.heading}</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">{AS_VALUE.lede}</p>
+          <ul className="mt-1">
+            {view.secrets_as_value.map((s, i) => (
+              <li key={i} className="min-w-0 border-t border-border py-1.5 text-xs first:border-t-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span className="text-muted-foreground">{YOUR_WALLS.KINDS[s.kind] ?? s.kind}</span>
+                  {s.secret_name ? <span className="break-all font-mono">{s.secret_name}</span> : <HiddenChip />}
+                  <span className="break-all font-mono text-muted-foreground">{s.host}</span>
+                  {s.delivery === "runner_resident" && <Chip tone="info">{AS_VALUE.toRunner}</Chip>}
+                </div>
+                <p className="mt-0.5">{(s.cause && AS_VALUE_CAUSE[s.cause]) || s.reason}</p>
+              </li>
+            ))}
+          </ul>
+          {view.secrets_as_value_truncated && <p className="mt-1 text-xs text-muted-foreground">{AS_VALUE.asValueTruncated}</p>}
+        </section>
+      )}
+
       {/* The shared read-only document. This run's own facts ride with it: the
           barrier it actually used, what launch added or removed, and whether
           this reader was shown everything. */}
@@ -217,9 +248,9 @@ function RecordedPolicy({
         onViewChange={onMode}
         redacted={view.redacted}
         marks={marks}
-        facts={{ usedClass: run.confinement_class, inspectionLeftTo: view.inspection_left_to }}
+        facts={{ usedClass: run.confinement_class, inspectionLeftTo: view.inspection_left_to, localFolderLayers: run.sync?.wall_layers }}
         hostMarks={view.host_marks}
-        presetNotes={presetNotes(view)}
+        presetNotes={presetNotes(view, harnessNames)}
         headingLevel={4}
       />
       <p className="mt-4 max-w-[92ch] border-t border-dashed border-border pt-2.5 text-xs text-muted-foreground">

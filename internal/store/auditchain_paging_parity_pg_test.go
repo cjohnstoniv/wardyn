@@ -29,7 +29,8 @@ import (
 
 // fullScanOracle is the pre-paging implementation, verbatim in shape: ONE
 // statement, no LIMIT, no cursor, walked to the end. It is the reference the
-// paged sweep must agree with.
+// paged sweep must agree with. It hashes each row by its own format and salt
+// (0410), as the sweep does.
 func fullScanOracle(t *testing.T, pool *pgxpool.Pool) store.AuditChainStatus {
 	t.Helper()
 	const q = `
@@ -38,7 +39,7 @@ func fullScanOracle(t *testing.T, pool *pgxpool.Pool) store.AuditChainStatus {
 		       prev_hash IS NULL,
 		       COALESCE(prev_hash,''),
 		       COALESCE(row_hash,''),
-		       COALESCE(audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
+		       COALESCE(audit_row_hash_any(hash_format, hash_salt, prev_hash, id, time, run_id, actor_type, actor,
 		                               action, target, outcome, source_ip, data), '')
 		FROM audit_events
 		ORDER BY seq`

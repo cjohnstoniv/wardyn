@@ -42,7 +42,7 @@ describe("template field registry", () => {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
     expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
-    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(26);
+    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(28);
   });
 
   it("every carried field names its part and omission meaning; every excluded one its reason", () => {
@@ -94,6 +94,7 @@ describe("template field registry", () => {
       "start_time_zone",
       "title",
       "wall_preset",
+      "windows_image",
     ]);
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);

@@ -143,9 +143,12 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// reviveFromRequest applies the local-mode rule, then revives run. startAgent
+// reviveFromRequest refuses a Windows VM run and applies the local-mode rule, then revives run. startAgent
 // allows a run lost to a reboot, whose agent must be started again. edits are an egress edit's (run_egress_edit.go).
 func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAgent bool, edits ...liveEgressEdit) (reviveResult, *reviveError) {
+	if rf := windowsVMDoorRefusal(run, "revive"); rf != nil {
+		return reviveResult{}, reviveRefused(rf.status, rf.body.Reason, rf.body.Error)
+	}
 	actorType, actor := actorFromRequest(r)
 	// Local mode mints for the host operator (runIdentitySubject), not for the
 	// run's owner, so only the principal that created the run may revive it.
@@ -262,10 +265,13 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := s.reviveLocalMCPRefusal(ctx, run, rebooted, actorType, actor); rerr != nil {
+	if rerr := s.reviveMCPSandboxRefusal(ctx, run, rebooted, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
+		return reviveResult{}, rerr
+	}
+	if rerr := s.reviveLocalContained(ctx, run); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveRecoverContainment(ctx, run, actorType, actor); rerr != nil {
@@ -278,6 +284,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	cfg.RunToken = id.Token
 	freshJTI := id.JTI
+	s.recordRevivedSecretFacts(ctx, run, cfg, freshJTI)
 	cfgJSON, rerr := encodeRevivedConfig(ctx, cfg) // loaded as the new proxy will load it, before the claim
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -467,6 +474,24 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // session applies it, and refuses this revive; the next revive, once the runner applied it, leases the run.
 // A run held any other way (a kill, a quarantine, a hold pending a node record) is not recovered, and the
 // revive goes on to the lease refusal it met before.
+// reviveLocalContained refuses a run a local operator contained on its runner (wardyn-runnerd contain): the runner
+// refuses recover_containment for it, so no recovery is queued. A read error answers nil; the run is still refused
+// further on, since RunHeldContainedOnRunner includes the latch and the runner drops its leases.
+func (s *Server) reviveLocalContained(ctx context.Context, run types.AgentRun) *reviveError {
+	if run.RunnerID == nil {
+		return nil
+	}
+	st, err := s.runnerExecutionStore()
+	if err != nil {
+		return nil
+	}
+	if held, err := st.RunLocallyContained(ctx, run.ID); err != nil || !held {
+		return nil
+	}
+	return reviveRefused(http.StatusConflict, reasonReviveLocalContained,
+		"A local operator contained this run on its runner. End the run and start a new one.")
+}
+
 func (s *Server) reviveRecoverContainment(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) *reviveError {
 	if run.RunnerID == nil {
 		return nil
@@ -545,7 +570,7 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
 		return nil, nil, rerr
 	}
-	return cfg, old, s.reviveModelListRunnerRefusal(run, cfg)
+	return cfg, old, s.reviveProxySettingRunnerRefusal(run, cfg)
 }
 
 // rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.
@@ -690,40 +715,6 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 	return nil
 }
 
-// reviveLocalMCPRefusal refuses a rebooted revive whose frozen components hold an MCP server
-// that runs in the sandbox while WARDYN_MCP_LOCAL_SERVERS is off. Starting the agent again
-// admits the run anew, as a queued run's admission does, so it meets the switch the same way:
-// componentDefinitionProblem's reason and sentence, never a dropped server. A revive that
-// leaves the agent running leaves its server running too, until the run ends. An erased
-// row keeps only the harnesses its MCP server was turned on for, so the server it held may
-// be a local one: with the switch off it is refused too, in the org form, since the
-// person's definition is gone.
-func (s *Server) reviveLocalMCPRefusal(ctx context.Context, run types.AgentRun, rebooted bool, actorType types.ActorType, actor string) *reviveError {
-	if !rebooted {
-		return nil
-	}
-	comps, err := s.runComponentSnapshot(ctx, run.ID)
-	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the run's components", err))
-	}
-	for _, rc := range comps {
-		problem := mcpLocalOffProblem(rc.Definition)
-		erasedMCP := rc.Erased && len(rc.MCPHarnesses) > 0 && !envEnabled(envMCPLocalServers)
-		if problem == "" && !erasedMCP {
-			continue
-		}
-		snap := rc
-		if rc.Erased {
-			snap.SelfDefined = false
-		}
-		ref := componentRefused(attachedComponent{snapshot: snap}, rc.Ordinal, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.").refusal
-		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
-			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonComponentDefinitionInvalid})))
-		return reviveRefused(ref.status, ref.body.Reason, ref.body.Error)
-	}
-	return nil
-}
-
 // reviveEligible: a RUNNING run with a sandbox, inside its lease, that is live,
 // lost to an outage, or (startAgent) lost to a reboot, or an interactive run
 // its own end stopped, extended since and still inside its files grace (#1061).
@@ -758,7 +749,7 @@ func (s *Server) reviveEligible(ctx context.Context, run types.AgentRun, startAg
 	default:
 		return reviveRefused(http.StatusConflict, reasonReviveUnknownLostReason, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
-	return nil
+	return s.reviveStrictSpent(ctx, run)
 }
 
 // markReviving takes run's reviving mark. It refuses a second revive of the

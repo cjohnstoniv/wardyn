@@ -10,7 +10,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { RunLayoutWidget } from "../../../lib/api/run-layout";
 import { useRunLayout } from "./use-run-layout";
 import { setExpectedPrincipal } from "../../../lib/api/core";
-import { DESKTOP_REMOVED, SERVICE_REMOVED } from "./widget-registry";
+import { DESKTOP_REMOVED, PREVIEWS_REMOVED, SERVICE_REMOVED } from "./widget-registry";
 
 const getLayout = vi.fn();
 const putLayout = vi.fn();
@@ -45,7 +45,8 @@ describe("useRunLayout: the Service panel on a service run", () => {
 
   it("does not add it back to a layout saved with it removed, and keeps the marker out of the layout", async () => {
     const { result } = await loaded([...SAVED, SERVICE_REMOVED], true);
-    expect(ids(result.current.layout)).toEqual(["terminal", "egress"]);
+    // A live layout saved before the Preview URLs tile gets that tile, which is not what this test asks about.
+    expect(ids(result.current.layout)).toEqual(["terminal", "egress", "previews"]);
   });
 
   it("saves a removal as the marker, and the next load keeps the panel out", async () => {
@@ -258,7 +259,8 @@ describe("useRunLayout: write ordering and retry", () => {
     });
     await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
     // Only the newest waiting body goes out after the slow one, so the stored row ends as the last action left it.
-    expect(putLayout.mock.calls.map((c) => c[1])).toEqual([A, []]);
+    // A live arrangement without the Preview URLs tile is stored with that tile's removal marker.
+    expect(putLayout.mock.calls.map((c) => c[1])).toEqual([[...A, PREVIEWS_REMOVED], []]);
   });
 
   it("a layout queued behind a slow write still goes out as the person who arranged it", async () => {

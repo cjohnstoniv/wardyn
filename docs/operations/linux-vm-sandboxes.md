@@ -15,6 +15,8 @@
 | The boot | Direct kernel boot of the image's own kernel and initrd, with `noresume` |
 | The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000). It accepts the run's setup once per boot, even after it restarts |
 | Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each. No other host folder is shared, and a guest write lands as the runner's user |
+| Guest root in shared folders | Cannot create a file, folder or link in a shared folder, nor make root a file's owner |
+| Nested shared folders | A folder whose path is inside another writable folder gets its mount folder made in that folder on the host, as in a container |
 | Bound folders | A workspace folder bound to this runner, inside its `--drive-root` ([more](hybrid-laptops.md#a-workspace-folder-on-your-runner)) |
 | Drives | An admin or team drive bound to this runner, shared the way a folder is ([Drives](#drives)) |
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
@@ -32,7 +34,7 @@
 - On a remote runner with `--recording-store off`, the gateway records the desktop at Screen and actions while someone watches. A sign-in pause keeps no frames ([Pause the agent to sign in](#pause-the-agent-to-sign-in)).
 - A disk size or process limit is not enforced. A policy or governance profile that sets `disk_mib` or `pids_limit` is refused for a Linux VM run. A disk size that is only requested, or filled in as a default, runs and is shown as not enforced.
 - Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
-- Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.
+- A Windows VM is a desktop-only guest on the same QEMU image, with a second switch and a licence pool ([Windows VM sandboxes](windows-vm-sandboxes.md)).
 - **A Linux desktop VM is your own image for now.** The reference guest image has no desktop ([`deploy/images/vm-linux/Dockerfile`](../../deploy/images/vm-linux/Dockerfile)). To get a desktop, build an image that meets the [guest image contract](#the-guest-image-contract) and adds one, and name it with `--image`. Wardyn does not ship an official Linux desktop VM image yet.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
@@ -160,6 +162,23 @@
 - QEMU does not lock guest memory (`mem-lock`): the runner starts it unprivileged, with no locked-memory allowance to pin a whole guest.
 - So the runner host may page guest memory, the sign-in store with it, to its own swap or hibernation file. On a personal runner that is the developer's own disk.
 - To keep guest memory off a host's disk, run VMs on a host with no swap and no hibernation.
+
+## A window on your own computer
+
+- A person can open their own Linux VM run in a native window on the computer its runner is on, with `wardyn window <run>`. It is off by default.
+- An admin turns it on with `features.local_window.enabled` in site config. A runner that is already connected picks the change up when it next connects; until then, `wardyn window` says the runner handed out no window nonce.
+- The window needs a Linux computer with an X11 display. It has not yet been tried under WSL2.
+- Update the runner on that computer and the `wardyn` CLI to 0.11.0 first. An older runner, or one started with `--local-attach=off`, cannot open the window.
+- Only the run's creator can open it, on a runner they registered as their own, and not through a delegated token.
+- A background-only run, a run recorded at Screen and actions, a paused run and a run still being prepared are each refused with their reason.
+- The window has no clipboard: cut text is dropped both ways.
+- While the window is open, the run's browser desktop only watches. A browser desktop with control is closed first, and if it does not close within 5 seconds the window is refused.
+- An open window keeps the run from idling. A pause closes it at the next re-check, within 30 seconds, and so does turning the switch off.
+- Opening writes `takeover.begin` and closing writes `takeover.close`, both with `surface` `local_window` ([audit actions](../AUDIT-ACTIONS.md)).
+
+| Command | What it does |
+|---|---|
+| `wardyn window <run>` | On a Linux VM run, opens the run's display in a window on this computer, through the runner's local socket. It prints "The window is open on `<runner>`." and, when the window ends, why |
 
 ## On a Kubernetes runner
 

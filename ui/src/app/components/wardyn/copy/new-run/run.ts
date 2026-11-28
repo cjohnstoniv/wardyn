@@ -51,6 +51,9 @@ export const NR_RUN = {
   PORTS_LABEL: "Ports",
   PORTS_HELP:
     "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
+  /** Deviation: a background run's gateway opens only its ports callable from outside, so the run page has no Open. */
+  PORTS_HELP_BACKGROUND:
+    "This run works in the background, so its ports don't open from the run page. Make a port callable from outside the run to reach it through Wardyn's gateway.",
   /** T2-a (r16): a port's own card carries the checkbox and its help. */
   PORT_INBOUND_LABEL: "Callable from outside the run",
   PORT_INBOUND_HELP:
@@ -179,38 +182,13 @@ export const NR_RUN = {
   TAGLINE_FENCE: "Weakest",
   TAGLINE_WALL: "Stronger",
   TAGLINE_VAULT: "Strongest",
-  STRENGTH_ARIA: (n: string | number) => `Barrier strength ${n} of 3`,
   ABOUT_ARIA: (barrier: string | number) => `About ${barrier}`,
   PROTECTS_HEAD: "Protects against",
   NOT_PROTECTS_HEAD: "Doesn't protect against",
   HOW_HEAD: "How it works",
-  FENCE_PROTECTS:
-    "The agent seeing or touching the rest of your machine — it gets its own files, processes, and network.",
-  FENCE_NOT_PROTECTS:
-    "A kernel exploit or container escape — it shares your machine's kernel (the “holes” in the fence).",
-  FENCE_HOW:
-    "Shared-kernel container (runc) hardened with user namespaces, seccomp, AppArmor, and capability drop.",
-  WALL_PROTECTS:
-    "Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed).",
-  WALL_NOT_PROTECTS: "A flaw in the sandbox software itself (rare); it's still not a fully separate machine.",
+  /** Not rendered here: the canon's quote of the Wall mechanism line, which cc-meta.test.ts holds to CC_META. */
   WALL_HOW:
     "gVisor userspace kernel intercepts syscalls; needs a native Docker engine with its runsc runtime registered (a one-time setup step).",
-  VAULT_PROTECTS:
-    "Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside.",
-  VAULT_NOT_PROTECTS:
-    "A flaw in the virtualization layer itself — a very rare hypervisor- or CPU-level escape.",
-  VAULT_HOW: "Kata microVM — hardware-virtualized, with its own guest kernel (requires /dev/kvm).",
-  ROW_ISOLATION: "Isolated from your files, processes, and network",
-  ROW_KERNEL: "A kernel exploit can't reach your host kernel",
-  ROW_BREAK_IN: "A full break-in stays sealed inside",
-  ROW_WHERE: "Where it runs",
-  WHERE_FENCE: "Any host",
-  WHERE_WALL: "Native Docker engine + setup",
-  WHERE_VAULT: "Needs KVM hardware",
-  STATUS_YES: "Yes",
-  STATUS_NO: "No",
-  STATUS_CAVEAT: "With a caveat",
-  CAVEAT_EXCEPT: (text: string | number) => `Except: ${text}`,
   BADGE_ORG_DEFAULT: "Organisation default",
   BADGE_DEFAULT: "Default",
   BADGE_EXPERIMENTAL: "Experimental",

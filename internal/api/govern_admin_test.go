@@ -189,6 +189,10 @@ func governSites() []governSite {
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				return s.scheduleDoorRefusal(ctx, walled(types.GovernanceLimits{DenyScheduledRuns: true})) != nil
 			}},
+		{"run_schedule_repeat.go scheduleResumeDoorRefusal", capSrv(&capStore{}),
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.scheduleResumeDoorRefusal(ctx, walled(types.GovernanceLimits{DenyScheduledRuns: true})) != nil
+			}},
 		{"user_drives_run.go driveDoorProfile", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				_, shut := s.driveDoorProfile(ctx, walled(types.GovernanceLimits{DenyUserDrive: true}))
@@ -340,31 +344,34 @@ func governSites() []governSite {
 // EverySiteIsListed holds the table to the call sites, so a new site is a failure until it is here or
 // has a row, and an entry whose function no longer asks runUngoverned is a failure too.
 var governSiteElsewhere = map[string]string{
-	"resolveRunPolicyFacts":    "row: inline_policy.go resolveRunPolicy inline clamp",
-	"resolveChainCeiling":      "row: governance.go resolveEffectiveCeiling",
-	"boundaryEndPlan":          "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
-	"memberResources":          "row: runs_dispatch_ceiling.go boundResources",
-	"uiAppsDenied":             "row: governance_run_doors.go boundUIApps",
-	"inboundAppsDenied":        "row: governance_run_doors.go boundInboundApps",
-	"recordLaneVeto":           "row: workspace_admission.go laneVetoedBy",
-	"deniedPlacements":         "test: run_placement_capabilities_test.go",
-	"gitHubOwnTokenDecider":    "test: gh_own_pat_test.go",
-	"handleRecordGoverned":     "test: record_govern_admin_test.go",
-	"markGovernanceExempt":     "test: govern_admin_doors_test.go",
-	"meGovernanceContact":      "none: /me display read, no switch-on test",
-	"attachAuthority":          "test: attach_authority_test.go",
-	"refuseNoTicketAttach":     "none: attach entry door, no switch-on test",
-	"revivePATNarrowing":       "test: run_revive_test.go",
-	"unionDirectGitHubEgress":  "none: direct GitHub egress union, no switch-on test",
-	"imageDigestVerdict":       "test: run_image_digest_test.go",
-	"reviveImageDigestRefusal": "test: run_image_digest_test.go",
-	"imageAdmission":           "test: run_image_admission_test.go",
-	"imageAdmissionPreview":    "test: policy_preview_image_admission_test.go",
-	"markImageAdmissionExempt": "test: run_image_admission_exempt_test.go",
-	"reviveImageAdmission":     "test: run_revive_image_admission_test.go",
-	"conventionImageAdmission": "test: run_image_pin_test.go",
-	"macOSBaseAllowedFor":      "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
-	"ownerExemptAsAdmin":       "test: component_grant_withdrawn_test.go",
+	"resolveRunPolicyFacts":     "row: inline_policy.go resolveRunPolicy inline clamp",
+	"resolveChainCeiling":       "row: governance.go resolveEffectiveCeiling",
+	"boundaryEndPlan":           "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
+	"memberResources":           "row: runs_dispatch_ceiling.go boundResources",
+	"uiAppsDenied":              "row: governance_run_doors.go boundUIApps",
+	"inboundAppsDenied":         "row: governance_run_doors.go boundInboundApps",
+	"desktopAppsDeniedWarnings": "none: a desktop warning that drops nothing; TestBoundUIAppsWarnsADesktopUnderDenyInteractive pins it but does not turn GovernAdminRuns on",
+	"recordLaneVeto":            "row: workspace_admission.go laneVetoedBy",
+	"deniedPlacements":          "test: run_placement_capabilities_test.go",
+	"gitHubOwnTokenDecider":     "test: gh_own_pat_test.go",
+	"driveFillKeeps":            "none: the drive fill skips the capability pre-checks as the create does, no switch-on test",
+	"handleRecordGoverned":      "test: record_govern_admin_test.go",
+	"markGovernanceExempt":      "test: govern_admin_doors_test.go",
+	"meGovernanceContact":       "none: /me display read, no switch-on test",
+	"attachAuthority":           "test: attach_authority_test.go",
+	"refuseNoTicketAttach":      "none: attach entry door, no switch-on test",
+	"revivePATNarrowing":        "test: run_revive_test.go",
+	"unionDirectGitHubEgress":   "none: direct GitHub egress union, no switch-on test",
+	"imageDigestVerdict":        "test: run_image_digest_test.go",
+	"reviveImageDigestRefusal":  "test: run_image_digest_test.go",
+	"imageAdmissionOf":          "test: run_image_admission_test.go",
+	"imageAdmissionPreview":     "test: policy_preview_image_admission_test.go",
+	"markImageAdmissionExempt":  "test: run_image_admission_exempt_test.go",
+	"reviveImageAdmission":      "test: run_revive_image_admission_test.go",
+	"reviveContainersAdmission": "none: an extra container's revive re-check spares the owner as reviveImageAdmission does, no switch-on test",
+	"conventionImageAdmission":  "test: run_image_pin_test.go",
+	"macOSBaseAllowedFor":       "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
+	"ownerExemptAsAdmin":        "test: component_grant_withdrawn_test.go",
 }
 
 // runUngovernedCallers is every function in dir's non-test sources that calls

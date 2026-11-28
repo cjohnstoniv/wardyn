@@ -185,7 +185,8 @@ type effectivePolicyDatum struct {
 	DiskMiBDefaultSource types.LimitSource `json:"disk_mib_default_source,omitempty"`
 	// Provenance is which layer set each value as create resolved it (layer,
 	// leaf name, locked), never a contact. Absent for a lane with no create resolution.
-	Provenance knobProvenance `json:"provenance,omitempty"`
+	Provenance        knobProvenance                        `json:"provenance,omitempty"`
+	LocalFolderLayers map[string]types.LocalFolderWallLayer `json:"local_folder_layers,omitempty"`
 	// HostMarks is which allowed hosts the run's proxy opens (run_host_marks.go). Nil on an envelope
 	// recorded before it existed, which means unknown.
 	HostMarks *hostMarks `json:"host_marks,omitempty"`
@@ -710,6 +711,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		if presetLayer {
 			data["wall_preset"] = true
 		}
+		agentRulesReassertFlag(data, layers)
 		data["withheld_grants"] = nonNilStrings(droppedGrant)
 	}
 	if note := ceilingReassertNote(c.profile, unboundOnly, boundaryLayer, len(added)+len(droppedInjection)+len(droppedLane) > 0); note != "" {

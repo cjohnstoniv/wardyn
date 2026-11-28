@@ -36,7 +36,7 @@ var clampRules = map[string]string{
 	"auto_stop_after_sec":              "capped at the ceiling's positive maximum",
 	"workspace_mounts":                 "always dropped: host mounts are operator-authored",
 	"llm_inspection":                   "the ceiling's mode stands; a proposal's is dropped where the ceiling sets none",
-	"ui_apps":                          "kept only where the ceiling lists the app (clampUIApps)",
+	"ui_apps":                          "kept only where the ceiling lists the app, and a desktop wherever the ceiling's entry is (clampUIApps)",
 	"resources.cpu_millis":             "bounded by the member cap (clampResources)",
 	"resources.memory_mib":             "bounded by the member cap (clampResources)",
 	"resources.pids_limit":             "capped at the ceiling's (clampResources)",
@@ -49,8 +49,12 @@ var clampRules = map[string]string{
 	"desktop.copy_out":                 "blocked where the ceiling blocks it (clampDesktop)",
 	"desktop.upload":                   "blocked where the ceiling blocks it (clampDesktop)",
 	"desktop.download":                 "blocked where the ceiling blocks it (clampDesktop)",
+	"outage.allowance_minutes":         "no longer than the ceiling's (clampOutage)",
+	"outage.strict":                    "strict where the ceiling is (clampOutage)",
+	"outage.unattended":                "end where the ceiling says end (clampOutage)",
 	"recording":                        "raised to the ceiling's level (clampRecording)",
 	"data_out":                         "raised to the ceiling's rule, and blocked denies every push (clampDataOut)",
+	"local_folders":                    "raised to the ceiling's walls (clampLocalFolders)",
 	"push_rules.deny_paths":            "the ceiling's unioned in (clampPushRules)",
 	"push_rules.max_inspect_pack_mib":  "capped at the ceiling's (clampPushRules)",
 	"push_rules.require_review_paths":  "the ceiling's unioned in (clampPushRules)",
@@ -79,7 +83,7 @@ var withoutClampRules = map[string]string{
 // clampWhole are the structs Clamp bounds as one value through their own meet
 // (DesktopControls.Meet), keyed by wire name with the Go name clamp.go reads.
 // Each of their leaves still needs a row, so a new one is looked at.
-var clampWhole = map[string]string{"desktop": "Desktop"}
+var clampWhole = map[string]string{"desktop": "Desktop", "outage": "Outage"}
 
 // clampSelectors is every identifier clamp.go reads off a value or names in a
 // composite literal, outside cloneProposal: copying a field is not a rule.

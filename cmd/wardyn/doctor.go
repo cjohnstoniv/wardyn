@@ -29,20 +29,22 @@ import (
 // container, which may wait on a slow engine.
 const runnerDoctorBound = 4 * time.Minute
 
-// doctorCmd is `wardyn doctor`: the connection to your organisation, stage by stage, read-only.
+// doctorCmd is `wardyn doctor`: the connection to your organisation, stage by stage, changing no setting.
 func doctorCmd(client func() *sdk.Client) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check, stage by stage, how this computer reaches your organisation (read-only)",
+		Short: "Check, stage by stage, how this computer reaches your organisation (changes no setting)",
 		Long: `Run the connection checks in order and print one line per stage: the organisation URL and where it came from,
 name resolution, the proxy route, the TLS handshake (the issuer presented and which trust store verified it),
 /healthz and the server version, and who /api/v1/me says you are. When a runner is installed on this computer, its
 own stages follow (its engine, proxy image and relay), then whether the organisation parked any of its exit
 receipts. A failing stage names the setting that fixes it.
 
-Names are shown, values are not: no token, password or proxy credential appears in either format. doctor writes
-nothing and changes no setting. It exits 0 when no stage failed and 1 otherwise; --json prints the same stages as data.`,
+Names are shown, values are not: no token, password or proxy credential appears in either format. doctor changes
+no setting. Like every command that calls the server, it renews a saved sign-in whose access token is spent, and
+stores the renewal, or the server's refusal of it, with that sign-in. It exits 0 when no stage failed and 1
+otherwise; --json prints the same stages as data.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c := client()

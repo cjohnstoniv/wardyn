@@ -20,8 +20,6 @@ package proxy
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -147,58 +145,10 @@ func (p *Proxy) refuseADOTunnel(w http.ResponseWriter, r *http.Request, host str
 // is non-nil only for the ONE refusal a person may lift — a grantable
 // capability the run does not hold — and names what the request needs.
 // refRule is applied to a ref move's refs before the capability check
-// (adoRunBranchRule); its refusal is never liftable.
+// (adoRunBranchRule); its refusal is never liftable. It decides through
+// reqcheck.Decide, and only an Allow decision forwards.
 func adoCheck(r *http.Request, host string, grant ADOGrant, refRule func([]string) string) (string, *adoscope.Verdict) {
-	path := adoRawPath(r)
-	if !adoOrgMatches(host, path, grant.Organization) {
-		return fmt.Sprintf("Wardyn refused this Azure DevOps request: this run is granted the %q organisation only.", grant.Organization), nil
-	}
-	if strings.ContainsFunc(path, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) {
-		return "Wardyn refused this Azure DevOps request: its path carries a backslash or a control character.", nil
-	}
-	if adoGitPath(path) {
-		return "Wardyn refused this Azure DevOps request: git must use Wardyn's git broker, not the API connection.", nil
-	}
-	// Classifies first with the body withheld; only a route whose capability
-	// depends on the body answers ErrNeedsBody and is peeked, so every other
-	// body streams through untouched at whatever size.
-	req := adoscope.Request{
-		Method:       r.Method,
-		Host:         host,
-		Path:         path,
-		RawQuery:     r.URL.RawQuery,
-		Header:       r.Header,
-		Org:          grant.Organization,
-		BodyWithheld: true,
-	}
-	v, err := adoscope.Classify(req)
-	if errors.Is(err, adoscope.ErrNeedsBody) {
-		peek, msg := adoPeekBody(r)
-		if msg != "" {
-			return msg, nil
-		}
-		req.BodyWithheld, req.BodyPeek = false, peek
-		v, err = adoscope.Classify(req)
-	}
-	if errors.Is(err, adoscope.ErrNoRef) {
-		return "Wardyn refused this Azure DevOps request: it names no ref Wardyn can check.", nil
-	}
-	if err != nil {
-		return "Wardyn refused this Azure DevOps request: it could not tell what access the request needs.", nil
-	}
-	if len(v.Refs) > 0 {
-		if msg := refRule(v.Refs); msg != "" {
-			return msg, nil
-		}
-	}
-	if adoscope.Permits(grant.Capabilities, v) {
-		return "", nil
-	}
-	if !v.Capability.Grantable() {
-		return fmt.Sprintf("Wardyn refused this Azure DevOps request (%s). No run is granted this.", adoscope.Label(v.Capability)), nil
-	}
-	return fmt.Sprintf("Wardyn refused this Azure DevOps request: it needs %q (%s), and this run was not granted it.",
-		adoscope.Label(v.Capability), v.Capability), &v
+	return adoAnswer(decideADO(adoChecker{r: r, host: host, grant: grant, refRule: refRule}, adoRequest(r, host)))
 }
 
 // adoRawPath is the request's path as it arrived on the wire, still

@@ -359,12 +359,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		advertised, f.placed.read = offered, true
 	}
 	f.placed.classes = advertised
-	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
+	enforced, source, raised, err := resolveConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
-	f.enforced, f.confinementDefault = enforced, source
+	f.enforced, f.confinementDefault, f.confinementRaised = enforced, source, raised
 	if f.mode == foldPreflight {
 		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
 	}
@@ -399,7 +399,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
 		return true
 	}
-	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
+	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil, includedHarnessIDs(*f.req))
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
@@ -569,14 +569,14 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
 	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) ||
-		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) || localMCPRulesRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
+		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
 		return false
 	}
 	if s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r) {
 		return false
 	}
 	var refusal *runRefusal
-	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
+	f.innerWalls, refusal = agentRulesInnerWallsFor(*f.req, f.spec, f.harnesses, f.enforced, f.source)
 	return !refusal.write(s, f.w, f.r)
 }
 
@@ -664,7 +664,7 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second,
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), f.enforced, f.req.MachineKind, time.Duration(f.end.capSec)*time.Second,
 		runProxyAzure(f.mpChoice, f.harnessChoices), f.queued)
 	return !refused
 }
@@ -759,7 +759,7 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
-	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), trustOwners(f.place.eligible), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.place.pool, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), trustOwners(f.place.eligible), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 	if f.place.remoteOffered {
 		refusal.addRemoteInstead(f.place.pool.Name)
 	}
@@ -779,7 +779,7 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	// refuse here, ending a run that was accepted to wait.
 	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
 		req.Placement = types.PlacementLocal
-		_, local := s.localPlacementRefusal(f.r, req, true, waitingLocalTrusts(), nil, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+		_, local := s.localPlacementRefusal(f.r, req, true, f.place.pool, waitingLocalTrusts(), nil, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 		// A read that failed answers nothing (a server error carries its error, not a status): the launch
 		// then behaves as one with nothing recorded.
 		failed := local != nil && (local.err != nil || local.status >= http.StatusInternalServerError)
@@ -864,7 +864,7 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
 	in := placementInput{req: f.req, floor: confinementFloor(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: drives, driveRunner: driveRunner, noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: drives, driveRunner: driveRunner, driveIDs: driveIDsOf(f.drives), noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}
@@ -921,7 +921,7 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 		requestMiB = f.req.Resources.DiskMiB
 	}
 	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
-	if types.MachineKind(f.req.MachineKind) == types.MachineLinuxVM {
+	if types.MachineKind(f.req.MachineKind).HasDiskOverlay() {
 		// A Linux VM's disk is its image-sized base plus an overlay on the runner, not the container's
 		// writable layer, so no runner enforces a size on it whatever it reports for containers.
 		// A process limit counts as written when the run's source policy asked for one (the Requested
@@ -941,7 +941,7 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 			f.policyWarns = append(f.policyWarns, warnLinuxVMPidsNotCapped)
 		}
 	}
-	if !md.Soft && md.MiB > 0 && types.MachineKind(f.req.MachineKind) != types.MachineLinuxVM && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+	if !md.Soft && md.MiB > 0 && !types.MachineKind(f.req.MachineKind).HasDiskOverlay() && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
 		msg := mainDriveUnenforceableMsg()
 		if !f.place.pooled {
 			msg = mainDriveUnenforceableUnpooledMsg()

@@ -68,7 +68,9 @@ func TestLeaderGo_RecordingSweepRunsOnOneReplica(t *testing.T) {
 		})
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
+	// The recording sweep is the records family's: two replicas booting together take a family each at once, and
+	// the others one spreading wait (15 s) later, so records has a leader within about 15 s.
+	deadline := time.Now().Add(45 * time.Second)
 	for sweepA.calls.Load()+sweepB.calls.Load() < 10 {
 		if time.Now().After(deadline) {
 			t.Fatalf("no replica swept: a=%d b=%d", sweepA.calls.Load(), sweepB.calls.Load())

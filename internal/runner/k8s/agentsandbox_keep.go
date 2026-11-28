@@ -24,26 +24,35 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// keepAddressAccess is the verbs a kept run's proxy address needs in each runs namespace: the run's Service, and the
-// EndpointSlice Wardyn writes for it.
-var keepAddressAccess = []authzv1.ResourceAttributes{
+// runAddressAccess is the verbs the run's proxy address needs in each runs namespace: the run's Service, and the
+// EndpointSlice Wardyn writes for it. Every server-mode run has both; keep's boot check asks for them too. R-02c in
+// scripts/test-claims-match-code.sh holds the server chart's runs Role to this list, so a verb is added here and
+// there together.
+var runAddressAccess = []authzv1.ResourceAttributes{
 	{Resource: "services", Verb: "create"},
 	{Resource: "services", Verb: "get"},
 	{Resource: "services", Verb: "delete"},
 	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "create"},
 	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "get"},
 	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "update"},
-	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "delete"},
 	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "deletecollection"},
 }
 
-// checkAgentSandboxKeep refuses the keep switch without the agent-sandbox backend.
+// checkAgentSandboxKeep refuses the keep switch without the agent-sandbox backend, or without the run's own Service, which
+// a kept run reaches its proxy through.
 func checkAgentSandboxKeep(cfg Config) error {
 	if cfg.AgentSandboxKeep && !cfg.AgentSandbox {
 		return errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_AGENT_SANDBOX on")
 	}
+	if cfg.AgentSandboxKeep && cfg.RunServiceOff {
+		return errKeepNeedsRunService
+	}
 	return nil
 }
+
+// errKeepNeedsRunService refuses keep with the run's Service off. newWithClient refuses it too, before any API call, so
+// a driver built without the registry (NewSubstrate) cannot serve keep with no Service to own its agent.
+var errKeepNeedsRunService = errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_RUN_SERVICE on, since a kept run reaches its proxy through its own Service")
 
 func (d *Driver) keepOn() bool { return d.cfg.AgentSandbox && d.cfg.AgentSandboxKeep }
 
@@ -170,26 +179,6 @@ func (d *Driver) deleteKeepAddress(ctx context.Context, ns string, runID uuid.UU
 		return fmt.Errorf("k8s: keep: delete the run's EndpointSlices: %w", err)
 	}
 	return nil
-}
-
-// keepService makes the run's Service when the run is kept at its end, and returns nil for every other run.
-func (d *Driver) keepService(ctx context.Context, ns string, spec runner.SandboxSpec, labels map[string]string) (*corev1.Service, error) {
-	if !d.keepRun(spec) {
-		return nil, nil
-	}
-	return d.createKeepService(ctx, ns, spec.RunID, labels)
-}
-
-// keepAddress is where the agent pins "wardyn-proxy" and its nameserver: the proxy pod's IP or, for a kept run, its
-// Service's ClusterIP once the EndpointSlice points at that IP.
-func (d *Driver) keepAddress(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, proxyIP string) (string, error) {
-	if svc == nil {
-		return proxyIP, nil
-	}
-	if err := d.writeKeepEndpoints(ctx, ns, runID, svc, proxyIP); err != nil {
-		return "", err
-	}
-	return svc.Spec.ClusterIP, nil
 }
 
 // keepAgent marks a kept run's agent pod with the keep label and makes the Service its owner: the agent outlives its proxy

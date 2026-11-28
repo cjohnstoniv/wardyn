@@ -125,6 +125,7 @@ type componentRefusal struct {
 // become policy. A component enforces nothing itself: the gate bounds each one
 // and then expands it into primitives every later stage already enforces —
 // allowed domains and eligible grants on spec, which it edits in place.
+// A component's image requirement is held to the run's image before anything is expanded (components_image.go).
 //
 // All three run doors call it at the same point: after the workspace and
 // direct-GitHub folds, so a host an admin already credentialed is seen and a
@@ -153,6 +154,9 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 	// the whole list, however many hosts and secrets it names.
 	r = r.WithContext(withOwnedSecretMemo(withCapBatch(r.Context())))
 	comps, refused := s.admitRunComponents(r, req.Components, *spec, req.Repo, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
+	if refused == nil {
+		refused = componentImageRefusal(comps, s.componentRunImage(req, wsRefs))
+	}
 	if refused != nil {
 		s.auditComponentRefusal(r, *refused)
 		return runComponents{}, refused.refusal
@@ -214,6 +218,9 @@ func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, 
 			comps.selfDefined++
 		}
 		comps.attached = append(comps.attached, c)
+	}
+	if refused := componentRuleSetLimit(spec, comps.attached); refused != nil {
+		return runComponents{}, refused
 	}
 	return comps, nil
 }
@@ -279,8 +286,14 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 				"reaches a host that serves a model, which a component may not.")
 		}
 	}
+	if refused := mcpAdmissionRefusal(adm.site, c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
 	if problem := componentDefinitionProblem(c); problem != "" {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.")
+	}
+	if refused := componentRequestRulesAdmitted(adm, c, i); refused != nil {
+		return attachedComponent{}, refused
 	}
 	if refused := s.componentSecretsOwned(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
@@ -477,6 +490,9 @@ func (c *runComponents) expand(spec *types.RunPolicySpec) {
 			}
 			c.configEnv[k] = v
 		}
+	}
+	if sets := componentRequestRuleSets(c.attached); sets != nil {
+		spec.HostRules = types.AppendHostRuleSets(spec.HostRules, sets)
 	}
 }
 

@@ -15,6 +15,8 @@ const (
 	auditRetentionFile  = "0123_audit_retention.sql"
 	auditDropActorFile  = "0146_audit_retention_drop_actor_type.sql"
 	auditChainHeadFile  = "0214_audit_chain_head_lazy.sql"
+	auditChainLastFile  = "0412_audit_chain_v2.sql"
+	auditHashV2File     = "0410_audit_hash_v2.sql"
 )
 
 // TestChainTriggerReplaySetExcludesTheConversion pins the property the whole conversion rests on.
@@ -39,9 +41,9 @@ func TestChainTriggerReplaySetExcludesTheConversion(t *testing.T) {
 	if !hasReplayable {
 		t.Errorf("the replay set %v lacks %s: a restored trigger would be bound to a pre-partition function body", names, auditReplayableFile)
 	}
-	if names[len(names)-1] != auditChainHeadFile {
+	if names[len(names)-1] != auditChainLastFile {
 		t.Errorf("the replay set ends with %s, want %s last: whatever is last is the body the database is left with",
-			names[len(names)-1], auditChainHeadFile)
+			names[len(names)-1], auditChainLastFile)
 	}
 	if strings.Contains(readMigration(t, auditConversionFile), "TRIGGER "+auditChainTrigger) {
 		t.Errorf("%s spells TRIGGER %s", auditConversionFile, auditChainTrigger)
@@ -75,14 +77,26 @@ func TestChainFunctionBodyIsTheSameInBothFiles(t *testing.T) {
 	}
 }
 
+// TestChainFunctionBodyIsTheSameInTheTwoHashV2Files: 0410 replaces the chain function so no row is hashed by
+// the wrong formula before 0412 runs, and 0412 holds the same text beside the trigger statements. Two copies that
+// disagree would leave a fresh install and a restored trigger running different code.
+func TestChainFunctionBodyIsTheSameInTheTwoHashV2Files(t *testing.T) {
+	if a, b := chainFunctionBody(t, auditHashV2File), chainFunctionBody(t, auditChainLastFile); a != b {
+		t.Errorf("audit_events_chain() differs between %s and %s", auditHashV2File, auditChainLastFile)
+	}
+}
+
 // TestChainFunctionReadsTheTableHeadOnlyWithoutARecordedHead: the table-wide head read opens every partition
-// under the global chain lock, so the live definition may run it only when no head has been recorded.
+// under the global chain lock, so the live definition (the last file that replaces it) may run it only when no
+// head has been recorded. 0214 first made the read lazy, and 0410 carries the same text.
 func TestChainFunctionReadsTheTableHeadOnlyWithoutARecordedHead(t *testing.T) {
-	body := chainFunctionBody(t, auditChainHeadFile)
-	read := strings.Index(body, "FROM @ns@.audit_events")
-	guard := strings.Index(body, "IF m.hw_row_hash IS NOT NULL")
-	if read < 0 || guard < 0 || read < guard || !strings.Contains(body[guard:read], "ELSE") {
-		t.Errorf("%s reads audit_events outside the ELSE of the recorded-head check", auditChainHeadFile)
+	for _, file := range []string{auditChainHeadFile, auditHashV2File, auditChainLastFile} {
+		body := chainFunctionBody(t, file)
+		read := strings.Index(body, "FROM @ns@.audit_events")
+		guard := strings.Index(body, "IF m.hw_row_hash IS NOT NULL")
+		if read < 0 || guard < 0 || read < guard || !strings.Contains(body[guard:read], "ELSE") {
+			t.Errorf("%s reads audit_events outside the ELSE of the recorded-head check", file)
+		}
 	}
 }
 
@@ -93,6 +107,8 @@ func TestAuditLockKeyLiteralsMatchTheGoConstants(t *testing.T) {
 	for file, keys := range map[string][]int64{
 		auditConversionFile: {AuditChainLockKey, AuditPartitionLockKey},
 		auditReplayableFile: {AuditChainLockKey},
+		auditHashV2File:     {AuditChainLockKey},
+		auditChainLastFile:  {AuditChainLockKey},
 		auditRetentionFile:  {AuditChainLockKey, AuditPartitionLockKey},
 		auditDropActorFile:  {AuditChainLockKey, AuditPartitionLockKey},
 	} {

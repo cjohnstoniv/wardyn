@@ -5,11 +5,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -32,6 +34,10 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 	}
 	if err == nil {
 		s.recordRunContainmentEvents(ctx, result.Containment)
+		s.recordLocalContainEvents(ctx, result.LocalContain)
+		for _, id := range result.MoveIgnored {
+			slog.InfoContext(ctx, "wardynd: ignored a moved run's row from a runner its move names", slog.String("runner_id", runnerID.String()), slog.String("run_id", id.String()))
+		}
 	}
 	if err != nil || !result.Complete {
 		return err
@@ -142,7 +148,18 @@ func (s *Server) OfflineFromRunner(ctx context.Context, runnerID uuid.UUID) erro
 				cancel()
 				return err // as a failed listing: nothing more is marked, and the runner's next report retries
 			}
-			s.loseRun(bounded, runnerLossClaim{PG: st, runnerID: runnerID, ref: run.SandboxRef}, st, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at)
+			// Every run listed here is held by this runner, so neither control-plane end applies: a spent strict
+			// allowance answers EndStrictOnRunner, the mark below followed by the end on the runner (#4082).
+			recovery := s.outageRecoveryFor(bounded, run, lapseVerdict{}, false)
+			if recovery == outageRecoveryHold {
+				cancel()
+				after = run.ID
+				continue
+			}
+			o, stopErr := s.loseRunAs(bounded, runnerLossClaim{PG: st, runnerID: runnerID, ref: run.SandboxRef}, st, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at, 0, lapseVerdict{cause: lapseCauseRunnerLink})
+			if recovery == outageRecoveryEndStrictOnRunner && o == loseApplied && !errors.Is(stopErr, runner.ErrEndUnsupported) {
+				s.endStrictRunnerRun(bounded, run)
+			}
 			cancel()
 			after = run.ID
 		}

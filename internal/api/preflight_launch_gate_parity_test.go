@@ -119,9 +119,10 @@ var policyPreviewGateExceptions = map[string]string{
 	"refuseRunFit":               "preview does not read Kubernetes quota",
 	"runFitSpec":                 "preview does not resolve a dispatch fit request",
 	"imageAdmission":             "preview reads no registry; it reports image_admission \"checked at launch\" (imageAdmissionPreview) instead",
+	"imageAdmissionOf":           "preview reads no registry; it reports image_admission \"checked at launch\" (imageAdmissionPreview) instead",
 }
 
-const policyPreviewGateExceptionsMax = 12
+const policyPreviewGateExceptionsMax = 13 // 13: the extra-containers admission step calls imageAdmissionOf directly; the preview reads no registry, as for imageAdmission.
 
 // wantRunFoldSteps pins runFoldSteps: every step, in order, with the doors it
 // runs at. A lane adding a gate adds its step here in the same commit; a step
@@ -131,7 +132,9 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepPortalUnit", foldCreate | foldPreflight | foldPreview},
 	{"stepBaseline", foldCreate | foldPreflight | foldPreview},
 	{"stepPolicy", foldCreate | foldPreflight | foldPreview},
+	{"stepWindowsImage", foldCreate | foldPreflight | foldPreview},
 	{"stepComputerFolderDataOut", foldCreate | foldPreflight | foldPreview},
+	{"stepLocalFolderWalls", foldCreate | foldPreflight | foldPreview},
 	{"stepSeedWorkspace", foldCreate | foldPreflight | foldPreview},
 	{"stepADOOverride", foldCreate | foldPreflight | foldPreview},
 	{"stepDrive", foldCreate | foldPreflight | foldPreview},
@@ -144,12 +147,18 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepComponents", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementDenied", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacement", foldCreate | foldPreflight | foldPreview},
+	{"stepLocalFolderWallsPlaced", foldCreate | foldPreflight | foldPreview},
 	{"stepScheduleDoor", foldCreate | foldPreflight | foldPreview},
 	{"stepDriveEligibility", foldCreate | foldPreflight | foldPreview},
 	{"stepResources", foldCreate | foldPreflight | foldPreview},
+	{"stepContainersBudget", foldCreate | foldPreflight | foldPreview},
+	{"stepContainersRecording", foldCreate | foldPreflight | foldPreview},
 	{"stepLocalEligibility", foldCreate | foldPreflight | foldPreview},
 	{"stepConfinement", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementCapability", foldCreate | foldPreflight | foldPreview},
+	{"stepContainersPlacement", foldCreate | foldPreflight | foldPreview},
+	{"stepMCPSandbox", foldCreate | foldPreflight | foldPreview},
+	{"stepWindowsPlacement", foldCreate | foldPreflight | foldPreview},
 	{"stepMainDrive", foldCreate | foldPreflight | foldPreview},
 	{"stepModelProvider", foldCreate | foldPreflight | foldPreview},
 	{"stepDenyLists", foldCreate | foldPreflight | foldPreview},
@@ -167,6 +176,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepPATNarrowing", foldPreflight | foldPreview},
 	{"stepRunEnd", foldCreate | foldPreflight | foldPreview},
 	{"stepImageAdmission", foldCreate | foldPreflight},
+	{"stepContainerAdmission", foldCreate | foldPreflight},
 	{"stepHostCapacity", foldCreate | foldPreflight},
 	{"stepRunCap", foldCreate | foldPreflight},
 	{"stepRunFit", foldCreate | foldPreflight},

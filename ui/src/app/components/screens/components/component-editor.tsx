@@ -26,6 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../../ui/textarea";
 import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { Field } from "../../wardyn/form-primitives";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { Segmented } from "../../wardyn/segmented";
 import {
   audienceEditable,
@@ -36,10 +37,12 @@ import {
   hostLines,
   newUuid,
   requestOf,
+  requestRulesRefusal,
   withStored,
   type ComponentDraft,
   type SecretDraft,
 } from "./component-editor-model";
+import { RequestRulesField } from "./request-rules-field";
 
 // A save refused for the audience: a duplicate, no provider with identity on, or a value the server won't take.
 const AUDIENCE_REFUSAL = /gateway[_ ]audience/i;
@@ -283,7 +286,11 @@ export function ComponentEditor({
   const [error, setError] = React.useState<string | null>(null);
   const savedAudience = component?.definition.mcp?.gateway_audience ?? "";
   const [audience, setAudience] = React.useState(savedAudience);
-  const audienceRefused = audienceEditable(component) && !!error && AUDIENCE_REFUSAL.test(error);
+  // A refusal about the rules is shown under the rules field, and one about the audience under that field.
+  const rulesRefusal = error ? requestRulesRefusal(error) : null;
+  const audienceRefused = audienceEditable(component) && !!error && !rulesRefusal && AUDIENCE_REFUSAL.test(error);
+  const setup = useShellSetupStatus().status;
+  const rulesOn = setup ? setup.features?.component_request_rules === true : null;
   const hostChoices = headerHostChoices(hostLines(draft.hosts));
   const canSave = draft.name.trim() !== "" && !saving;
 
@@ -349,6 +356,30 @@ export function ComponentEditor({
             spellCheck={false}
           />
         </Field>
+
+        <Field label={T.IMAGE} htmlFor="component-image" hint={T.IMAGE_HINT}>
+          <Input
+            id="component-image"
+            value={draft.image ?? ""}
+            maxLength={255}
+            placeholder={T.IMAGE_PLACEHOLDER}
+            onChange={(e) => setDraft({ ...draft, image: e.target.value })}
+            className="font-mono placeholder:font-sans"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+        <RequestRulesField
+          on={rulesOn}
+          rules={draft.requestRules ?? []}
+          hadRules={(component?.definition.request_rules ?? []).length > 0}
+          hosts={hostChoices}
+          onChange={(requestRules) => setDraft({ ...draft, requestRules })}
+          idPrefix="component-rules"
+          refusal={rulesRefusal ? error : null}
+          failing={rulesRefusal}
+          disabled={saving}
+        />
 
         {audienceEditable(component) && (
           <AudienceField value={audience} onChange={setAudience} saved={savedAudience !== ""} refusal={audienceRefused ? error : null} />
@@ -417,7 +448,7 @@ export function ComponentEditor({
           </Button>
         </fieldset>
 
-        {error && !audienceRefused && (
+        {error && !audienceRefused && !rulesRefusal && (
           <p role="alert" className="text-body text-danger">
             {error}
           </p>

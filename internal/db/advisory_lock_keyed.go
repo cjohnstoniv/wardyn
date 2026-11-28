@@ -68,6 +68,12 @@ const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
 // proposed cannot be overwritten by an upsert that landed in between.
 const GovernanceMembershipLockClass int32 = 0x57474153 // ASCII "WGAS"
 
+// GovernanceMembershipUnitLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// assignment row's natural key (hashtext of unit_id, subject_type and subject). A direct assignment write takes it
+// with the profile graph lock shared (store.LockGovernanceMembershipWrite), so direct writes to other units or
+// subjects go ahead together while two writes of one assignment serialize.
+const GovernanceMembershipUnitLockClass int32 = 0x5747414B // ASCII "WGAK"
+
 // GovernanceTargetLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
 // target of a held governance change (hashtext of the kind and its natural key), for the kinds whose
 // row may be absent: a capability grant, a restriction, the enforcement map, a role mapping. The direct

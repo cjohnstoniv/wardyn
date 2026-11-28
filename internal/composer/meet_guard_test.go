@@ -53,7 +53,7 @@ var meetRules = map[string]meetRule{
 	"workspace_mounts":                 {"none", "intersection by (source, target); read-only if either side is"},
 	"workspace_repos":                  {"none", "intersection by identity"},
 	"llm_inspection":                   {"none", "present on one side yields that side; both present and unequal is refused"},
-	"ui_apps":                          {"none", "intersection by (name, port, path); empty over a base with apps keeps them and sets deny_ui_apps; a non-empty one sharing none is unsatisfiable"},
+	"ui_apps":                          {"none", "intersection by (name, port, path); a kept app is a desktop when either side's is; empty over a base with apps keeps them and sets deny_ui_apps; a non-empty one sharing none is unsatisfiable; an unknown kind in the overlay is refused at write"},
 	"resources.cpu_millis":             {"the deployment size", "smaller after normalising"},
 	"resources.memory_mib":             {"the deployment size", "smaller after normalising"},
 	"resources.pids_limit":             {"the deployment size", "smaller after normalising"},
@@ -66,8 +66,12 @@ var meetRules = map[string]meetRule{
 	"desktop.copy_out":                 {"blocked", "blocked on either side: blocked"},
 	"desktop.upload":                   {"allowed", "blocked on either side: blocked"},
 	"desktop.download":                 {"blocked", "blocked on either side: blocked"},
+	"outage.allowance_minutes":         {"the site's allowance", "smaller positive"},
+	"outage.strict":                    {"false", "OR"},
+	"outage.unattended":                {"keep", "end on either side: end"},
 	"recording":                        {"the organisation's level", "the higher level; a lower overlay is a widening"},
 	"data_out":                         {"allowed", "the stricter value; a looser overlay is a widening; blocked also denies drives, kept machines and pushes"},
+	"local_folders":                    {"no walls", "deny bools OR; caps the smaller positive; patterns union; an overlay's omitted field inherits, and only a cap above the base's is a widening"},
 	"push_rules.deny_paths":            {"none", "union"},
 	"push_rules.max_inspect_pack_mib":  {"32 MiB under an active rule", "smaller after normalising against the composed rule"},
 	"push_rules.require_review_paths":  {"none", "union"},
@@ -136,6 +140,7 @@ var atomicMeetTypes = map[reflect.Type]bool{
 	reflect.TypeOf(types.UIApp{}):             true,
 	reflect.TypeOf(types.ToolRule{}):          true,
 	reflect.TypeOf(types.HostRuleSet{}):       true,
+	reflect.TypeOf(types.LocalFolderRules{}):  true,
 }
 
 // leafField is one meetable field: its wire path and the Go name the meet reads.

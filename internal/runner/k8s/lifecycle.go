@@ -19,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -170,6 +171,15 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 		st.Message = waitingReason(pod)
 	case corev1.PodRunning:
 		st.State = types.RunRunning
+		// A pod stays Running while any container runs, so with extra containers the agent's exit does
+		// not move the phase: read the agent container itself. A one-container pod keeps the phase alone.
+		if code := containerExitCode(pod, mainContainerName); code != nil && len(pod.Spec.Containers) > 1 {
+			st.State, st.ExitCode = types.RunFailed, code
+			if *code == 0 {
+				st.State = types.RunStopped
+			}
+			st.Message = "the agent container exited while an extra container was still running"
+		}
 	case corev1.PodSucceeded:
 		code := 0
 		st.State = types.RunStopped
@@ -291,8 +301,8 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // which anyone who can patch the pod can change: a label naming another run would tear that run down,
 // and a missing one would leave this run's objects behind. It then sweeps every Wardyn-owned object
 // carrying the run's label via three DeleteCollection calls (pods, Secrets, NetworkPolicies); the agent-sandbox
-// backend's Sandbox is deleted before them, and with keep on the run's Service and a fourth DeleteCollection, of
-// its EndpointSlices, come between the pods and the Secrets.
+// backend's Sandbox is deleted before them, and the run's Service and a fourth DeleteCollection, of its
+// EndpointSlices, come between the Secrets and the NetworkPolicies.
 //
 // An agent pod whose label no longer names the ref's run is deleted by its name and UID besides
 // (teardownRun), since the run's label selector no longer reaches it.
@@ -402,18 +412,31 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 		}
 	}
 
-	if d.keepOn() {
-		if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
-			return fmt.Errorf("k8s: teardown: %w", err)
-		}
-	}
-
-	// Secret FIRST, NetworkPolicies after (mirrors CreateSandbox's order): the
+	// Secret FIRST, NetworkPolicies last (mirrors CreateSandbox's order): the
 	// orphan sweep keys the Secret on the netpols, since listing Secrets needs
 	// a body-returning verb it's never granted. Reversing the order would
 	// leave a crash-window survivor with nothing left to find it by.
 	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete secrets: %w", err)
+	}
+	// The run's Service and EndpointSlices: every server-mode run has them; a run made by an older release has none,
+	// and the delete finds nothing. They go after the Secret, so a failed delete here never leaves the Secret, and
+	// before the NetworkPolicies, so a run whose Service survives is still found by the orphan sweep, which deletes
+	// it again. With keep off, a 403 is logged and the NetworkPolicies still go only when the run's Service then reads
+	// as gone, or cannot be read at all: a Role that lacks every per-run Service verb (k8s.rbac.create=false, not yet
+	// updated) made no Service either. A Service that is still there keeps the NetworkPolicies. What this leaves: a
+	// Role that may create Services but may neither delete nor get them leaves the Service unfound by the sweep, and an
+	// EndpointSlice whose delete is refused after its Service went is left behind, routing nothing. A server with
+	// WARDYN_K8S_RUN_SERVICE off made no Service and may hold none of these verbs, so it asks for nothing here; one
+	// switched off while runs still had a Service leaves those behind.
+	if d.runnerMode() || !d.cfg.RunServiceOff {
+		if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
+			if d.keepOn() || !apierrors.IsForbidden(err) || d.runServiceRemains(ctx, ns, runID) {
+				return fmt.Errorf("k8s: teardown: %w", err)
+			}
+			slog.Warn("wardynd: k8s substrate: teardown could not delete the run's Service or EndpointSlices: the runs Role lacks the per-run Service verbs",
+				slog.String("namespace", ns), slog.String("run_id", runID.String()), slog.String("error", err.Error()))
+		}
 	}
 	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
@@ -442,6 +465,8 @@ func (d *Driver) deleteRunSandbox(ctx context.Context, ns string, runID uuid.UUI
 	if err := sandboxes.Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("delete agent sandbox: %w", err)
 	}
+	// A poll, not the pod watch: this waits on the Sandbox object, which rings no pod bell, and the runs Role
+	// grants no watch on sandboxes.
 	err = wait.PollUntilContextTimeout(ctx, k8sPollInterval, agentSandboxDeleteTimeout, true, func(pollCtx context.Context) (bool, error) {
 		got, gerr := sandboxes.Get(pollCtx, name, metav1.GetOptions{})
 		if isNotFound(gerr) {
@@ -486,12 +511,18 @@ func teardownWaitBound(grace *int64) time.Duration {
 // teardownWaitFor is teardownWaitBound; a test shortens it to reach the wait's timeout.
 var teardownWaitFor = teardownWaitBound
 
-// waitPodsGone polls until no pod matches listOpts (the H3 ordering guard).
-// A timeout here is a real error, not best-effort: proceeding without this
-// proof reopens the open-egress window. teardown is idempotent, so a retry
-// completes the sweep once the pod actually terminates.
+// waitPodsGone waits until no pod matches listOpts (the H3 ordering guard). Only the List decides: a
+// pod watch event only wakes it early. A timeout here is a real error, not best-effort: proceeding
+// without this proof reopens the open-egress window. teardown is idempotent, so a retry completes the
+// sweep once the pod actually terminates.
 func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.ListOptions, timeout time.Duration) error {
-	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
+	sel, err := labels.Parse(listOpts.LabelSelector)
+	if err != nil {
+		return fmt.Errorf("k8s: pod selector %q: %w", listOpts.LabelSelector, err)
+	}
+	b := d.podWatch.bell(ns, func(p *corev1.Pod) bool { return sel.Matches(labels.Set(p.Labels)) })
+	defer b.stop()
+	return pollUntil(ctx, b, k8sPollInterval, timeout, func(pollCtx context.Context) (bool, error) {
 		pods, err := d.clientset.CoreV1().Pods(ns).List(pollCtx, listOpts)
 		if err != nil {
 			return false, err
@@ -524,7 +555,9 @@ func (d *Driver) stopConfirming(ctx context.Context, waitErr error, list func() 
 
 // waitPodGone blocks until pod no longer exists; another pod of its name is not it.
 func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, timeout time.Duration) error {
-	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
+	b := d.podBell(ns, pod.Name)
+	defer b.stop()
+	return pollUntil(ctx, b, k8sPollInterval, timeout, func(pollCtx context.Context) (bool, error) {
 		got, err := d.clientset.CoreV1().Pods(ns).Get(pollCtx, pod.Name, metav1.GetOptions{})
 		if isNotFound(err) {
 			return true, nil
@@ -550,8 +583,8 @@ func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, ti
 // Deduped by run id, since teardownByRunID reaches every object from the id.
 //
 // A drive PVC is never touched: it carries labelDrive, never labelRun, and
-// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; with
-// keep on it also deletes the run's Service and EndpointSlices (deleteKeepAddress).
+// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; it
+// also deletes the run's Service and EndpointSlices (deleteKeepAddress).
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {

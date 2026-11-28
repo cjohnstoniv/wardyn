@@ -121,6 +121,23 @@ describe("catalog", () => {
     expect(getAvailabilityMock).toHaveBeenCalledWith("component", ID1);
   });
 
+  it("a component that names an image says so under its name, and a repository alone accepts any tag or digest", async () => {
+    listMock.mockResolvedValue([
+      comp({ definition: { hosts: ["a.example"], image: "ghcr.io/acme/tools:1.2" } }),
+      comp({ id: ID2, name: "Docs portal", definition: { hosts: ["d.example"], image: "ghcr.io/acme/docs-cli" } }),
+      comp({ id: NEW_ID, name: "Billing API", definition: { hosts: ["b.example"] } }),
+    ]);
+    renderScreen();
+    const tagged = (await screen.findByText("Payments API")).closest("tr")!;
+    expect(within(tagged).getByText("Needs image")).toBeInTheDocument();
+    expect(within(tagged).getByText("ghcr.io/acme/tools:1.2")).toBeInTheDocument();
+    expect(within(tagged).queryByText("any tag or digest")).toBeNull();
+    const family = screen.getByText("Docs portal").closest("tr")!;
+    expect(within(family).getByText("ghcr.io/acme/docs-cli")).toBeInTheDocument();
+    expect(within(family).getByText("any tag or digest")).toBeInTheDocument();
+    expect(within(screen.getByText("Billing API").closest("tr")!).queryByText("Needs image")).toBeNull();
+  });
+
   it("an unrestricted component reads Everyone", async () => {
     getAvailabilityMock.mockResolvedValue(avail(ID1, false, 0));
     renderScreen();
@@ -209,6 +226,31 @@ describe("editor", () => {
     await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(warning, expect.anything()));
     expect(toastSuccess).toHaveBeenCalledWith("Component saved.");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the Image field is optional, sent when filled, and a stored image comes back unchanged on an edit", async () => {
+    putMock.mockResolvedValue({ ...comp({ id: NEW_ID, name: "Billing" }), requirements: [] });
+    const dialog = await openNew();
+    const image = within(dialog).getByLabelText("Image");
+    expect(image).toHaveValue("");
+    expect(image).toHaveAttribute("placeholder", "ghcr.io/acme/tools:1.2");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Billing");
+    await userEvent.type(image, " ghcr.io/acme/tools:1.2 ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save component" }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][1].definition.image).toBe("ghcr.io/acme/tools:1.2");
+  });
+
+  it("editing a row that names an image shows it and sends it back", async () => {
+    listMock.mockResolvedValue([comp({ definition: { hosts: ["a.example"], image: "ghcr.io/acme/tools" } })]);
+    putMock.mockResolvedValue({ ...comp(), requirements: [] });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Payments API" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Image")).toHaveValue("ghcr.io/acme/tools");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save component" }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][1].definition.image).toBe("ghcr.io/acme/tools");
   });
 
   it("a save with no warning shows none", async () => {

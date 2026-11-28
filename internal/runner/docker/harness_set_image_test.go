@@ -33,6 +33,8 @@ func TestAttachBashrc_StartsTheStartHarness(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, binDir := newAttachHome(t)
+			_, finish := attachPrep(t, home)
+			finish() // attached after agent-run --idle's prep
 			for _, cli := range []string{"claude", "codex"} {
 				fake := "#!/bin/sh\necho " + cli + " >> \"$HOME/calls.log\"\n"
 				if err := os.WriteFile(filepath.Join(binDir, cli), []byte(fake), 0o755); err != nil { //nolint:gosec // test fixture

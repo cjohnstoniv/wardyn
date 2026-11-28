@@ -69,7 +69,7 @@ type Stream struct {
 
 func (p *Peer) newStream(id uint32, kind string) *Stream {
 	ctx, cancel := context.WithCancel(p.ctx)
-	s := &Stream{p: p, id: id, kind: kind, send: NewStreamCredit(p.connSend), ctx: ctx, cancel: cancel, opened: make(chan struct{}), done: make(chan struct{})}
+	s := &Stream{p: p, id: id, kind: kind, send: newCredit(p.streamWin, p.connSend), ctx: ctx, cancel: cancel, opened: make(chan struct{}), done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
@@ -150,7 +150,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 		s.p.held.Add(-int64(n))
 		consumed = int64(n)
 		s.unacked += int64(n)
-		if s.unacked >= StreamWindow/4 {
+		if s.unacked >= s.p.streamWin/4 {
 			grant, s.unacked = s.unacked, 0
 		}
 	}
@@ -165,8 +165,10 @@ func (s *Stream) Read(b []byte) (int, error) {
 }
 
 // Write sends b as DATA frames of at most MaxDataFrame bytes, waiting for credit.
+// Each frame is checked against the stream's reset with the link's writer held,
+// so after an abort no further frame goes out; n counts the frames that did.
 func (s *Stream) Write(b []byte) (int, error) {
-	if runnerToOrgOnly(s.kind) && s.p.cfg.Org { // the tee and a window flow runner to org only
+	if runnerToOrgOnly(s.kind) && s.p.cfg.Org { // the tee, a window and an export flow runner to org only
 		_ = s.Reset(ResetRefused)
 		return 0, io.ErrClosedPipe
 	}
@@ -188,7 +190,7 @@ func (s *Stream) Write(b []byte) (int, error) {
 		}
 		// The frame is written under the link's ctx, not the stream's: a reset
 		// that cancels a write in progress would close the shared connection.
-		if err := s.p.send(s.p.ctx, Frame{Type: TypeData, Stream: s.id, Payload: b[written : written+n]}); err != nil {
+		if err := s.p.sendData(s, b[written:written+n]); err != nil {
 			return written, err
 		}
 		written += n
@@ -259,6 +261,18 @@ func (s *Stream) Reset(code uint32) error {
 	return s.p.send(s.p.ctx, Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
 }
 
+// Abort ends the stream at once with code, with no I/O on the link: it never waits on the link's writer
+// or on another stream, and starts no goroutine. A Write waiting for credit returns at once, and one
+// waiting for the writer returns when it frees, its frame dropped: no DATA frame of the stream is
+// admitted after Abort returns. The RESET goes to the reply worker, which writes it after every frame
+// already admitted; until then the stream still counts against MaxStreams. On a stream already reset, by
+// the peer or by an earlier abort, it does nothing.
+func (s *Stream) Abort(code uint32) {
+	if s.abort(code) {
+		s.p.resetLater(s, code)
+	}
+}
+
 // resetQueued is Reset for the read loop: the RESET frame goes to the reply worker rather than being
 // written here, because a read loop that waits on a write can stop two peers reading each other. It
 // returns an error when the reply queue refused the frame (full, which only a flooding peer reaches); the
@@ -314,10 +328,10 @@ func (s *Stream) deliver(b []byte) error {
 		return nil
 	}
 	defer s.mu.Unlock()
-	if int64(len(s.buf)+len(b)) > StreamWindow {
+	if int64(len(s.buf)+len(b)) > s.p.streamWin {
 		return errStreamOverflow
 	}
-	if s.p.held.Add(int64(len(b))) > ConnWindow {
+	if s.p.held.Add(int64(len(b))) > s.p.connWin {
 		s.p.held.Add(-int64(len(b)))
 		return fmt.Errorf("%w: peer sent past the connection window", ErrBadFrame)
 	}

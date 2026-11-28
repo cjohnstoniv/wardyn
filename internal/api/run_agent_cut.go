@@ -63,14 +63,14 @@ func (s *Server) cutAgent(ctx context.Context, run types.AgentRun) (cutKind, err
 			return cutProxyStopped, errRunnerNotHere
 		}
 		if fencer, can := s.cfg.Runner.(runner.ProxyFencer); can && caps.ProxyFence {
-			err = fencer.FenceProxy(ctx, run.SandboxRef)
+			err = runner.FenceEgress(ctx, fencer, run.SandboxRef)
 		} else {
 			kind, err = s.stopProxyOnly(ctx, run.SandboxRef)
 		}
 	default:
 		fencer, can := s.cfg.Runner.(runner.ProxyFencer)
 		if can {
-			err = fencer.FenceProxy(ctx, run.SandboxRef)
+			err = runner.FenceEgress(ctx, fencer, run.SandboxRef)
 		}
 		if !can || errors.Is(err, runner.ErrEndUnsupported) {
 			kind, err = s.stopProxyOnly(ctx, run.SandboxRef)
@@ -89,7 +89,7 @@ func (s *Server) stopProxyOnly(ctx context.Context, ref string) (cutKind, error)
 	if !ok {
 		return cutUnsupported, nil
 	}
-	switch err := stopper.StopProxy(ctx, ref); {
+	switch err := runner.CutEgress(ctx, stopper, ref); {
 	case err == nil:
 		return cutProxyStopped, nil
 	case errors.Is(err, runner.ErrEndUnsupported):
@@ -99,8 +99,8 @@ func (s *Server) stopProxyOnly(ctx context.Context, ref string) (cutKind, error)
 	}
 }
 
-// keepable reports a sandbox this server can keep with its agent cut off: rule R, stopTerminalSandbox
-// and quiesceKeptSandbox ask it.
+// keepable reports a sandbox this server can keep with its agent cut off: rule R and stopTerminalSandbox
+// ask it (quiesceRunnerRun keeps only a run whose cut it made itself).
 func (s *Server) keepable(run types.AgentRun) bool {
 	if run.MachineKind.IsVM() || s.cfg.Runner == nil {
 		return false

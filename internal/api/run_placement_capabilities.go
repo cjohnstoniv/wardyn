@@ -45,12 +45,10 @@ type placementCaps struct {
 	impl any
 }
 
-// placementCapabilities answers what the placement a run gets can enforce. The
-// remote placement is the deployment's executor, which already leaves runner
-// substrates out of its answer; a local one is the claimed runner's last `caps`
-// event, so an offline runner, or one that never reported, is a runner_offline
-// refusal and never a guessed answer. The error is a *placement.Refusal for a
-// placement that cannot answer, anything else for a failed read.
+// placementCapabilities answers what the placement a run gets can enforce. The remote placement is the deployment's
+// executor, which already leaves runner substrates out of its answer; a local one is the claimed runner's last `caps`
+// event, so an offline runner, or one that never reported, is a runner_offline refusal and never a guessed answer.
+// The error is a *placement.Refusal for a placement that cannot answer, anything else for a failed read.
 func (s *Server) placementCapabilities(ctx context.Context, p types.Placement, runnerID uuid.UUID) (placementCaps, error) {
 	if p == types.PlacementLocal {
 		return s.localRunnerCapabilities(ctx, runnerID)
@@ -123,7 +121,7 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 			Driver: ep.sub.Name(), ConfinementClasses: cs.Classes, Resolved: cs.Resolved,
 			StructuralEgress: cs.StructuralEgress, NetworkPolicy: cs.NetworkPolicy,
 			NetworkPolicyAcknowledged: cs.NetworkPolicyAcknowledged, SessionRecording: cs.SessionRecording,
-			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles,
+			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles, ExtraContainers: cs.ExtraContainers,
 			EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement, Freeze: cs.Freeze,
 			ExecOutputUncaptured: cs.ExecOutputUncaptured, NetworkPolicyCheck: cs.NetworkPolicyCheck,
 		},
@@ -202,7 +200,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 	out := placementCaps{Source: types.RunEvidenceSubstrate, Capabilities: runner.Capabilities{
 		Driver: sets[0].Driver, Resolved: map[types.ConfinementClass]string{}, Freeze: map[types.ConfinementClass]bool{},
 		StructuralEgress: true, NetworkPolicy: true, NetworkPolicyAcknowledged: true, SessionRecording: true,
-		UserDrives: true, ManagedFiles: true, EphemeralDiskEnforcement: sets[0].EphemeralDiskEnforcement,
+		UserDrives: true, ManagedFiles: true, ExtraContainers: true, EphemeralDiskEnforcement: sets[0].EphemeralDiskEnforcement,
 	}}
 	for _, c := range sets[0].ConfinementClasses {
 		if every(sets, func(s placementCaps) bool { return slices.Contains(s.ConfinementClasses, c) }) {
@@ -219,6 +217,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 		out.SessionRecording = out.SessionRecording && s.SessionRecording
 		out.UserDrives = out.UserDrives && s.UserDrives
 		out.ManagedFiles = out.ManagedFiles && s.ManagedFiles
+		out.ExtraContainers = out.ExtraContainers && s.ExtraContainers
 		out.ExecOutputUncaptured = out.ExecOutputUncaptured || s.ExecOutputUncaptured
 		if diskEnforcementRank(s.EphemeralDiskEnforcement) < diskEnforcementRank(out.EphemeralDiskEnforcement) {
 			out.EphemeralDiskEnforcement = s.EphemeralDiskEnforcement
@@ -553,9 +552,10 @@ func macOSRefusal(field, detail string) *placement.Refusal {
 // macOSVMOffer turns a runner's last caps, the managed-Mac gate and the macOS VMs already running on it
 // into one answer. haveCaps is false for a runner that never sent caps; live is the macos_vm runs the
 // org counts on it, a best-effort guard (the runner's own ledger is the authority); operator is whether
-// the asker is a security operator, who is told the command that fixes the trust refusal. limit, when given,
+// the asker is a security operator, who is told the command that fixes the trust refusal. device is the
+// device-certificate verdict for rn (mdmDeviceVerdictFor); its zero value refuses. limit, when given,
 // is the organisation's maximum base age: an older base, or one whose runner reports no age, is refused.
-func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int, operator bool, limit ...macOSBaseLimit) macOSOffer {
+func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int, operator bool, device mdmDeviceVerdict, limit ...macOSBaseLimit) macOSOffer {
 	mc := caps.MacOSVM
 	if !haveCaps || mc == nil {
 		return macOSOffer{Refusal: macOSRefusal("machine_kind", remote.MacOSVMNotOffered(macRunnerName(rn))), Why: client.MacOSVMWhyNotOffered, Pool: macOSPoolNotOffered}
@@ -566,7 +566,7 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 		out.Refused, out.Have, out.Need, out.Refusal = macOSRunnerRefused(rn, mc)
 		return out
 	}
-	evidence, refusal := macOSHostGate(rn, operator)
+	evidence, refusal := macOSHostGate(rn, operator, device)
 	if refusal != nil {
 		out.Refusal, out.Why = refusal, client.MacOSVMWhyNotManaged
 		if refusal.Reason == placement.ReasonRunnerPostureUnmet {
@@ -641,9 +641,10 @@ func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
 }
 
 // macOSHostGate is the managed-Mac gate (design 3.9): the runner's trust class is managed_device, which
-// only a security operator sets, and its posture says mdm_managed from the MDM's file. It returns what
-// the pass rested on, or the first check that failed. No device-certificate check exists in 0.10.0.
-func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *placement.Refusal) {
+// only a security operator sets, its posture says mdm_managed from the MDM's file, and, when the organisation
+// configures an MDM CA, device says its device certificate chains to it and is current and unrevoked. It
+// returns what the pass rested on, or the first check that failed.
+func macOSHostGate(rn types.Runner, operator bool, device mdmDeviceVerdict) (evidence []string, refusal *placement.Refusal) {
 	if rn.TrustClass != types.RunnerTrustManagedDevice {
 		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security admin to mark it as a managed device."
 		if operator {
@@ -656,7 +657,7 @@ func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *
 		return nil, &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: "machine_kind",
 			Detail: macRunnerName(rn) + " has no MDM posture file saying it is managed (`/Library/Application Support/Wardyn/posture.json`)."}
 	}
-	return []string{"managed_device (set by an administrator)", "MDM posture file", "no MDM device-certificate check yet"}, nil
+	return device.gateOutcome(rn)
 }
 
 // macOSVMRefusal is the refusal (placement_capability, or runner_posture_unmet from the gate) of a macOS VM run on runner id, or nil when the
@@ -687,7 +688,8 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 		}
 		live = held[id]
 	}
-	offer := macOSVMOffer(rn, caps, haveCaps, live, s.isSecurityOperator(ctx), limit)
+	device := s.mdmDeviceVerdictFor(ctx, rn)
+	offer := macOSVMOffer(rn, caps, haveCaps, live, s.isSecurityOperator(ctx), device, limit)
 	if !offer.Offered {
 		if pool && offer.Pool != "" {
 			return macOSRefusal(offer.Refusal.Field, offer.Pool), nil

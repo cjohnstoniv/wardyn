@@ -6,12 +6,9 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -31,10 +28,9 @@ import (
 // (/wardyn/mcp/<token>/<server key>). The broker is the only path to a server,
 // holds its credential and applies the run's tool rules to its tools.
 //
-// A local server (transport stdio, WARDYN_MCP_LOCAL_SERVERS) has no broker
-// entry and no token: dispatch writes its launch command into the same
-// harness configuration, the harness starts it inside the sandbox, and the
-// harness applies the run's rules to its tools.
+// A server that starts from a command (transport stdio) runs only in a sandbox
+// of its own, never inside the agent's; run_mcp_sandbox_gate.go decides whether
+// a run may have one.
 
 const (
 	// claudeMCPInteractivePath is Claude Code's managed MCP file, which every
@@ -47,31 +43,12 @@ const (
 	// codexMCPEnv carries Codex CLI's servers, key to broker URL, which its
 	// agent-run writes into config.toml. Secret env: each URL holds the token.
 	codexMCPEnv = "WARDYN_MCP_SERVERS_JSON"
-	// codexMCPLocalEnv carries Codex CLI's local servers as the
-	// [mcp_servers.<key>] tables its agent-run adds to config.toml
-	// (codexLocalTOML). Plain env: a launch command holds no credential.
-	codexMCPLocalEnv = "WARDYN_MCP_STDIO_TOML"
-	// envMCPLocalServers turns on MCP servers that run in the sandbox. Off,
-	// the default, every door refuses one (mcpLocalOffProblem), so dispatch
-	// writes what it did before they existed.
-	envMCPLocalServers = "WARDYN_MCP_LOCAL_SERVERS"
 	// claudeHarness is Claude Code's harness id.
 	claudeHarness = "claude-code"
 	// mcpServerKeyMax leaves room for a numeric suffix within the broker's
 	// 32-byte key.
 	mcpServerKeyMax = 28
 )
-
-// mcpLocalOffProblem is the refusal of a local MCP server while
-// WARDYN_MCP_LOCAL_SERVERS is off, "" otherwise. Save and the run gate both
-// ask it first, so a row saved while the switch was on stops at the gate once
-// it is off.
-func mcpLocalOffProblem(def types.ComponentDefinition) string {
-	if def.LocalMCP() && !envEnabled(envMCPLocalServers) {
-		return "mcp.transport: MCP servers that run in the sandbox are off on this deployment; an operator turns them on with " + envMCPLocalServers
-	}
-	return ""
-}
 
 // mcpIncludedHarnesses is the request's harness ids: its included harnesses,
 // else the agent an older client names.
@@ -140,8 +117,12 @@ func admitMCPHarnesses(def types.ComponentDefinition, asked, included []string) 
 
 // rawEgressHosts is what a component adds to the run's allowlist: its hosts,
 // less a remote MCP server's host at any port, which the broker alone reaches.
-// A local server's hosts are all raw egress: it runs in the sandbox.
+// A server that starts from a command adds none: its hosts belong to its own
+// sandbox's policy, never the agent's.
 func rawEgressHosts(def types.ComponentDefinition) []string {
+	if def.LocalMCP() {
+		return nil
+	}
 	if !def.RemoteMCP() {
 		return def.Hosts
 	}
@@ -278,26 +259,15 @@ type mcpDispatch struct {
 // or the Wardyn boundary denies it, or the boundary does not allow it),
 // credentialed or not, with its bindings, as a revive drops one. Each harness a server is on for gets one token and its
 // own configuration: Claude Code a managed file, Codex CLI the env its
-// agent-run writes into config.toml (env, set here into sandboxEnv). A local
-// server takes no token and no broker entry; it joins the same configuration
-// as the command its harness starts, and host withholding does not drop it:
-// only a remote server (m.Launch == nil && w.withheld(m.Host)) is skipped.
+// agent-run writes into config.toml (env, set here into sandboxEnv). A server
+// that starts from a command is skipped: it runs only in a sandbox of its own,
+// and the gate refuses a run that has one until it can be given one.
 func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.InjectionGrant, proxyURL string, interactive bool, env map[string]string) mcpDispatch {
 	var out mcpDispatch
 	on := map[string][]string{}
-	local := map[string][]componentMCP{}
 	var order []string
 	for _, m := range servers {
-		if m.Launch == nil && w.withheld(m.Host) {
-			continue
-		}
-		if m.Launch != nil {
-			for _, h := range m.Harnesses {
-				if _, seen := on[h]; !seen && local[h] == nil {
-					order = append(order, h)
-				}
-				local[h] = append(local[h], m)
-			}
+		if m.Launch != nil || w.withheld(m.Host) {
 			continue
 		}
 		cfg := proxy.MCPServerConfig{Key: m.Key, URL: m.URL, Ordinal: m.Ordinal}
@@ -317,7 +287,7 @@ func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.Inj
 			out.gatewayBad = append(out.gatewayBad, m.Key)
 		}
 		for _, h := range m.Harnesses {
-			if _, seen := on[h]; !seen && local[h] == nil {
+			if _, seen := on[h]; !seen {
 				order = append(order, h)
 			}
 			on[h] = append(on[h], m.Key)
@@ -326,23 +296,17 @@ func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.Inj
 	base := strings.TrimRight(proxyURL, "/") + "/wardyn/mcp/"
 	for _, h := range order {
 		urls := map[string]string{}
-		if keys := on[h]; len(keys) > 0 {
-			token, digest := mintMCPToken()
-			out.bindings = append(out.bindings, proxy.MCPBinding{Harness: h, SHA256: digest, Servers: keys})
-			for _, k := range keys {
-				urls[k] = base + token + "/" + k
-			}
+		token, digest := mintMCPToken()
+		keys := on[h]
+		out.bindings = append(out.bindings, proxy.MCPBinding{Harness: h, SHA256: digest, Servers: keys})
+		for _, k := range keys {
+			urls[k] = base + token + "/" + k
 		}
 		switch h {
 		case claudeHarness:
-			out.files = append(out.files, claudeMCPFile(urls, local[h], interactive))
+			out.files = append(out.files, claudeMCPFile(urls, interactive))
 		case codexHarness:
-			if len(urls) > 0 {
-				env[codexMCPEnv] = string(mustJSON(urls))
-			}
-			if len(local[h]) > 0 {
-				env[codexMCPLocalEnv] = codexLocalTOML(local[h], env)
-			}
+			env[codexMCPEnv] = string(mustJSON(urls))
 		}
 	}
 	return out
@@ -350,14 +314,11 @@ func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.Inj
 
 // claudeMCPFile is Claude Code's MCP configuration: the managed file an
 // interactive session reads, or the file agent-run passes an autonomous one.
-// A remote server is its broker URL, a local one its launch command.
-func claudeMCPFile(urls map[string]string, local []componentMCP, interactive bool) runner.ManagedFile {
+// Each server is its broker URL.
+func claudeMCPFile(urls map[string]string, interactive bool) runner.ManagedFile {
 	servers := map[string]any{}
 	for k, u := range urls {
 		servers[k] = map[string]string{"type": "http", "url": u}
-	}
-	for _, m := range local {
-		servers[m.Key] = map[string]any{"type": "stdio", "command": m.Launch.Command, "args": slices.Concat([]string{}, m.Launch.Args)}
 	}
 	path := claudeMCPAutonomousPath
 	if interactive {
@@ -367,33 +328,13 @@ func claudeMCPFile(urls map[string]string, local []componentMCP, interactive boo
 	return runner.ManagedFile{Path: path, Content: content}
 }
 
-// codexLocalTOML is one [mcp_servers.<key>] table per local server: its
-// command, its args, and env_vars naming the sandbox's variables and the
-// server's own. Codex CLI starts a server with only a few variables of its
-// own; a local server runs with the agent's access, so it gets the agent's
-// environment (the proxy, the trust bundle, its own secrets) by name. The
-// broker URLs are left out: they carry Codex's token. Each string is a JSON
-// string, which is a valid TOML basic string.
-func codexLocalTOML(servers []componentMCP, env map[string]string) string {
-	var b strings.Builder
-	for _, m := range servers {
-		names := slices.Concat(slices.Collect(maps.Keys(env)), m.EnvNames)
-		names = slices.DeleteFunc(names, func(k string) bool { return k == codexMCPEnv || k == codexMCPLocalEnv })
-		slices.Sort(names)
-		fmt.Fprintf(&b, "[mcp_servers.%s]\ncommand = %s\nargs = %s\nenv_vars = %s\n",
-			m.Key, mustJSON(m.Launch.Command), mustJSON(slices.Concat([]string{}, m.Launch.Args)), mustJSON(slices.Compact(names)))
-	}
-	return b.String()
-}
-
 // mintMCPToken makes one harness's random MCP token and its SHA-256 digest.
 // crypto/rand.Read never returns an error.
 func mintMCPToken() (token, digest string) {
 	raw := make([]byte, 32)
 	_, _ = rand.Read(raw)
 	token = base64.RawURLEncoding.EncodeToString(raw)
-	sum := sha256.Sum256([]byte(token))
-	return token, hex.EncodeToString(sum[:])
+	return token, types.TokenDigest(token)
 }
 
 // reviveMCPBindings re-derives which harness reaches which MCP server from the

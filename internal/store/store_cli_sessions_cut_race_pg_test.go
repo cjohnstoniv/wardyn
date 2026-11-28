@@ -280,3 +280,56 @@ func TestPG_CLISession_CreateCutAndSuspensionDoNotDeadlock(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_CLISession_OverlappingCutsEachCountOnlyWhatTheyEnded: two cuts of the same person that start
+// together end each live CLI session once, so the counts their receipts carry add up to the sessions the
+// person had, and a cut that finds none left reports 0. A cut under a context with no CLIEnded runs as
+// before. Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.
+func TestPG_CLISession_OverlappingCutsEachCountOnlyWhatTheyEnded(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	base := context.Background()
+	const sub, email = "sub-overlap", "overlap@corp.example"
+	for range 3 {
+		seedCLISession(t, st, sub, email)
+	}
+	cut := func(name string) (int, error) {
+		ctx, ended := store.WithCLIEnded(base)
+		err := store.ExecRevocationCut(ctx, pool, sessionsCutSQL, name, types.CLISessionEndSessionsCut)
+		return ended.Count(), err
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var counts [2]int
+	var errs [2]error
+	for i, name := range []string{sub, email} { // the subject and the email form of one person
+		wg.Add(1)
+		go func() { defer wg.Done(); <-start; counts[i], errs[i] = cut(name) }()
+	}
+	close(start)
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("overlapping cuts: %v, %v", errs[0], errs[1])
+	}
+	if counts[0]+counts[1] != 3 {
+		t.Fatalf("overlapping cuts reported %d and %d, want 3 between them (each session ended once)", counts[0], counts[1])
+	}
+	if n, err := cut(sub); err != nil || n != 0 {
+		t.Fatalf("a cut after both found %d sessions to end, err %v, want 0", n, err)
+	}
+	// One context: the sink adds the cuts of one call (a person cut under two names).
+	const sub2, email2 = "sub-overlap-2", "overlap-2@corp.example"
+	seedCLISession(t, st, sub2, email2)
+	ctx, ended := store.WithCLIEnded(base)
+	for _, name := range []string{sub2, email2} {
+		if err := store.ExecRevocationCut(ctx, pool, sessionsCutSQL, name, types.CLISessionEndSessionsCut); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ended.Count() != 1 {
+		t.Fatalf("two cuts under one context counted %d, want the 1 session ended between them", ended.Count())
+	}
+	if err := store.ExecRevocationCut(base, pool, sessionsCutSQL, sub, types.CLISessionEndSessionsCut); err != nil {
+		t.Fatalf("a cut under a context with no CLIEnded: %v", err)
+	}
+}

@@ -4,6 +4,7 @@
 package foldersync
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -15,10 +16,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 )
 
 // Git history for `wardyn sync --git` and `--pull-commits`. .git itself never
@@ -45,15 +48,93 @@ type GitSent struct {
 
 // laptopGit runs git in the laptop's synced directory.
 func laptopGit(ctx context.Context, root string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
-	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	return gitIn(ctx, root, laptopEnv(), args...)
+}
+
+// laptopEnv is the laptop's own environment, as its git sees it.
+func laptopEnv() []string {
+	return append(cliutil.ScrubChildEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0")
+}
+
+// cleanGitEnv is an environment in which git reads no configuration but the repository's own, no
+// replace ref, no hook and nothing from a GIT_* variable the laptop set: home is an empty directory.
+func cleanGitEnv(home string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_NO_REPLACE_OBJECTS=1", "GIT_TERMINAL_PROMPT=0"}
+	if v := os.Getenv("SYSTEMROOT"); v != "" {
+		env = append(env, "SYSTEMROOT="+v)
+	}
+	return env
+}
+
+// gitVerb is the git command in args, past any leading -c name=value pairs.
+func gitVerb(args []string) string {
+	for len(args) > 2 && args[0] == "-c" {
+		args = args[2:]
+	}
+	return args[0]
+}
+
+// gitIn runs git in dir with exactly env.
+func gitIn(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = env
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, Shown(strings.TrimSpace(errb.String())))
+		return "", fmt.Errorf("git %s: %w: %s", gitVerb(args), err, Shown(strings.TrimSpace(errb.String())))
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+// laptopGitNames runs git in dir (with stdin as its input, if any) and hands visit each NUL-terminated name it
+// prints, as it prints it, so a long history is never held whole. A visit error stops git and is returned.
+func laptopGitNames(ctx context.Context, root string, env []string, stdin io.Reader, visit func(name string) error, args ...string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	cmd.Env = env
+	cmd.Stdin = stdin
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, 0); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	var verr error
+	for verr == nil && sc.Scan() {
+		if name := sc.Text(); name != "" {
+			verr = visit(name)
+		}
+	}
+	if verr != nil {
+		cancel()
+	}
+	serr := sc.Err()
+	werr := cmd.Wait()
+	switch {
+	case verr != nil:
+		return verr
+	case serr != nil:
+		return fmt.Errorf("git %s: %w", gitVerb(args), serr)
+	case werr != nil:
+		return fmt.Errorf("git %s: %w: %s", gitVerb(args), werr, Shown(strings.TrimSpace(errb.String())))
+	}
+	return nil
 }
 
 // sandboxGit runs script in the sandbox over a gateway exec channel and returns
@@ -102,35 +183,25 @@ func GitCheck(ctx context.Context, sy *Syncer, root string) error {
 // gets a fresh repository with the branch checked out over the synced files; one
 // that has a repository gets the branch as refs/remotes/laptop/<branch>.
 func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID, root string) error {
-	branch, err := laptopGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
-	if err != nil {
-		return errors.New("--git needs a branch checked out on this computer (HEAD is detached)")
-	}
-	if !syncGitBranch.MatchString(branch) || strings.Contains(branch, "..") {
-		return fmt.Errorf("--git does not send the branch name %s: use letters, digits, '.', '_', '-' and '/'", Shown(branch))
-	}
-	head, err := laptopGit(ctx, root, "rev-parse", "HEAD")
-	if err != nil {
-		return err
-	}
-	if sent := sy.State.GitSent; sent != nil && *sent == (GitSent{Branch: branch, Commit: head}) {
-		fmt.Fprintf(w, "git: %s at %s is already in the sandbox\n", branch, head[:12])
-		return nil
-	}
 	tmp, err := os.CreateTemp(filepath.Dir(sy.StateFile), "laptop-*.bundle")
 	if err != nil {
 		return err
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
-	if _, err := laptopGit(ctx, root, "bundle", "create", "-q", tmp.Name(), "refs/heads/"+branch); err != nil {
+	branch, head, sent, err := bundleCurrentBranch(ctx, root, tmp.Name(), sy.State.GitSent, sy.Opts.OrgDeny)
+	if err != nil {
 		return err
+	}
+	if sent {
+		fmt.Fprintf(w, "git: %s at %s is already in the sandbox\n", branch, head[:12])
+		return nil
 	}
 	remote := syncGitBundlePath(runID, "laptop")
 	if err := sy.UploadFile(tmp.Name(), remote); err != nil {
 		return fmt.Errorf("send the git bundle: %w", err)
 	}
-	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch))
+	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch, len(head) == 64))
 	if err != nil {
 		return err
 	}
@@ -146,6 +217,222 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	return nil
 }
 
+// bundleCurrentBranch reads the branch and head to send and writes their checked bundle to path, unless
+// already is that branch at that head (sent is then true and nothing is written). A branch that moves
+// while its bundle is made is read and bundled once more; a second move is the caller's error.
+func bundleCurrentBranch(ctx context.Context, root, path string, already *GitSent, orgDeny []string) (branch, head string, sent bool, err error) {
+	for try := 0; ; try++ {
+		branch, err = laptopGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+		if err != nil {
+			return "", "", false, errors.New("--git needs a branch checked out on this computer (HEAD is detached)")
+		}
+		if !syncGitBranch.MatchString(branch) || strings.Contains(branch, "..") {
+			return "", "", false, fmt.Errorf("--git does not send the branch name %s: use letters, digits, '.', '_', '-' and '/'", Shown(branch))
+		}
+		if head, err = laptopGit(ctx, root, "rev-parse", "HEAD"); err != nil {
+			return "", "", false, err
+		}
+		if already != nil && *already == (GitSent{Branch: branch, Commit: head}) {
+			return branch, head, true, nil
+		}
+		err = makeCheckedBundle(ctx, root, branch, head, path, orgDeny)
+		var moved *branchMovedError
+		if !errors.As(err, &moved) || try > 0 {
+			return branch, head, false, err
+		}
+	}
+}
+
+// makeCheckedBundle writes branch's bundle to path and refuses it unless it carries exactly head and nothing
+// the organisation's patterns leave out. The branch name can move at any moment, so the bundle is made
+// first, its one advertised tip is read back from the file itself, and the history scanned is that
+// commit's: what is uploaded is the file, whose contents no later commit can change.
+func makeCheckedBundle(ctx context.Context, root, branch, head, path string, orgDeny []string) error {
+	ref := "refs/heads/" + branch
+	if _, err := laptopGit(ctx, root, "bundle", "create", "-q", path, ref); err != nil {
+		return err
+	}
+	heads, err := laptopGit(ctx, root, "bundle", "list-heads", path)
+	if err != nil {
+		return err
+	}
+	tip, name, _ := strings.Cut(heads, " ")
+	if name != ref || strings.ContainsAny(heads, "\n") || !syncGitSHA.MatchString(tip) {
+		return fmt.Errorf("--git did not send %s: the bundle does not advertise exactly %s (%s)", Shown(branch), ref, Shown(heads))
+	}
+	if tip != head {
+		return &branchMovedError{fmt.Sprintf("--git did not send %s: it moved from %s to %s while the bundle was made; run the sync again", Shown(branch), head[:12], tip[:12])}
+	}
+	if len(orgDeny) == 0 {
+		return nil
+	}
+	if shallow, _ := laptopGit(ctx, root, "rev-parse", "--is-shallow-repository"); shallow == "true" {
+		return fmt.Errorf("--git did not send %s: this repository is a shallow clone, so its history cannot be checked against your organisation's sync patterns; run git fetch --unshallow and send again", Shown(branch))
+	}
+	return checkBundleAllowed(ctx, path, branch, tip, orgDeny)
+}
+
+// A bundle scan's repository is made in a directory named scanDirPrefix+<random> beside the bundle, in the sync
+// state directory every run's sync shares. Its sync holds the lock file scanLockName inside it for as long as the
+// scan runs, so another sync can tell a live scan from one a killed send left behind.
+const (
+	scanDirPrefix = "wardyn-bundle-scan-"
+	scanLockName  = "owner.lock"
+	// scanSweepAge is how old a scan directory must be before a sweep looks at it, which covers the moment between
+	// making the directory and taking its lock.
+	scanSweepAge = 10 * time.Minute
+)
+
+// sweepAbandonedScans removes the scan directories in dir that a killed send left behind: each entry, read by name,
+// that is a directory (not a symbolic link) named with scanDirPrefix, older than scanSweepAge, whose lock no live
+// sync holds or that has none. Every failure is skipped: the sweep tidies, it never stops a send.
+func sweepAbandonedScans(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), scanDirPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) < scanSweepAge {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if f, err := os.OpenFile(filepath.Join(path, scanLockName), os.O_RDWR, 0); err == nil {
+			lerr := filelock.TryLock(f)
+			_ = f.Close() // released before the removal: Windows cannot remove an open file
+			if lerr != nil {
+				continue // a live send holds it, or it cannot be locked: leave it
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		_ = os.RemoveAll(path)
+	}
+}
+
+// checkBundleAllowed reads the bundle at path, the file that is sent, in an empty repository of its own,
+// so nothing in the laptop's checkout (a replace ref, a graft, a config) changes what is inspected: the
+// scan sees the commits the bundle's pack carries. The repository is made beside the bundle (a send's state
+// directory, not a memory-backed temp one) and removed on every path; a send killed mid-scan leaves it, and a later
+// scan's sweepAbandonedScans removes it.
+func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny []string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	sweepAbandonedScans(filepath.Dir(abs))
+	dir, err := os.MkdirTemp(filepath.Dir(abs), scanDirPrefix)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	lock, err := os.OpenFile(filepath.Join(dir, scanLockName), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close() // runs before the RemoveAll above: Windows cannot remove an open file
+	if err := filelock.TryLock(lock); err != nil {
+		return err
+	}
+	env := cleanGitEnv(dir)
+	repo := filepath.Join(dir, "scan.git")
+	// The scanner holds the bundle's own hash: a SHA-1 repository cannot import a SHA-256 bundle. SHA-1 takes
+	// no flag, so an older git that lacks the option still works; the variable names SHA-1 for a git whose
+	// default is another hash, and an older git ignores it.
+	init, initEnv := []string{"init", "--bare", "-q", repo}, append(env[:len(env):len(env)], "GIT_DEFAULT_HASH=sha1")
+	if len(tip) == 64 {
+		init, initEnv = append(init, "--object-format=sha256"), env
+	}
+	if _, err := gitIn(ctx, dir, initEnv, init...); err != nil {
+		if len(tip) == 64 {
+			return fmt.Errorf("--git did not send %s: its history uses SHA-256 object names and this git cannot make a repository to check them in: %w", Shown(branch), err)
+		}
+		return err
+	}
+	ref := "refs/heads/" + branch
+	if _, err := gitIn(ctx, repo, env, "-c", "core.hooksPath="+os.DevNull, "-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "-q", "--no-tags", abs, ref+":"+ref); err != nil {
+		return fmt.Errorf("--git did not send %s: its bundle could not be read back to check its history: %w", Shown(branch), err)
+	}
+	return checkHistoryAllowed(ctx, repo, branch, tip, orgDeny)
+}
+
+// branchMovedError is a branch that moved between the head SendGit read and the bundle's tip.
+type branchMovedError struct{ msg string }
+
+func (e *branchMovedError) Error() string { return e.msg }
+
+// HistoryDeniedError is --git refusing a branch whose history holds a path the
+// organisation's sync patterns leave out. A bundle carries every commit's files
+// whole, so the patterns cannot be applied to it.
+type HistoryDeniedError struct{ Branch, Path, Pattern string }
+
+func (e *HistoryDeniedError) Error() string {
+	return fmt.Sprintf("--git did not send %s: its history holds %s, which your organisation's sync pattern %s leaves out of a sync, and a git bundle carries every committed file. "+
+		"The working-tree sync is not affected. To send the branch, remove that path from its history, or ask your operator to change the pattern",
+		Shown(e.Branch), Shown(e.Path), Shown(e.Pattern))
+}
+
+// checkHistoryAllowed refuses to send branch, at the commit tip, when any path in its history, in
+// any commit or in the tip's tree, is one the organisation's patterns deny,
+// tested as a pass tests it: each directory above the file, then the file.
+//
+// Every path in any commit's tree was added by some commit against a parent (or sits in the root), so the
+// additions of each commit, a merge against each parent, name them all, a removed or renamed-away one
+// included (--no-renames keeps a rename as a delete and an add); the tip's tree is read as a second net.
+// The listing is plumbing, rev-list into diff-tree, because git log prints what a user's config asks it
+// to (a signature's text, a merge's format) among the names.
+func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny []string) error {
+	if len(orgDeny) == 0 {
+		return nil
+	}
+	ig := newSyncIgnore(orgDeny)
+	seen := map[string]bool{}
+	visit := func(name string) error {
+		if seen[name] {
+			return nil
+		}
+		seen[name] = true
+		for i, c := range name {
+			if c == '/' {
+				if pat, denied := ig.orgDeniedBy(name[:i], true); denied {
+					return &HistoryDeniedError{Branch: branch, Path: name, Pattern: pat}
+				}
+			}
+		}
+		if pat, denied := ig.orgDeniedBy(name, false); denied {
+			return &HistoryDeniedError{Branch: branch, Path: name, Pattern: pat}
+		}
+		return nil
+	}
+	env := cleanGitEnv(root)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	rev := exec.CommandContext(ctx, "git", "-C", root, "rev-list", tip, "--")
+	rev.Env = env
+	var revErr strings.Builder
+	rev.Stderr = &revErr
+	commits, err := rev.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := rev.Start(); err != nil {
+		return err
+	}
+	if err := laptopGitNames(ctx, root, env, commits, visit, "diff-tree", "--stdin", "-z", "-r", "-m", "--root", "--no-renames",
+		"--ignore-submodules=none", "--diff-filter=A", "--name-only", "--no-commit-id"); err != nil {
+		cancel()
+		_ = rev.Wait()
+		return err
+	}
+	if err := rev.Wait(); err != nil {
+		return fmt.Errorf("git rev-list: %w: %s", err, Shown(strings.TrimSpace(revErr.String())))
+	}
+	return laptopGitNames(ctx, root, env, nil, visit, "ls-tree", "-r", "-z", "--name-only", tip, "--")
+}
+
 // sendGitIncomplete marks a .git a send is still setting up: it is made before
 // git init writes anything and removed after the last step.
 const sendGitIncomplete = ".git/wardyn-setup-incomplete"
@@ -154,18 +441,23 @@ const sendGitIncomplete = ".git/wardyn-setup-incomplete"
 const (
 	gitDanglingLink = ".git in the synced directory is a link to something that does not exist; it is left as it is: remove it or point it at a repository"
 	gitUnfinished   = "this send did not finish setting up the repository in the synced directory; it is kept, and the next --git carries on with it if no other send has finished it"
+	gitTooOld       = "the sandbox's git is older than 2.29 and cannot hold SHA-256 history; update git in the sandbox image, or send from a SHA-1 repository"
 	gitPullNothing  = "the repository in the synced directory is not finished and has no commits to bring back; send with --git to finish it"
 )
 
 // sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
-// dir's repository, or sets one up. Setting up runs in an if condition, so a
+// dir's repository, or sets one up in the bundle's hash (sha256 for a 64-character
+// tip, SHA-1 otherwise). A repository git can open is never initialised again,
+// and one of the other hash ends the send with a reason before any fetch.
+// Setting up runs in an if condition, so a
 // failed step fails the send (set -e ignores a failure inside an AND-list).
 //
 // No send removes a .git or anything in one but the marker: another send, or
 // the sandbox's own git, may still be writing it. A send claims a .git it made
 // or found empty with the marker, and every send that finds the marker
 // repeats the steps, each safe to run again or beside another send: init
-// again, the bundle's objects, HEAD to the branch, the branch, the index.
+// (only for a .git git cannot open yet), the bundle's objects, HEAD to the
+// branch, the branch, the index.
 // The branch is written only by update-ref, forward and from the value just
 // read; the index step (idx) is git reset with a path, which moves no ref
 // (with no path, reset writes HEAD's branch back to the commit it read when
@@ -186,16 +478,37 @@ const (
 // no longer on the branch once the index is built.
 // GIT_DIR keeps git from walking up into a parent repository when .git is
 // not one.
-func sendGitScript(dir, bundle, branch string) string {
+func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 	b, m := shellQuote(bundle), shellQuote(sendGitIncomplete)
+	hash, mk, probe := "sha1", "GIT_DEFAULT_HASH=sha1 git init -q --template=", ""
+	if sha256 {
+		// The sandbox's repository holds the bundle's own hash, as checkBundleAllowed's scanner does.
+		hash = "sha256"
+		// A git older than 2.29 answers --object-format with rc 129 and its whole usage: the send says the git is
+		// too old instead. Any other failure shows git's own words.
+		said := "if [ \"$r\" = 129 ]; then echo " + shellQuote(gitTooOld) + " >&2; exit 1; fi; [ -z \"$e\" ] || printf '%s\\n' \"$e\" >&2; "
+		// Whether this git can make a SHA-256 repository at all is tried first, in a directory of its own that is
+		// removed after, so a git too old for one says so before anything in the synced directory is read or made.
+		probe = "d=$(mktemp -d); r=0; e=$(GIT_DIR=\"$d\" git init -q --bare --object-format=sha256 2>&1) || r=$?; rm -rf \"$d\"; " +
+			said + "[ \"$r\" = 0 ] || exit 1; "
+		mk = "{ r=0; e=$(git init -q --template= --object-format=sha256 2>&1) || r=$?; " + said + "[ \"$r\" = 0 ]; }"
+	}
+	// oh is the object format of a repository git can already open. A git older than 2.29 prints the unknown
+	// flag back, and knows only SHA-1. A repository of the other hash ends the send with a reason and nothing
+	// changed; the fetch never sees it.
+	read := "oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1;; esac; }"
+	refuse := "{ [ \"$oh\" = " + hash + " ] || { echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
+		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
+	init := "{ if " + read + "; then " + refuse + "; else " + mk + "; fi; }"
+	check := "if " + read + "; then " + refuse + "; fi; "
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
-	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
+	return "set -eu; " + probe + "cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
 		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
 		"{ [ \"$(git rev-parse -q --verify HEAD)\" = \"$c\" ] || { [ \"${1:-0}\" -lt 2 ] && idx $((${1:-0}+1)); }; }; }; " +
 		"if [ -L .git ] && [ ! -e .git ]; then echo " + shellQuote(gitDanglingLink) + " >&2; exit 1; fi; " +
 		"mkdir .git 2>/dev/null || :; " +
 		"if [ ! -L .git ] && { [ -d " + m + " ] || { [ -z \"$(ls -A .git 2>/dev/null)\" ] && mkdir " + m + " 2>/dev/null; } || [ -d " + m + " ]; }; then " +
-		"if git init -q --template= && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
+		"if " + init + " && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
 		"git fetch -q --no-tags " + b + " " + ref + " && git cat-file -e \"$t^{commit}\" && " +
 		"s= && if { h=$(git rev-parse -q --verify 'HEAD^{commit}') && { ! git merge-base --is-ancestor \"$h\" \"$t\" || ! git symbolic-ref -q HEAD >/dev/null; }; } || " +
 		"{ p=$(git symbolic-ref -q HEAD) && [ \"$p\" != " + ref + " ] && o=$(git rev-parse -q --verify " + ref + ") && ! git merge-base --is-ancestor \"$o\" \"$t\" && s=$p; }; then " +
@@ -207,7 +520,7 @@ func sendGitScript(dir, bundle, branch string) string {
 		"{ [ \"$o\" = \"$t\" ] || mkdir " + m + " 2>/dev/null || :; } && idx && [ \"$(git symbolic-ref -q HEAD)\" = " + ref + " ] && out=fresh; fi && " +
 		"{ rmdir " + m + " 2>/dev/null || [ ! -d " + m + " ]; }; then echo \"$out\"; " +
 		"else echo " + shellQuote(gitUnfinished) + " >&2; exit 1; fi; " +
-		"else git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
+		"else " + check + "git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
 }
 
 // pullGitScript is the sandbox side of PullCommits: it bundles the commits on
@@ -252,6 +565,9 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 	if err != nil {
 		return fmt.Errorf("bring the git bundle back: %w", err)
 	}
+	if err := checkPullHash(ctx, root, tmp.Name()); err != nil {
+		return err
+	}
 	if _, err := laptopGit(ctx, root, "bundle", "verify", "-q", tmp.Name()); err != nil {
 		return err
 	}
@@ -260,6 +576,52 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 		return err
 	}
 	fmt.Fprintf(w, "git: fetched %s commit(s) from the sandbox into the branch %s; review it with 'git log %s'. Your working tree is unchanged\n", Shown(out), branch, branch)
+	return nil
+}
+
+// bundleHash is the object format a bundle's header names: sha256 when it has the object-format capability, SHA-1
+// otherwise. ok is false when the file does not start like a bundle or names another object format.
+func bundleHash(file string) (hash string, ok bool) {
+	f, err := os.Open(file)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	if !sc.Scan() || !strings.HasPrefix(sc.Text(), "# v") {
+		return "", false
+	}
+	hash = "sha1"
+	for sc.Scan() && strings.HasPrefix(sc.Text(), "@") {
+		if v, found := strings.CutPrefix(sc.Text(), "@object-format="); found {
+			// Only the two names git has. Anything else came from the sandbox and is left to git's own steps.
+			if v != "sha1" && v != "sha256" {
+				return "", false
+			}
+			hash = v
+		}
+	}
+	return hash, true
+}
+
+// checkPullHash refuses a bundle of the sandbox's repository when the laptop's repository holds the other hash,
+// before git verifies or fetches it: git's own errors for that are a corrupted pack and a bad header, and the
+// fetch leaves a tmp_pack file behind. A bundle or repository it cannot read is left to the git steps after it.
+func checkPullHash(ctx context.Context, root, bundle string) error {
+	theirs, ok := bundleHash(bundle)
+	if !ok {
+		return nil
+	}
+	ours, err := laptopGit(ctx, root, "rev-parse", "--show-object-format")
+	if err != nil {
+		return nil
+	}
+	if ours != "sha1" && ours != "sha256" {
+		ours = "sha1" // a git older than 2.29 echoes the flag and knows only SHA-1
+	}
+	if ours != theirs {
+		return fmt.Errorf("the sandbox's repository uses %s object names and the repository on this computer uses %s, so its commits cannot be brought back", Shown(theirs), Shown(ours))
+	}
 	return nil
 }
 

@@ -142,9 +142,10 @@ func TestCreateSandbox_ScratchReachesTheAgentsOwnContainer(t *testing.T) {
 			t.Errorf("main container mount for %q = %+v, want MountPath %q", name, got, path)
 		}
 	}
-	// Scratch goes to the agent and nothing else. The proxy is its own pod on
-	// this substrate, so "the main container is the only container" is what
-	// keeps that true as the pod grows a second one.
+	// A run without extra containers is one container: the proxy is its own pod
+	// on this substrate. With extras, wardyn-work is shared with them on purpose
+	// while wardyn-tmp and wardyn-cache stay the agent's alone, which
+	// TestCreateSandbox_ExtraContainersWithDiskBudget pins.
 	if len(pod.Spec.Containers) != 1 {
 		t.Errorf("agent pod has %d containers; the scratch append targets %q by name — re-read it if a second container ever joins", len(pod.Spec.Containers), mainContainerName)
 	}

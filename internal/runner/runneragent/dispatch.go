@@ -79,9 +79,18 @@ type Config struct {
 	// machine_kind macos_vm. Each kind has its own switch, so a runner that offers one starts none of
 	// the other.
 	MacOSVM bool
+	// WindowsVM is LinuxVM for Windows VM sandboxes (Caps.WindowsVM): false refuses a create_vm for
+	// machine_kind windows_vm, whatever the substrate would do with it.
+	WindowsVM bool
 	// WorkloadStatus patches the status of one WardynWorkload custom resource from the org's answer
 	// (a k8s runner that lists workload namespaces); nil refuses workload_status.
 	WorkloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+	// SpoolDrained reports whether a local ref's run has no spooled decision the org has not taken (move.go);
+	// nil answers an export SpoolDrained false.
+	SpoolDrained func(ctx context.Context, localRef string) (bool, error)
+	// MoveUnbound records the org's notice that a run was moved away from a local ref (move.go); nil refuses
+	// the notice.
+	MoveUnbound func(ctx context.Context, runID uuid.UUID, localRef string) error
 }
 
 // errUnobservable is Status's and AgentStatus's answer for a sandbox Covered says this runner cannot
@@ -123,7 +132,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 	case runnerwire.MethodExecutionResult:
 		return d.executionResult(ctx, args)
 	case runnerwire.MethodAttach, runnerwire.MethodDialDesktop, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose,
-		runnerwire.MethodLocalAttach, runnerwire.MethodLocalAttachMode, runnerwire.MethodLocalAttachTeeAck, runnerwire.MethodMacWindow:
+		runnerwire.MethodLocalAttach, runnerwire.MethodLocalAttachMode, runnerwire.MethodLocalAttachTeeAck, runnerwire.MethodMacWindow,
+		runnerwire.MethodLocalWindow:
 		if d.cfg.Streams == nil {
 			return nil, runnerwire.Refuse("runner stream adapter is unavailable")
 		}
@@ -169,6 +179,10 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.reclaimDrive(ctx, args)
 	case runnerwire.MethodKeptMachine:
 		return d.keptMachine(ctx, args)
+	case runnerwire.MethodSnapshotSandbox, runnerwire.MethodCommitSnapshot, runnerwire.MethodAbortSnapshot, runnerwire.MethodDeleteSnapshot, runnerwire.MethodListSnapshots:
+		return d.snapshot(ctx, method, args)
+	case runnerwire.MethodMoveExport, runnerwire.MethodMoveImport, runnerwire.MethodMoveUnbound:
+		return d.move(ctx, peer, id, method, args)
 	}
 	return d.refCall(ctx, method, args)
 }
@@ -201,8 +215,15 @@ type KeptMachineDeleter interface {
 	DeleteKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
 }
 
-// keptMachine acts on one kept machine's folder on this Mac. Its one op is delete, of a machine named
-// by its full id.
+// KeptMachineExpiredDeleter is a KeptMachineDeleter that also runs the expiry-driven delete: it removes the
+// machine only if the Mac's own record, read under the machine's lock, says it has expired. It refuses (a
+// refused reply, nothing removed) when the record's deadline is later or a session holds the machine.
+type KeptMachineExpiredDeleter interface {
+	DeleteExpiredKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
+}
+
+// keptMachine acts on one kept machine's folder on this Mac. Its ops are delete and delete_expired, of a
+// machine named by its full id.
 func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any, error) {
 	var a runnerwire.KeptMachineArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
@@ -210,7 +231,7 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	}
 	id, err := uuid.Parse(a.ID)
 	switch {
-	case a.Op != runnerwire.KeptMachineOpDelete:
+	case a.Op != runnerwire.KeptMachineOpDelete && a.Op != runnerwire.KeptMachineOpDeleteExpired:
 		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
 	case err != nil || id == uuid.Nil || id.String() != a.ID:
 		return nil, runnerwire.Refuse("kept_machine needs a machine's full id")
@@ -219,7 +240,17 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	if !ok {
 		return nil, runnerwire.Refuse("this runner keeps no machines")
 	}
-	outcome, err := km.DeleteKeptMachine(ctx, id, a.By)
+	del := km.DeleteKeptMachine
+	// An expiry delete from a control plane of the earlier release is op delete with by expiry: it is the same
+	// request as delete_expired, and runs only the conditional delete.
+	if a.Op == runnerwire.KeptMachineOpDeleteExpired || a.By == runnerwire.KeptMachineByExpiry {
+		ex, ok := d.cfg.Substrate.(KeptMachineExpiredDeleter)
+		if !ok {
+			return nil, runnerwire.Refuse("this runner cannot delete only an expired machine")
+		}
+		del = ex.DeleteExpiredKeptMachine
+	}
+	outcome, err := del(ctx, id, a.By)
 	switch {
 	case err != nil:
 		return nil, err
@@ -260,6 +291,8 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		return nil, runnerwire.Refuse("this runner does not offer Linux VM sandboxes")
 	case kind.IsMacOSVM() && !d.cfg.MacOSVM:
 		return nil, runnerwire.Refuse("this runner does not offer macOS VM sandboxes")
+	case kind == types.MachineWindowsVM && !d.cfg.WindowsVM:
+		return nil, runnerwire.Refuse("this runner does not offer Windows VM sandboxes")
 	}
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err

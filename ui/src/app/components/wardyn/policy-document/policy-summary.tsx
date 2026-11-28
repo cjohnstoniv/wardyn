@@ -23,8 +23,15 @@ import type { ConfinementClass, HostRuleSet, RunPolicyHostMarks, RunPolicySpec, 
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
 import { hostRuleLines } from "../../screens/new-run-flow/review/host-rules-lines";
 import { HOST_RULES, IP_LITERALS, POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+import { HiddenChip } from "./hidden-chip";
 import { pushesLines, toolRulesTail } from "./policy-facts";
 import { WALL_PRESETS } from "../copy/wall-presets";
+import { LOCAL_FOLDERS } from "../copy/local-folders";
+import { RECORDING_LEVEL } from "../copy/recording-level";
+import { RUN_COMPUTER_FOLDER } from "../copy/runners";
+import { fmtBytes } from "../../../lib/format";
+import type { LocalFolderWallLayer } from "../../../lib/types/runs-folder";
+import { WHY_CARD } from "../../../lib/why-card-copy";
 
 export const REDACTED = "<redacted>";
 
@@ -43,6 +50,8 @@ export interface PolicyFacts {
   requestedClass?: ConfinementClass;
   /** Model providers whose gateway checks the run's prompts itself (run page only). */
   inspectionLeftTo?: string[];
+  /** The layer that set each local_folders wall, by wall name (run page only: the run's sync.wall_layers). */
+  localFolderLayers?: Record<string, LocalFolderWallLayer>;
 }
 
 type ChipSpec = { label: string; tone: "neutral" | "warning" | "info"; title?: string };
@@ -70,6 +79,8 @@ type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; a
  */
 export interface PolicyPresetNotes {
   chip?: { label: string; fields: ReadonlySet<string> };
+  /** The same chip for each agent whose rules decided fields (provenance layer agent_rules), after the preset's. */
+  agentRulesChips?: { label: string; fields: ReadonlySet<string> }[];
   pushesUnstoppable?: boolean;
 }
 
@@ -109,6 +120,45 @@ const mono = (t: string, extra?: Partial<Value>): Value => ({ text: t, mono: tru
 
 const hostChip = (inspected: boolean): ChipSpec =>
   inspected ? { label: SUMMARY.inspected, tone: "info" } : { label: SUMMARY.tunnelOnly, tone: "neutral" };
+const partlyChip: ChipSpec = { label: SUMMARY.partlyInspected, tone: "info" };
+
+// A wall's layer in the why card's Set by words (policy-remedy.tsx setByLabel), so a chip and a refusal card never
+// name one layer two ways.
+const wallLayerLabel = (l: LocalFolderWallLayer): string =>
+  l.layer === "boundary" || l.layer === "deployment"
+    ? WHY_CARD.BOUNDARY
+    : l.layer === "unit"
+      ? l.name ? WHY_CARD.TEAM(l.name) : WHY_CARD.TEAM_FALLBACK
+      : WHY_CARD.RUN_POLICY;
+
+// The local_folders walls, one line per wall. A wall's chips name the layer that set it, and are drawn where the
+// layer changes from the line before: walls one layer set share its chips, and two layers each show theirs.
+function localFolderLines(w: Bag, layers: Record<string, LocalFolderWallLayer> | undefined): Value[] {
+  const out: Value[] = [];
+  let shown: string | undefined;
+  const wall = (name: string, line: string) => {
+    const l = layers?.[name];
+    const key = l && `${wallLayerLabel(l)}\n${l.locked === true}`;
+    if (!l || key === shown) return out.push(text(line));
+    shown = key;
+    const chips: ChipSpec[] = [{ label: wallLayerLabel(l), tone: "info" }];
+    if (l.locked) chips.push({ label: RECORDING_LEVEL.LOCKED, tone: "neutral" });
+    return out.push(text(line, { chips }));
+  };
+  const mib = (v: unknown) => {
+    const n = asNumber(v);
+    return n && n > 0 ? fmtBytes(n * 1024 * 1024) : undefined;
+  };
+  if (asBool(w.deny_remote)) wall("deny_remote", LOCAL_FOLDERS.DENY_REMOTE);
+  if (asBool(w.deny_pull)) wall("deny_pull", LOCAL_FOLDERS.DENY_PULL);
+  const push = mib(w.max_push_mib);
+  if (push) wall("max_push_mib", LOCAL_FOLDERS.MAX_PUSH(push));
+  const pull = mib(w.max_pull_mib);
+  if (pull) wall("max_pull_mib", LOCAL_FOLDERS.MAX_PULL(pull));
+  const deny = asStrings(w.deny);
+  if (deny && deny.length > 0) out.push(text(LOCAL_FOLDERS.DENY), mono(deny.join(", ")));
+  return out;
+}
 
 export function cpuText(millis?: number): string {
   return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
@@ -182,9 +232,9 @@ function summarize(
   const add = (heading: string, rows: Row[]) => rows.length > 0 && groups.push({ heading, rows });
   // A row built from spec fields the wall preset decided carries the preset's chip on its first value.
   const row = (label: string, values: Value[], ...fields: string[]): Row => {
-    const chip = notes?.chip;
-    if (!chip || values.length === 0 || !fields.some((f) => chip.fields.has(f))) return { label, values };
-    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), { label: chip.label, tone: "info" }] };
+    const hit = [...(notes?.chip ? [notes.chip] : []), ...(notes?.agentRulesChips ?? [])].filter((c) => fields.some((f) => c.fields.has(f)));
+    if (hit.length === 0 || values.length === 0) return { label, values };
+    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), ...hit.map((c): { label: string; tone: "info" } => ({ label: c.label, tone: "info" }))] };
     return { label, values: [first, ...values.slice(1)] };
   };
   const entries = (items: string[], field: string): Value[] => [
@@ -213,12 +263,26 @@ function summarize(
     if (hostMarks) meanings.push({ text: SUMMARY.tunnelOnlyAllowAll });
   } else if (allowed || outside.length > 0) {
     const inspected = new Set(hostMarks?.inspected);
-    const hosts = entries(allowed ?? [], "allowed_domains").map((v) =>
-      hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
-    );
+    const partial = hostMarks?.partial ?? {};
+    // An entry opened only in part is followed by a quieter line naming the destinations that are opened.
+    const hosts = entries(allowed ?? [], "allowed_domains").flatMap((v): Value[] => {
+      if (!hostMarks || !v.text || v.mark === "removed") return [v];
+      const subset = Object.prototype.hasOwnProperty.call(partial, v.text) ? partial[v.text] : undefined;
+      // A wildcard in an older server's inspected list (it recorded no partial) names hosts the proxy may not
+      // open, so it reads as opened in part, which destinations unknown.
+      const legacyWildcard = hostMarks.partial === undefined && inspected.has(v.text) && v.text.startsWith("*");
+      if (subset || legacyWildcard) {
+        const opened = subset?.length ? [text(SUMMARY.opens(subset.join(", ")), { note: true })] : [];
+        return [{ ...v, end: partlyChip }, ...opened];
+      }
+      return [{ ...v, end: hostChip(inspected.has(v.text)) }];
+    });
     network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)], "allow_all_egress", "allowed_domains"));
     if (hosts.concat(outside).some((v) => v.end?.label === SUMMARY.inspected)) {
       meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
+    }
+    if (hosts.some((v) => v.end?.label === SUMMARY.partlyInspected)) {
+      meanings.push({ chip: partlyChip, text: SUMMARY.partlyInspectedMeaning });
     }
     if (hosts.some((v) => v.end?.label === SUMMARY.tunnelOnly)) {
       meanings.push({ chip: hostChip(false), text: SUMMARY.tunnelOnlyMeaning });
@@ -337,6 +401,9 @@ function summarize(
       ),
     );
   }
+  const localFolders = take("local_folders", asBag);
+  const folderLines = localFolders ? localFolderLines(localFolders, facts?.localFolderLayers) : [];
+  if (folderLines.length > 0) files.push(row(RUN_COMPUTER_FOLDER.TITLE, folderLines, "local_folders"));
   const repos = take("workspace_repos", asBags);
   if (repos && repos.length > 0) {
     files.push(
@@ -431,15 +498,6 @@ function MarkChip({ mark }: { mark: PolicyMark }) {
     <Chip tone="info">{POLICY_TAB.chipAdded}</Chip>
   ) : (
     <Chip tone="neutral">{POLICY_TAB.chipRemoved}</Chip>
-  );
-}
-
-// A value the reader may not see. Focusable, so the reason is reachable without a pointer.
-function HiddenChip({ tip = POLICY_TAB.hiddenTip }: { tip?: string }) {
-  return (
-    <span title={tip} tabIndex={0} role="note" aria-label={`${POLICY_TAB.hidden}. ${tip}`}>
-      <Chip tone="neutral">{POLICY_TAB.hidden}</Chip>
-    </span>
   );
 }
 

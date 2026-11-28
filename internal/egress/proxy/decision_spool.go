@@ -244,7 +244,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 	// Also the gate for a terminated tunnel's inner requests: no credential is
 	// injected once a self-lapsing proxy has closed.
 	if !p.lapse.serving() {
-		refuseClosed(w)
+		p.lapse.refuse(w)
 		return nil, nil
 	}
 	if p.sink == nil || (p.sink.local == nil && p.sink.remote == nil) {
@@ -492,7 +492,7 @@ func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client
 		}
 		return s, err
 	}
-	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
+	return newRunDecisionSink(cfg.RunID, cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
 }
 
 // preparedSpool refuses a spool directory wardyn-runnerd did not prepare. Only a wardyn-runnerd from 0.9.3-rc.2

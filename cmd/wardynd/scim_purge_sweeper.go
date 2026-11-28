@@ -41,7 +41,7 @@ func runSCIMPurgeSweeper(ctx context.Context, srv scimPurgeSweeper, interval tim
 	}
 }
 
-// startSCIMPurgeSweeper runs the sweep on the elected sweeper leader (db.SweeperLeaderLockKey), each
+// startSCIMPurgeSweeper runs the sweep on the elected sweeper leader (the leader of its sweep family), each
 // term started and stopped with it; a nil leader runs it unconditionally. Only when SCIM is on. Each
 // purge re-checks under the identity row lock, so a second leader for a moment purges nobody twice.
 func startSCIMPurgeSweeper(ctx context.Context, f *bootFlags, leader *db.SweeperLeader, srv scimPurgeSweeper, interval time.Duration) {
