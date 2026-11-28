@@ -80,3 +80,25 @@ func TestPeerLeaseSentOnlyToPinnedSession(t *testing.T) {
 		t.Fatalf("%d LEASE frames reached the replaced session", n)
 	}
 }
+
+// The holder's offline answer over a link that stays up reaches the caller as errOffline, as a closed link's does.
+func TestPeerHolderOfflineAnswerIsErrOffline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	callerConn, doorConn := runnerwire.Loopback()
+	door := runnerwire.NewPeer(doorConn, runnerwire.PeerConfig{OnCall: func(context.Context, uint32, string, json.RawMessage) (any, error) {
+		return nil, errOffline
+	}})
+	go func() { _ = door.Run(ctx) }()
+	defer door.Close()
+	cp := runnerwire.NewPeer(callerConn, runnerwire.PeerConfig{Org: true})
+	go func() { _ = cp.Run(ctx) }()
+	defer cp.Close()
+	err := peerSend(ctx, cp, PeerMethodLease, map[string]string{}, nil)
+	if !errors.Is(err, errOffline) {
+		t.Fatalf("the caller's answer to the holder's offline = %v, want errOffline", err)
+	}
+	if !cp.Online() {
+		t.Fatal("the link went down; the case is a link that stays up")
+	}
+}

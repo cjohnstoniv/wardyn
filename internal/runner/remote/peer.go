@@ -387,10 +387,15 @@ func (h *Hub) ServeHolderMethod(ctx context.Context, conn runnerwire.Conn, runne
 }
 
 // peerErr answers a call whose peer link went down (the door closed it: the session moved, or the request was
-// refused) as the runner being offline here, never as another session's answer.
+// refused) as the runner being offline here, never as another session's answer. The holder's own offline answer,
+// received over a link still up, is the same errOffline, its message kept, so a caller tells the two apart by
+// neither.
 func peerErr(p *runnerwire.Peer, err error) error {
 	if err != nil && (!p.Online() || errors.Is(err, runnerwire.ErrLinkDown)) {
 		return errOffline
+	}
+	if we := (*runnerwire.Error)(nil); errors.As(err, &we) && we.Code == runnerwire.CodeRunnerOffline {
+		return fmt.Errorf("%w: the holder answered %s", errOffline, we.Message)
 	}
 	return err
 }
