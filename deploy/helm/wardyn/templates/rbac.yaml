@@ -255,17 +255,19 @@ rules:
     verbs: ["get"]
 {{- end }}
 {{- end }}
+{{- if include "wardyn.runService" . }}
   # Each run's Service, with no selector, and the one EndpointSlice Wardyn writes for it: the agent reaches its proxy at
   # the Service's address, so its pod starts beside the proxy rather than after it. Exactly runAddressAccess
   # (internal/runner/k8s/agentsandbox_keep.go; R-02c). No list or watch; no other discovery resource. The
   # <fullname>-keep-service and -keep-endpoints admission policies hold what wardynd writes or deletes to a run's own
-  # ClusterIP Service and its EndpointSlices.
+  # ClusterIP Service and its EndpointSlices. Only with k8s.runService.enabled.
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["create", "get", "delete"]
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["create", "get", "update", "deletecollection"]
+{{- end }}
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
     verbs: ["update"]

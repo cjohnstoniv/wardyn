@@ -11,3 +11,12 @@ Every run's apps share one browser origin, separated only by a path-scoped cooki
 Set uiSandbox.originTemplate (e.g. https://run-{run}.ui.example.com; it needs wildcard DNS
 and a wildcard certificate), or set uiSandbox.acceptSharedOrigin=true to accept the shared origin.
 {{- end }}
+{{- if and .Values.k8s.enabled (include "wardyn.runService" .) (not (include "wardyn.runServicePolicies" .)) }}
+WARNING: each run gets its own Service (k8s.runService.enabled), and this chart does not render the two admission
+policies that hold wardynd's Service and EndpointSlice writes and deletes to a run's own Service
+(k8s.admissionPolicies.create is false, or unset with k8s.rbac.create=false).
+The platform team must apply equivalent policies: {{ include "wardyn.fullname" . }}-keep-service and
+{{ include "wardyn.fullname" . }}-keep-endpoints, each a ValidatingAdmissionPolicy with its binding, for the runs
+namespace. `helm template` with k8s.admissionPolicies.create=true prints them.
+Or set k8s.runService.enabled=false: no Service, and no policies needed.
+{{- end }}

@@ -1131,6 +1131,11 @@ $ is the root here too.
             - name: WARDYN_K8S_SANDBOX_PLACEMENT
               value: {{ toJson $placement | quote }}
             {{- end }}
+            {{- if not (include "wardyn.runService" .) }}
+            # No per-run Service: the agent starts after its proxy is Ready and pins the proxy pod's IP.
+            - name: WARDYN_K8S_RUN_SERVICE
+              value: "off"
+            {{- end }}
             {{- if .Values.k8s.readNodes }}
             # The node-size advisory (internal/runner/k8s/fit_nodes.go); rbac.yaml grants the matching nodes list.
             - name: WARDYN_K8S_READ_NODES

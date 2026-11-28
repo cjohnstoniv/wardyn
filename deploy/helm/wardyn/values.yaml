@@ -643,6 +643,20 @@ k8s:
   # templates/rbac.yaml documents.
   rbac:
     create: true
+  # Give each run on the server's cluster its own Service, with no selector, and an EndpointSlice wardynd writes
+  # (WARDYN_K8S_RUN_SERVICE). The agent reaches its proxy at the Service's address, so its pod starts beside the proxy
+  # and the two image pulls overlap. Off, the agent pod starts after its proxy pod is Ready and reaches the proxy pod's
+  # IP: the runner Role then has no services or endpointslices rule, and the chart renders no run Service admission
+  # policy. k8s.agentSandbox.keep needs it on. Before turning it off on an install whose runs have a Service, let
+  # those runs end and their cleanup finish while the Role still grants the Service verbs.
+  runService:
+    enabled: true
+  # The two cluster-scoped ValidatingAdmissionPolicies and their bindings (<fullname>-keep-service and
+  # <fullname>-keep-endpoints) that hold wardynd's Service and EndpointSlice writes and deletes to a run's own
+  # Service. They render only with runService.enabled. create unset, the default, follows k8s.rbac.create; set false
+  # where a platform team applies equivalent policies itself (apply them before an upgrade that removes the chart's
+  # copies), or true to render them with rbac.create=false.
+  admissionPolicies: {}
   # The cluster's DNS domain (kubelet --cluster-domain). Only the Service FQDN the
   # proxies dial for WARDYN_CONTROL_PLANE_URL uses it; change it on a cluster whose
   # domain is not cluster.local, or those names do not resolve.
