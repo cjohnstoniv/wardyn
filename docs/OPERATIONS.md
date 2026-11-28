@@ -503,7 +503,8 @@ export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
 # Run steps 0-6 as one script too (bash restore.sh <backup directory>): set -e
 # stops it at the first failed command. The backup is ONE directory marked
-# COMPLETE, and every file below comes from it: nothing runs before it is checked.
+# COMPLETE, and every file below comes from it. Its marker, dump and recordings
+# archive are checked before anything runs; the drive archives, in step 5.
 set -eu
 # A step the script cannot do for you stops it until you type yes.
 ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
@@ -526,7 +527,8 @@ fi
 #    high-water mark: every session it issued sits at or below it. The mark is
 #    written to a file named for this installation before anything changes, and
 #    stays there until step 3b has used it. A restore that stopped part-way
-#    reuses it, and never reads the restored database's lower value in its place.
+#    reuses it, or the database's current mark if that is higher (a restore given up
+#    before step 3 left the database running on), never a lower value in its place.
 #    Run every attempt from this directory; only one runs per installation at a
 #    time. (That database is gone, with no mark file? The script stops here:
 #    see "Revocation order".)
@@ -538,7 +540,12 @@ docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 if [ -f "$M" ]; then
   { IFS= read -r stored; IFS= read -r hwm; } < "$M"
   [ "$stored" = "$id" ] || { echo "STOP: $M belongs to another installation"; exit 1; }
-  echo "An unfinished restore of this installation left mark $hwm: using it"
+  case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
+  now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+    "SELECT last_value FROM oidc_revocation_seq" 2>/dev/null || true)
+  case "$now" in ''|*[!0-9]*) ;; *) [ "$now" -le "$hwm" ] || hwm=$now ;; esac
+  printf '%s\n%s\n' "$id" "$hwm" > "$M"
+  echo "An unfinished restore of this installation left a mark: using $hwm"
 else
   hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
     "SELECT last_value FROM oidc_revocation_seq")
@@ -617,7 +624,7 @@ while IFS= read -r v <&3; do
     sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
     { echo "STOP: $v is not restored"; exit 1; }
 done 3< "$B/drives.list"
-[ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run 5b-7"; exit 1; }
+[ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run step 5's loop and 5b-6 by hand"; exit 1; }
 #    Every file comes from the one directory step 3's dump came from: files
 #    from two backup attempts must never both go into a volume. The loop restores
 #    exactly the volumes drives.list names and stops on any missing
@@ -632,7 +639,7 @@ done 3< "$B/drives.list"
 #    not change its labels, and it may hold someone's files. If this loop
 #    restored it on an earlier pass, that is expected. Otherwise inspect it,
 #    and back it up, before you decide whose it is. Remove it
-#    (`docker volume rm`) only once you know, then rerun the loop.
+#    (`docker volume rm`) only once you know, then run step 5's loop again by hand.
 #    HOLD on a missing or unusable label record (an UNRESOLVED volume, or a
 #    backup taken before step 4 recorded labels): nothing says whether the
 #    volume had a wardyn.subject, or whose it was. Never create a managed volume for it by hand: one
