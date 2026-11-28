@@ -32,8 +32,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
   than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
   through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
-  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
-  the runner connects; a server with no remote runners loses only the windows.
+  run. Until then, without the `cp_heartbeat` grants the control-plane heartbeat fails with a warning and no server
+  outage window is recorded. Without the `outage_windows` grants no outage window is recorded (each failure logs a
+  warning), and a remote runner's fresh session is refused when the runner connects, since starting it ends the runner's
+  link outage window; a session that resumes in its window with no actions pending skips that write and stays up. A
+  server with no remote runners loses only the windows.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
   to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
   roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,

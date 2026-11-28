@@ -242,12 +242,19 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 	}
 	ex, err := sess.TakeStream(res.Exec)
 	if err != nil {
+		if res.Stderr != 0 {
+			if stderr, err := sess.TakeStream(res.Stderr); err == nil {
+				_ = stderr.Close()
+			}
+		}
+		disposeExec(sess, res.Exec)
 		return nil, err
 	}
 	var stderr *runnerwire.Stream
 	if res.Stderr != 0 {
 		if stderr, err = sess.TakeStream(res.Stderr); err != nil {
 			_ = ex.Close()
+			disposeExec(sess, res.Exec)
 			return nil, err
 		}
 	}
@@ -288,6 +295,15 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 		es.Stderr = stderr
 	}
 	return es, nil
+}
+
+// disposeExec closes, at the runner, an exec whose streams could not all be taken (each one taken is closed
+// first): no ExecSession is returned, so no caller would ever send the Close that ends its command and drops its
+// result.
+func disposeExec(sess session, exec uint32) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	_ = sess.Call(ctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: exec}, nil)
 }
 
 // stdin writes to the exec stream; Close half-closes it, leaving stdout readable.

@@ -443,7 +443,6 @@ func (s *peerPinned) TakeStream(id uint32) (*runnerwire.Stream, error) {
 	}
 	st, err := p.TakeStream(id)
 	if err != nil {
-		delete(s.execs, id) // an exec whose stream was never taken is never waited on or closed
 		s.releaseLocked()
 		s.mu.Unlock()
 		if !p.Online() {
@@ -643,7 +642,48 @@ func (r *peerRelay) serveCall(ctx context.Context, id uint32, method string, arg
 	if len(raw) == 0 {
 		return peerReply{}, nil
 	}
-	return peerReply{Result: r.rewrite(raw, func(x uint32) (uint32, bool) { return r.relayStream(ctx, id, x) })}, nil
+	var relayed [][2]*runnerwire.Stream // each relayed stream: its twin on the WebSocket, then the runner's
+	failed := false
+	out := r.rewrite(raw, func(x uint32) (uint32, bool) {
+		tw, st, ok := r.relayStream(ctx, id, x)
+		if !ok {
+			failed = true
+			return 0, false
+		}
+		relayed = append(relayed, [2]*runnerwire.Stream{tw, st})
+		return tw.ID(), true
+	})
+	if failed {
+		r.unwindOpen(method, raw, relayed)
+		return nil, errPeerPartialOpen
+	}
+	return peerReply{Result: out}, nil
+}
+
+// errPeerPartialOpen fails a call one of whose reply's streams could not be relayed: the caller gets all of a
+// call's streams or none.
+var errPeerPartialOpen = errors.New("remote: a stream the runner opened for the call could not be relayed")
+
+// unwindOpen undoes a call whose streams were relayed in part: each relayed stream is reset on both sides and
+// forgotten, and an exec the call started is closed at the runner, which would otherwise keep its command and
+// result for a Close no caller can send.
+func (r *peerRelay) unwindOpen(method string, raw json.RawMessage, relayed [][2]*runnerwire.Stream) {
+	r.mu.Lock()
+	for _, pair := range relayed {
+		delete(r.toRunner, pair[0].ID())
+	}
+	r.mu.Unlock()
+	for _, pair := range relayed {
+		pair[0].Abort(runnerwire.ResetCancelled)
+		pair[1].Abort(runnerwire.ResetCancelled)
+	}
+	var res runnerwire.ExecStreamResult
+	if method != runnerwire.MethodExecStream || json.Unmarshal(raw, &res) != nil || res.Exec == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	_ = r.pin.Call(ctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: res.Exec}, nil)
 }
 
 // rewrite replaces each stream id field of a JSON object with what swap gives; any other value is kept.
@@ -679,22 +719,22 @@ func (r *peerRelay) rewrite(raw json.RawMessage, swap func(uint32) (uint32, bool
 
 // relayStream takes the runner's stream x for call id on the pinned session, opens its twin on the WebSocket for
 // the same call, and copies bytes both ways until either side ends.
-func (r *peerRelay) relayStream(ctx context.Context, id, x uint32) (uint32, bool) {
+func (r *peerRelay) relayStream(ctx context.Context, id, x uint32) (*runnerwire.Stream, *runnerwire.Stream, bool) {
 	st, err := r.pin.TakeStream(x)
 	if err != nil {
-		return 0, false
+		return nil, nil, false
 	}
 	tw, err := r.ws.Open(ctx, runnerwire.Open{Kind: st.Kind(), Call: id})
 	if err != nil {
-		_ = st.Close()
-		return 0, false
+		st.Abort(runnerwire.ResetCancelled)
+		return nil, nil, false
 	}
 	r.mu.Lock()
 	r.toRunner[tw.ID()] = x
 	r.mu.Unlock()
 	go peerCopy(tw, st)
 	go peerCopy(st, tw)
-	return tw.ID(), true
+	return tw, st, true
 }
 
 // peerCopy copies src to dst: an end of src closes dst for writes, and an error resets dst.

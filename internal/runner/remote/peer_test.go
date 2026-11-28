@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -101,9 +102,16 @@ type peerRig struct {
 	doors          chan error // one per WebSocket the holder served, when it ended
 	serve          runnerwire.CallHandler
 
-	mu    sync.Mutex
-	execs map[uint32]int // the runner's exec table: its exec stream id -> exit status, kept until exec_close
+	mu     sync.Mutex
+	execs  map[uint32]int // the runner's exec table: its exec stream id -> exit status, kept until exec_close
+	closes atomic.Int32   // exec_close calls that found their exec
 }
+
+// Exit codes the rig's runner treats as a fault: it resets the exec or the stderr stream before it answers.
+const (
+	execResetsExec   = 98
+	execResetsStderr = 99
+)
 
 func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 	t.Helper()
@@ -120,10 +128,10 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 			return runnerwire.StreamResult{Stream: st.ID()}, nil
 		case runnerwire.MethodResize, runnerwire.MethodStatus:
 			return nil, nil
-		case runnerwire.MethodExecStream: // the exec exits at once with its ref as the status
+		case runnerwire.MethodExecStream: // the exec exits at once with the ref's last segment as the status
 			var a runnerwire.ExecStreamArgs
 			_ = json.Unmarshal(args, &a)
-			code, err := strconv.Atoi(a.Ref)
+			code, err := strconv.Atoi(a.Ref[strings.LastIndex(a.Ref, "/")+1:])
 			if err != nil {
 				return nil, err
 			}
@@ -138,6 +146,12 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 			r.mu.Lock()
 			r.execs[ex.ID()] = code
 			r.mu.Unlock()
+			switch code {
+			case execResetsExec:
+				_ = ex.Reset(runnerwire.ResetCancelled)
+			case execResetsStderr:
+				_ = se.Reset(runnerwire.ResetCancelled)
+			}
 			go func() { _, _ = ex.Write([]byte("out " + a.Ref)); _ = ex.CloseWrite(); _ = se.CloseWrite() }()
 			return runnerwire.ExecStreamResult{Exec: ex.ID(), Stderr: se.ID()}, nil
 		case runnerwire.MethodExecWait, runnerwire.MethodExecClose:
@@ -151,6 +165,7 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 			}
 			if method == runnerwire.MethodExecClose {
 				delete(r.execs, a.Stream)
+				r.closes.Add(1)
 				return nil, nil
 			}
 			return runnerwire.WaitResult{ExitCode: code}, nil
@@ -546,6 +561,42 @@ func TestPeerDialRefusesRedirects(t *testing.T) {
 			if seen[0].Header.Get(k) != h.Get(k) {
 				t.Fatalf("%d to %s: the first request lacks the signed header %s", tc.code, tc.location, k)
 			}
+		}
+	}
+}
+
+// An exec one of whose two streams cannot be delivered fails as a whole, on a local session and through the peer
+// path, while the runner stays connected: the caller gets an error and no stream, the runner's exec is closed
+// (its command and result are not left without a Close), and a peer pin's WebSocket ends. Values: the exec stream
+// reset before the answer, and the stderr stream reset before it; on the peer path either reset fails the
+// holder's relay of that stream, so the holder unwinds the stream it did relay.
+func TestPeerExecOpensAllStreamsOrNone(t *testing.T) {
+	for _, code := range []int{execResetsExec, execResetsStderr} {
+		for _, peer := range []bool{false, true} {
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			r := newPeerRig(t, ctx)
+			via := r.holder
+			if peer {
+				via = r.caller
+			}
+			sub := New("r1", via, Options{})
+			es, err := sub.ExecStream(ctx, placement.RunnerRefPrefix("r1")+"s/"+strconv.Itoa(code), runner.ExecSpec{})
+			if err == nil || es != nil {
+				t.Fatalf("code %d peer=%v: exec = %v, %v; want an error", code, peer, es, err)
+			}
+			r.mu.Lock()
+			left := len(r.execs)
+			r.mu.Unlock()
+			if left != 0 || r.closes.Load() != 1 {
+				t.Fatalf("code %d peer=%v: the runner holds %d execs after %d closes, want 0 after 1", code, peer, left, r.closes.Load())
+			}
+			if peer {
+				r.doorEnded(t)
+			}
+			if !r.runner.Online() || !r.holder.Online() {
+				t.Fatalf("code %d peer=%v: the failed open ended the runner's session", code, peer)
+			}
+			cancel()
 		}
 	}
 }
