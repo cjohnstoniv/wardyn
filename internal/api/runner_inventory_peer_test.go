@@ -15,16 +15,16 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// heldElsewhere is a runners page whose runners another replica holds: each caps read of one asks lookup for its
+// capsHolder is a runners page whose runners another replica holds: each caps read of one asks lookup for its
 // holder, which counts the reads per runner.
-type heldElsewhere struct {
+type capsHolder struct {
 	mu     sync.Mutex
 	reads  map[uuid.UUID]int
 	view   *remote.HolderView
@@ -32,9 +32,9 @@ type heldElsewhere struct {
 	routes map[uuid.UUID]remote.PeerRoute
 }
 
-func newHeldElsewhere(t *testing.T, lookup func(ctx context.Context, id uuid.UUID) error) *heldElsewhere {
+func newCapsHolder(t *testing.T, lookup func(ctx context.Context, id uuid.UUID) error) *capsHolder {
 	t.Helper()
-	h := &heldElsewhere{reads: map[uuid.UUID]int{}, routes: map[uuid.UUID]remote.PeerRoute{}}
+	h := &capsHolder{reads: map[uuid.UUID]int{}, routes: map[uuid.UUID]remote.PeerRoute{}}
 	h.view = remote.NewHolderView("this-replica", func(context.Context) (map[uuid.UUID]remote.PeerRoute, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -58,7 +58,7 @@ func newHeldElsewhere(t *testing.T, lookup func(ctx context.Context, id uuid.UUI
 }
 
 // hold registers runner id on srv as held by the other replica.
-func (h *heldElsewhere) hold(t *testing.T, srv *Server, id uuid.UUID) {
+func (h *capsHolder) hold(t *testing.T, srv *Server, id uuid.UUID) {
 	t.Helper()
 	h.mu.Lock()
 	h.routes[id] = remote.PeerRoute{ReplicaID: "holder-replica", PeerURL: "https://holder.invalid", SessionID: uuid.New()}
@@ -71,7 +71,7 @@ func (h *heldElsewhere) hold(t *testing.T, srv *Server, id uuid.UUID) {
 	srv.runnerStreams.subs[id] = runnerEndpoint{sub: remote.New(id.String(), l, remote.Options{}), link: l}
 }
 
-func (h *heldElsewhere) readsOf(id uuid.UUID) int {
+func (h *capsHolder) readsOf(id uuid.UUID) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.reads[id]
@@ -94,7 +94,7 @@ func holdHere(t *testing.T, srv *Server, id uuid.UUID, caps runnerwire.Caps) {
 func TestRunnersPageReadsCapsOncePerRunner(t *testing.T) {
 	srv, f, _ := newRunnerRegistrationServer(t)
 	srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
-	h := newHeldElsewhere(t, func(context.Context, uuid.UUID) error { return errors.New("the holder is unreachable") })
+	h := newCapsHolder(t, func(context.Context, uuid.UUID) error { return errors.New("the holder is unreachable") })
 	caps := runnerwire.Caps{CPUMillisMax: 4000, MemoryMiBMax: 8192, Folders: true, MacOSVM: &runnerwire.MacVMCaps{MinCPUs: 4}}
 	here1 := f.addRunner(srv, "alice", "here-1", types.RunnerClaimed, time.Hour)
 	away1 := f.addRunner(srv, "alice", "away-1", types.RunnerClaimed, time.Hour)
@@ -130,7 +130,7 @@ func TestRunnersPageCapsReadsEndWithTheRequest(t *testing.T) {
 	started := make(chan struct{}, 8)
 	var mu sync.Mutex
 	var ends []error
-	h := newHeldElsewhere(t, func(ctx context.Context, _ uuid.UUID) error {
+	h := newCapsHolder(t, func(ctx context.Context, _ uuid.UUID) error {
 		started <- struct{}{}
 		<-ctx.Done()
 		mu.Lock()
