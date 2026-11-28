@@ -26,12 +26,15 @@ grep -q '^done 3< "\$B/drives.list"$' "$T/loop.sh" || fail "no step-5 drive loop
 
 ID=0f8c1b2a-3d4e-4f50-8a6b-7c8d9e0f1a2b
 cat >"$T/stub.sh" <<'EOF'
+ask() { echo "ASKED: $1"; }
 docker() {
+  echo "$*" >>"$B/docker.log"
   case "$*" in
     *psql*) printf '%s\n' "$DB_IDS" ;;
     "volume inspect --format {{.Driver}} {{len .Options}} "*) echo "local 0" ;;
     "volume inspect --format "*) sed -n 's/^--label //p' "$B/create.args"; echo ;;
     "volume inspect "*) return 1 ;;
+    "volume ls -q") [ -z "${VOLS_FAIL:-}" ] || return 1; printf '%s\n' "${VOLS:-}" ;;
     "volume create "*) printf '%s\n' "$@" | sed '1,2d;$d' | paste -d' ' - - >"$B/create.args" ;;
     "run "*) return 0 ;;
   esac
@@ -146,6 +149,37 @@ out="$(cd "$T" && mkdir -p raced && printf '%s\n\n' "$good" >raced/wardyn-drive-
   bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub-raced.sh" "$T/loop.sh" 2>&1)" && fail "a raced volume did not stop the loop: $out"
 [[ "$out" == *"is not restored: leave it in place"* ]] || fail "a raced volume stopped with the wrong line: $out"
 [[ "$out" != *"volume rm"* ]] || fail "the STOP for a raced volume says to remove it: $out"
+
+# A volume already there with the full recorded label set (another
+# installation from the same database, say) is skipped, never written; a
+# listing that fails stops before any volume is made; and the loop asks that
+# no other installation runs before it starts.
+rm -rf "$T/there"
+out="$(cd "$T" && mkdir -p there && printf '%s\n\n' "$good" >there/wardyn-drive-a.labels && : >there/wardyn-drive-a.tar.gz &&
+  echo wardyn-drive-a >there/drives.list && B="$T/there" DB_IDS="$ID" VOLS=wardyn-drive-a \
+  bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" || true
+[[ "$out" == *"SKIP: wardyn-drive-a already exists"* ]] || fail "an existing volume was not skipped: $out"
+! grep -q '^volume create\|^run ' "$T/there/docker.log" || fail "an existing volume was created or written"
+[[ "$out" == *"ASKED: No other Wardyn installation runs"* ]] || fail "the loop did not ask that no other installation runs: $out"
+rm -rf "$T/nolist"
+out="$(cd "$T" && mkdir -p nolist && printf '%s\n\n' "$good" >nolist/wardyn-drive-a.labels && : >nolist/wardyn-drive-a.tar.gz &&
+  echo wardyn-drive-a >nolist/drives.list && B="$T/nolist" DB_IDS="$ID" VOLS_FAIL=1 \
+  bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" && fail "a failed listing did not stop: $out"
+! grep -q '^volume create' "$T/nolist/docker.log" || fail "a volume was made after a failed listing"
+
+# Step 2 waits for postgres to listen on TCP before step 3 loads, and stops
+# when it never does.
+awk '/^### Restore them/{r=1} r&&/^docker compose .* up -d postgres$/{f=1} f{print} f&&/^done$/{exit}' "$doc" >"$T/wait.sh"
+grep -q 'pg_isready -h 127.0.0.1' "$T/wait.sh" || fail "no step-2 wait for postgres found in $doc"
+cat >"$T/wstub.sh" <<'EOF2'
+docker() { case "$*" in *pg_isready*) n=$(($(cat "$T/n") + 1)); echo "$n" >"$T/n"; [ "$n" -ge "$UP_AT" ] ;; esac; }
+sleep() { :; }
+EOF2
+echo 0 >"$T/n"; T="$T" UP_AT=3 bash -c 'set -eu; . "$1"; . "$2"' _ "$T/wstub.sh" "$T/wait.sh" >/dev/null ||
+  fail "the wait did not end once postgres came up"
+[ "$(cat "$T/n")" = 3 ] || fail "the wait did not poll until postgres came up"
+echo 0 >"$T/n"; ! T="$T" UP_AT=999 bash -c 'set -eu; . "$1"; . "$2"' _ "$T/wstub.sh" "$T/wait.sh" >/dev/null ||
+  fail "the wait did not stop when postgres never came up"
 
 # Step 2's reset runs down -v in the script's own environment, so on the
 # installation step 0 named, and only when answered reset.

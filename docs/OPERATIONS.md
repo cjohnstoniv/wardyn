@@ -621,7 +621,7 @@ if [ -f "$M" ]; then
   if ! now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
     "SELECT last_value FROM oidc_revocation_seq"); then now=; fi
   case "$now" in
-    ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again, or see \"Revocation order\""; exit 1 ;;
+    ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again; if step 2 reset it and no dump has loaded since, see \"Revocation order\""; exit 1 ;;
   esac
   [ "$now" -le "$hwm" ] || hwm=$now
   { printf '%s\n%s\n' "$id" "$hwm" > "$M.new" && mv "$M.new" "$M"; } || { echo "STOP: mark $hwm not saved in $M: free space and run again"; exit 1; }
@@ -655,6 +655,13 @@ case "$a" in
   *) echo "STOP: not answered"; exit 1 ;;
 esac
 docker compose -f deploy/compose/docker-compose.yaml up -d postgres
+#    A new database first runs a setup server that listens on no TCP port, so
+#    wait, at most a minute, for the real one before loading into it.
+i=0
+until docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+  pg_isready -h 127.0.0.1 -U wardyn -d wardyn >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -lt 60 ] || { echo "STOP: postgres did not come up"; exit 1; }; sleep 1
+done
 
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
 #    abort the whole load with a nonzero exit, instead of silently skipping
@@ -698,6 +705,13 @@ usable() {
     grep -q '^wardyn\.home=.' "$1" && grep -qxF 'wardyn.managed=true' "$1" &&
     sed -n 's/^wardyn\.drive=//p' "$1" | grep -xE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 }
+#    docker volume create also succeeds on a volume that already exists, and
+#    a drive volume carries no installation label, so nothing on the volume
+#    shows which installation made it. While this loop runs, no other Wardyn
+#    installation may run on this Docker host (stop it, or restore on a host
+#    of its own); the volumes are listed once, and any failure to list stops.
+ask "No other Wardyn installation runs on this Docker host while this loop runs"
+vols=$(docker volume ls -q) || { echo "STOP: the volumes on this host could not be listed"; exit 1; }
 h=
 while IFS= read -r v <&3; do
   f="$v.tar.gz"; l="$B/$v.labels"
@@ -708,7 +722,7 @@ while IFS= read -r v <&3; do
   own=
   for i in $ids; do [ "$i" != "$id" ] || own=1; done
   [ -n "$own" ] || { echo "STOP: the restored database has no drive $id"; exit 1; }
-  if docker volume inspect "$v" >/dev/null 2>&1; then
+  if printf '%s\n' "$vols" | grep -qxF -- "$v"; then
     echo "SKIP: $v already exists: see below"; h=1; continue
   fi
   set --
