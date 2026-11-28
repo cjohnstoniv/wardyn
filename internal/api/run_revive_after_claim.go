@@ -18,6 +18,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// leaseOwner is this server's name in agent_runs.watcher_owner: watcherOwner, unless a test gave the server its own.
+func (s *Server) leaseOwner() string {
+	if s.owner != "" {
+		return s.owner
+	}
+	return watcherOwner
+}
+
 // reviveAdvanceHeld is reviveRunProxy's generation advance after the claim, and the check that its run lock is still held. It returns the generation
 // and proxy start the replace acts under, or the revive's refusal.
 func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.AgentRun, fate *store.RunLostFate, data map[string]any, actorType types.ActorType, actor string,

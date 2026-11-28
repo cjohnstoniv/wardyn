@@ -46,14 +46,6 @@ var watcherOwner = func() string {
 	return host + "/" + uuid.NewString()
 }()
 
-// leaseOwner is this server's name in agent_runs.watcher_owner: watcherOwner, unless a test gave the server its own.
-func (s *Server) leaseOwner() string {
-	if s.owner != "" {
-		return s.owner
-	}
-	return watcherOwner
-}
-
 // ImageBuildSweeper is an OPTIONAL capability an ImageBuilder may additionally
 // implement: a boot-time sweep that force-removes build containers orphaned
 // by a crashed or restarted wardynd process. It is a separate interface
