@@ -45,8 +45,16 @@ run_c() {
 agent() { local c=$1; shift; docker exec -i -u 1000:1000 "$c" "$@"; }
 root() { local c=$1; shift; docker exec -i -u 0 "$c" "$@"; }
 install_policy() { printf '%s' "$2" | root "$1" sh -c "mkdir -p ${POLICY%/*} && cat > $POLICY && chmod 0644 $POLICY"; }
-# listeners C: the container's listening TCP ports, from /proc/net (no ss needed).
-listeners() { agent "$1" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$4 == "0A" { split($2, a, ":"); print a[2] }' | while read -r h; do echo $((16#$h)); done | sort -un; }
+# listeners C: the container's listening TCP ports, from /proc/net (no ss needed). A failed or empty read
+# returns 1 (the tables always have a header line), so a caller never mistakes no observation for no port.
+listeners() {
+	local raw
+	raw=$(agent "$1" sh -c 'cat /proc/net/tcp && { [ ! -e /proc/net/tcp6 ] || cat /proc/net/tcp6; }') || return 1
+	[ -n "$raw" ] || return 1
+	awk '$4 == "0A" { split($2, a, ":"); print a[2] }' <<<"$raw" | while read -r h; do echo $((16#$h)); done | sort -un
+}
+# ports_now C: a checked snapshot of listeners; the test fails if the read fails.
+ports_now() { listeners "$1" || fail "I-3 could not read the container's listening ports"; }
 stop_browsers() { agent "$1" pkill -u agent -x wardyn-signin || true; agent "$1" pkill -u agent chromium || true; sleep 1; }
 # start_browser C ARGS...: wardyn-signin browser as the agent, until cdp --agent answers.
 start_browser() {
@@ -209,15 +217,19 @@ seen=""
 for _ in $(seq 25); do grep -qx 39999 <<<"$(listeners "$ON")" && seen=1 && break; sleep 0.2; done
 [ -n "$seen" ] || fail "I-3 control: listeners did not see the agent's port 39999, so I-3 proves nothing"
 for _ in $(seq 50); do grep -qx 39999 <<<"$(listeners "$ON")" || break; sleep 0.2; done
-grep -qx 39999 <<<"$(listeners "$ON")" && fail "I-3 control: port 39999 is still listening"
-before=$(listeners "$ON")
+listeners no-such-container-wardyn >/dev/null 2>&1 && fail "I-3 control: a failed listeners read returned success"
+now=$(ports_now "$ON") || exit 1
+grep -qx 39999 <<<"$now" && fail "I-3 control: port 39999 is still listening"
+before=$(ports_now "$ON") || exit 1
 start_browser "$ON" wardyn-signin browser --headless || fail "I-3 wardyn-signin browser did not answer under the policy"
-[ "$(listeners "$ON")" = "$before" ] || fail "I-3 wardyn-signin browser opened a listener"
+now=$(ports_now "$ON") || exit 1
+[ "$now" = "$before" ] || fail "I-3 wardyn-signin browser opened a listener"
 agent "$ON" wardyn-signin browser --remote-debugging-port=9222 >/dev/null 2>&1 && fail "I-3 wardyn-signin browser took --remote-debugging-port"
 stop_browsers "$ON"
 start_browser "$ON" env CHROMIUM_FLAGS=--remote-debugging-port=9222 CHROME_FLAGS=--remote-debugging-port=9223 wardyn-signin browser --headless ||
 	fail "I-3 wardyn-signin browser did not answer with CHROMIUM_FLAGS set"
-grep -qxE '9222|9223' <<<"$(listeners "$ON")" && fail "I-3 CHROMIUM_FLAGS or CHROME_FLAGS opened a port"
+now=$(ports_now "$ON") || exit 1
+grep -qxE '9222|9223' <<<"$now" && fail "I-3 CHROMIUM_FLAGS or CHROME_FLAGS opened a port"
 pass "I-3 wardyn-signin browser opens no port, by argument or by environment"
 
 # I-3b and I-3bc. A page session through the broker.
