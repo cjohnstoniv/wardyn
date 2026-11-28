@@ -412,13 +412,19 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
 #      d=$(date +%F)
 #      for v in $(docker volume ls -q --filter label=wardyn.managed=true); do
 #        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
-#          tar czf "/to/$v-$d.tar.gz" -C /from .
+#          tar czf "/to/$v-$d.tar.gz" -C /from . &&
 #        docker volume inspect --format \
 #          '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
-#          "$v" > "$v-$d.labels"
+#          "$v" > "$v-$d.labels.tmp" &&
+#        grep -q '^wardyn.drive=.' "$v-$d.labels.tmp" &&
+#        grep -q '^wardyn.home=.' "$v-$d.labels.tmp" &&
+#        mv "$v-$d.labels.tmp" "$v-$d.labels" ||
+#        { echo "STOP: $v is not backed up with its labels"; break; }
 #      done
-#    Keep each .labels file with its tarball. It is the volume's ownership
-#    record, wardyn.subject included, and the restore puts it back as it was.
+#    A STOP line means this backup is incomplete: fix the cause and rerun
+#    the step. Keep each .labels file with its tarball. It is the volume's
+#    ownership record and lists every label it had, so a record with no
+#    wardyn.subject line comes from a volume that had none.
 #    Drive volumes carry no installation label: on a host with two
 #    installations, keep only the volumes whose wardyn.drive id this
 #    installation's GET /api/v1/drives lists.
@@ -497,26 +503,51 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD":/from alpine \
 #    into it. The recorded wardyn.subject is what lets the runner refuse the
 #    volume to anyone but its owner: put it back exactly as recorded, and never
 #    work out a value from whoever holds the drive and home now.
-#      for f in wardyn-drive-*.tar.gz; do   # backup step 4's tarballs
-#        v="${f%-????-??-??.tar.gz}"        # the volume each came from
-#        l="${f%.tar.gz}.labels"
-#        [ -f "$l" ] || { echo "no labels for $f: see below"; continue; }
+#      d=<date>                  # the same backup date as step 3's dump
+#      for f in wardyn-drive-*-"$d".tar.gz; do
+#        v="${f%-"$d".tar.gz}"; l="$v-$d.labels"
+#        id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null)
+#        grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
+#          printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
+#          { echo "STOP: $f has no usable label record: see below"; break; }
+#        docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+#          psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
+#          grep -qx 1 || { echo "STOP: the restored database has no drive $id"; break; }
+#        if docker volume inspect "$v" >/dev/null 2>&1; then
+#          echo "SKIP: $v already exists: see below"; continue
+#        fi
 #        set --
-#        while IFS= read -r x; do [ -n "$x" ] && set -- "$@" --label "$x"; done < "$l"
-#        docker volume create "$@" "$v"
+#        while IFS= read -r x; do set -- "$@" --label "$x"; done < "$l"
+#        docker volume create "$@" "$v" >/dev/null &&
+#        [ "$(docker volume inspect --format '{{.Driver}} {{len .Options}}' "$v")" = "local 0" ] &&
+#        docker volume inspect --format \
+#          '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' "$v" |
+#          cmp -s - "$l" &&
 #        docker run --rm -v "$v":/to -v "$PWD":/from alpine \
-#          tar xzf "/from/$f" -C /to
+#          sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
+#          { echo "STOP: $v is not restored"; break; }
 #      done
-#    Before the loop, check that each recorded wardyn.drive is a drive `id` on
-#    GET /api/v1/drives and each wardyn.home is a current allocation's home. A
-#    WRONG id makes Wardyn refuse the volume rather than adopt it.
-#    A tarball with no .labels file (taken before backup step 4 recorded
-#    them) may come from a volume that had wardyn.subject, and nothing left
-#    says whose it was. Create its volume with --label wardyn.managed=true,
-#    --label wardyn.drive=<drive id> and --label wardyn.home=<home> only, and
-#    before any run mounts it, confirm with the allocation list and with the
-#    person that this drive and home belong to the person whose files these
-#    are. host_path drives need nothing here — you restore that share yourself.
+#    Pick ONE backup date, the one step 3's dump came from: two dated
+#    tarballs of one volume must never both go into it. The loop checks each
+#    recorded drive against the restored database, not the API, because
+#    wardynd is not running yet. It creates each volume new, checks that the
+#    volume is local, option-free and carries exactly the recorded labels, and
+#    checks that the volume is empty before writing any file. Do not start
+#    step 6 while any STOP or SKIP line is unresolved.
+#    SKIP: a volume of that name already exists. Creating it again would
+#    not change its labels, and it may hold someone's files. If this loop
+#    restored it on an earlier pass, that is expected. Otherwise inspect it,
+#    and back it up, before you decide whose it is. Remove it
+#    (`docker volume rm`) only once you know, then rerun the loop.
+#    STOP on a missing or unusable label record (a backup taken before step 4
+#    recorded labels): nothing left says whose files these are. Restore that
+#    tarball by hand, apart from this loop. First confirm with the allocation
+#    list and with the person that this drive and home belong to the person
+#    whose files these are. Then create its volume with
+#    --label wardyn.managed=true, --label wardyn.drive=<drive id> and
+#    --label wardyn.home=<home> only, check that it is new and empty, and
+#    untar into it. host_path drives need nothing here — you restore that
+#    share yourself.
 
 # 5b. Restore the matching audit-fallback directory and sidecars before
 #     wardynd starts, preserving ownership/modes ("Audit fallback recovery").
@@ -5323,19 +5354,31 @@ kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
   before the rename can still be writing to it, so an allocation lookup alone never settles it.
 - To move its data and reclaim it:
   1. Stop the person's runs on that drive and wait for them to end.
-  2. Check that no pod refers to the old claim. This prints nothing when none does:
+  2. Record the old claim, and check that no pod refers to it. This prints `CLEAR` only when the claim was read,
+     the pod list was read, and no pod names the claim:
 
      ```sh
-     kubectl -n <runsNamespace> get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.volumes[*].persistentVolumeClaim.claimName}{"\n"}{end}' | grep -w '<old claim>'
+     kubectl -n <runsNamespace> get pvc <old claim> -o jsonpath='{.metadata.uid} {.metadata.labels.wardyn\.drive} {.metadata.labels.wardyn\.home}' > old-claim.id &&
+       [ -s old-claim.id ] &&
+       pods=$(kubectl -n <runsNamespace> get pods -o jsonpath='{range .items[*]}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}{end}') &&
+       ! printf '%s\n' "$pods" | grep -Fxq '<old claim>' && echo CLEAR
      ```
 
-     If it prints a pod, or you cannot run it, stop and keep the claim.
+     If it does not print `CLEAR`, stop and keep the claim. A finished pod that still names the claim counts too.
   3. If the current claim already holds files from a run since the rename, settle with the person which files win
      before you copy. Never copy over it blind.
   4. Copy the old claim's data into the current claim (`kubectl cp`, or a snapshot restore), and check the copy
      against the old claim while both are still quiet.
-  5. Just before the `delete pvc` above, rerun step 2 and check that the old claim's `wardyn.drive` label is still
-     this drive's id (`kubectl -n <runsNamespace> get pvc <old claim> --show-labels`).
+  5. Just before the `delete pvc` above, rerun the pod-list half of step 2 for `CLEAR`. Then check the claim is
+     still the object you recorded, with the same UID and labels. This prints `SAME` only then:
+
+     ```sh
+     now=$(kubectl -n <runsNamespace> get pvc <old claim> -o jsonpath='{.metadata.uid} {.metadata.labels.wardyn\.drive} {.metadata.labels.wardyn\.home}') &&
+       [ -n "$now" ] && [ "$now" = "$(cat old-claim.id)" ] && echo SAME
+     ```
+
+     - Run the delete straight after `CLEAR` and `SAME`. `kubectl delete` cannot be made conditional on that UID.
+     - If anything could be re-creating or mounting claims of that drive at that moment, keep the claim.
 - Reclaim the old claim only when every step holds. If anything is uncertain, keep it.
 - The cheap alternative is not renaming a `slug` drive that has claims.
 
@@ -5584,9 +5627,9 @@ kubectl -n <runsNamespace> delete pvc <the claim>
 
 - `<the claim>` is the one the departed person's home resolves to: `wardyn-drive-<drive-id-hex>-<home>` on an `id`
   drive, `wardyn-drive-<drive-slug>-<home>` on a `slug` drive (see the rename caveat above).
-- Before you run it, check that the person's runs have ended, that no pod refers to the claim (step 2 of the rename
-  caveat above), and that its `wardyn.drive` label is this drive's id. If any of that cannot be shown, keep the
-  claim. The product's own verb below makes the same checks itself.
+- Before you run it, check that the person's runs have ended. Then get `CLEAR` and `SAME` for `<the claim>`, as in
+  steps 2 and 5 of the rename caveat above, and check that its recorded `wardyn.drive` is this drive's id. If any of
+  that cannot be shown, keep the claim. The product's own verb below makes these checks itself.
 
 - or, when `drives.reclaim.enabled` is set, through the product's own verb
   (`wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes`, super-admin
