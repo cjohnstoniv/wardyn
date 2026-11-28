@@ -410,8 +410,8 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
 #      d=$(date +%F)
-#      docker volume ls -q --filter label=wardyn.managed=true --filter label=wardyn.drive \
-#        > "drives-$d.list.tmp" &&
+#      vols=$(docker volume ls -q) &&
+#        { printf '%s\n' "$vols" | grep '^wardyn-drive-' || true; } > "drives-$d.list.tmp" &&
 #        mv "drives-$d.list.tmp" "drives-$d.list" ||
 #        echo "STOP: the drive volumes could not be listed"
 #      while IFS= read -r v <&3; do
@@ -419,11 +419,15 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
 #          tar czf "/to/$v-$d.tar.gz" -C /from . &&
 #        docker volume inspect --format \
 #          '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
-#          "$v" > "$v-$d.labels.tmp" &&
-#        grep -q '^wardyn.drive=.' "$v-$d.labels.tmp" &&
-#        grep -q '^wardyn.home=.' "$v-$d.labels.tmp" &&
-#        mv "$v-$d.labels.tmp" "$v-$d.labels" ||
+#          "$v" > "$v-$d.labels.tmp" ||
 #        { echo "STOP: $v is not backed up with its labels"; break; }
+#        if grep -q '^wardyn.drive=.' "$v-$d.labels.tmp" &&
+#          grep -q '^wardyn.home=.' "$v-$d.labels.tmp"; then
+#          mv "$v-$d.labels.tmp" "$v-$d.labels"
+#        else
+#          mv "$v-$d.labels.tmp" "$v-$d.unresolved"
+#          echo "UNRESOLVED: $v has no drive label: see below"
+#        fi
 #      done 3< "drives-$d.list"
 #    A STOP line means this backup is incomplete: fix the cause and rerun
 #    the step. drives-<date>.list names every drive volume the backup must
@@ -431,10 +435,17 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
 #    tarball. It is the volume's
 #    ownership record and lists every label it had, so a record with no
 #    wardyn.subject line comes from a volume that had none.
+#    The list is every volume named wardyn-drive-*, so a home created before
+#    the drive label existed, or restored by hand without it, is backed up
+#    too. Such a volume prints UNRESOLVED: its archive is kept, but nothing
+#    in it says whose it is. The backup is not complete until you have
+#    worked out each one's drive and person from the drive list and the
+#    allocations, and written that down beside it.
 #    Drive volumes carry no installation label: on a host with two
 #    installations, keep only the volumes whose wardyn.drive id this
 #    installation's GET /api/v1/drives lists: remove the others from
-#    drives-<date>.list before the loop.
+#    drives-<date>.list before the loop. An UNRESOLVED volume on such a host
+#    stays in the list until you know which installation it belongs to.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
@@ -518,7 +529,7 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD":/from alpine \
 #        id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null)
 #        grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
 #          printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
-#          { echo "STOP: $f has no usable label record: see below"; break; }
+#          { echo "HOLD: $f has no usable label record: see below"; continue; }
 #        docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
 #          psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
 #          grep -qx 1 || { echo "STOP: the restored database has no drive $id"; break; }
@@ -545,15 +556,15 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD":/from alpine \
 #    wardynd is not running yet. It creates each volume new, checks that the
 #    volume is local, option-free and carries exactly the recorded labels, and
 #    checks that the volume is empty before writing any file. Do not start
-#    step 6 while any STOP or SKIP line is unresolved.
+#    step 6 while any STOP, SKIP or HOLD line is unresolved.
 #    SKIP: a volume of that name already exists. Creating it again would
 #    not change its labels, and it may hold someone's files. If this loop
 #    restored it on an earlier pass, that is expected. Otherwise inspect it,
 #    and back it up, before you decide whose it is. Remove it
 #    (`docker volume rm`) only once you know, then rerun the loop.
-#    STOP on a missing or unusable label record (a backup taken before step 4
-#    recorded labels): nothing says whether the volume had a wardyn.subject,
-#    or whose it was. Never create a managed volume for it by hand: one
+#    HOLD on a missing or unusable label record (an UNRESOLVED volume, or a
+#    backup taken before step 4 recorded labels): nothing says whether the
+#    volume had a wardyn.subject, or whose it was. Never create a managed volume for it by hand: one
 #    without its wardyn.subject would mount for anyone who later resolves to
 #    that drive and home. Untar it into a plain directory instead, and settle
 #    with an admin and the person whose files it holds before the files go
@@ -5645,10 +5656,16 @@ kubectl delete --raw /api/v1/namespaces/<runsNamespace>/persistentvolumeclaims/<
 
 - `<the claim>` is the one the departed person's home resolves to: `wardyn-drive-<drive-id-hex>-<home>` on an `id`
   drive, `wardyn-drive-<drive-slug>-<home>` on a `slug` drive (see the rename caveat above).
-- Before you run it, check that the person's runs have ended. Then run step 2 of the rename caveat above for
-  `<the claim>` and the departed person's home: it writes `claim.precondition` and prints `CLEAR`. Rerun its pod
-  check just before the delete. A conflict means the claim changed: keep it. If any of that cannot be shown, keep
-  the claim. The product's own verb below makes these checks itself.
+- Prefer the product's own verb below: it checks the claim against the departed person's own subject. By hand, two
+  people can resolve to one home, so a matching drive and home do not prove the claim is theirs.
+- Before you run it by hand, check that the person's runs have ended. Then run step 2 of the rename caveat above for
+  `<the claim>` and the departed person's home: it writes `claim.precondition` and prints `CLEAR`.
+- Then check the claim's `wardyn.subject` is the departed person's digest. The digest is the first 20 hex characters
+  of the sha256 of their home subject in lower case (`home_subject` on `POST /drives/preview`, else their sign-in
+  subject): `printf %s '<subject in lower case>' | sha256sum | cut -c1-20`. A different value is another person's
+  claim. A claim with no `wardyn.subject` is deleted only when no remaining allocation resolves to its home.
+- Rerun the pod check just before the delete. A conflict means the claim changed: keep it. If any of that cannot be
+  shown, keep the claim.
 
 - or, when `drives.reclaim.enabled` is set, through the product's own verb
   (`wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes`, super-admin

@@ -89,6 +89,7 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
     - `wardyn.home` = that person's directory name; and `wardyn.subject` = a **digest** of the person themselves (never their claim — see the restore note below).
   - Reclaim is a command, never a button — either `wardyn drive reclaim` ("[Reclaiming a departed person's storage](#reclaiming-a-departed-persons-storage)" above) or, by hand:
     - one person: `docker volume rm <the volume>` — `POST /drives/preview` prints the object name for a principal —
+      - first check the volume's `wardyn.subject` (`docker volume inspect`) is the departed person's digest, as for the Kubernetes reclaim in [Operations](../OPERATIONS.md): two people can resolve to one home. With no `wardyn.subject`, remove it only when no remaining allocation resolves to its home;
       - paste the sign-in subject FIRST: on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it);
     - one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>` lists every volume that drive allocated.
 
