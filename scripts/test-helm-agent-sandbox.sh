@@ -383,9 +383,9 @@ ok "runService.enabled=false (any admissionPolicies.create): no policy, no Servi
 # The agent-sandbox pod policies keep their own Kubernetes 1.30 check when the run Service policies do not render.
 refused "backend on, run Service off, Kubernetes 1.29" "k8s.agentSandbox.enabled needs Kubernetes 1.30 or later" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.runService.enabled=false --kube-version 1.29.0
 refused "backend on, admissionPolicies.create=false, Kubernetes 1.29" "k8s.agentSandbox.enabled needs Kubernetes 1.30 or later" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.admissionPolicies.create=false --kube-version 1.29.0
-render -f "$ALLON" --set k8s.rbac.create=false --set k8s.runService.enabled=false --kube-version 1.29.0 >"$TMP/adopter.out" \
+render -f "$ALLON" --set k8s.rbac.create=false --set k8s.runService.enabled=false --kube-version 1.29.0 >"$TMP/both-off.out" \
   || die "rbac.create=false, run Service off, backend off, Kubernetes 1.29: refused, want a render"
-grep -q 'admissionregistration' "$TMP/adopter.out" && die "rbac.create=false, run Service off, backend off: an admission object rendered"
+grep -q 'admissionregistration' "$TMP/both-off.out" && die "rbac.create=false, run Service off, backend off: an admission object rendered"
 ok "backend on below 1.30 is refused without the run Service policies; with both off nothing admission renders at 1.29"
 
 # helm template does not render NOTES, so read the source, as test-helm-runnerd.sh does.
