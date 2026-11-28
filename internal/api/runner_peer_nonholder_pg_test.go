@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -15,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +27,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
@@ -33,6 +36,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // Two replicas finalise one run: the launcher's incomplete row commits first, then the complete row of the replica
@@ -248,10 +252,13 @@ func (f *peerFixture) nonHolder(t *testing.T) *Server {
 }
 
 // replicaServer is a second server on f's database: its own orchestrator, audit, watcher lease owner, peer config
-// and door. Its holder loop is not started.
-func (f *peerFixture) replicaServer(t *testing.T) *Server {
+// and door, with shape applied to its config. Its holder loop is not started.
+func (f *peerFixture) replicaServer(t *testing.T, shape ...func(*Config)) *Server {
 	t.Helper()
 	cfg := f.srv.cfg
+	for _, sh := range shape {
+		sh(&cfg)
+	}
 	cfg.Runner = orchestrator.New(runnertest.NewFake())
 	cfg.Audit = &syncAudit{}
 	pc := newPeerConfig()
@@ -716,9 +723,19 @@ func TestPeerDoorOutputRefusalsAfterUpgrade_PG(t *testing.T) {
 	}
 }
 
-// launchOn is a RUNNING task run on rp's runner launched by l, as dispatch does at the substrate: l holds the run's
-// watcher lease, leases and creates the run on the runner with l's output sink, and starts its agent under G1.
+// launchOn is launchVia with l's lease hold kept until the test ends.
 func launchOn(t *testing.T, l *Server, rp *runnerProcess) types.AgentRun {
+	t.Helper()
+	run, stop := launchVia(t, l, rp)
+	t.Cleanup(stop)
+	return run
+}
+
+// launchVia is a task run on rp's runner launched by l, as dispatch does at the substrate: its row is seeded RUNNING
+// (setup, not a state change under test), l holds the run's watcher lease, leases and creates the run on the
+// runner with l's output sink, starts its agent under G1 and persists the agent's exec id. stop ends l's lease
+// hold, as dispatch's return does; nothing stamps the lease after that.
+func launchVia(t *testing.T, l *Server, rp *runnerProcess) (types.AgentRun, func()) {
 	t.Helper()
 	ctx := rp.ctx
 	run := newFinalizeRun()
@@ -736,7 +753,11 @@ func launchOn(t *testing.T, l *Server, rp *runnerProcess) types.AgentRun {
 	if err := rp.st.InsertPendingRunOutput(ctx, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(l.holdRunWatcherLease(ctx, run.ID))
+	if _, err := rp.st.Pool.Exec(ctx, `UPDATE agent_runs SET token_renewed_at = now() WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	stop := sync.OnceFunc(l.holdRunWatcherLease(ctx, run.ID))
+	t.Cleanup(stop)
 	e, err := l.leaseRunOnRunner(ctx, run)
 	if err != nil {
 		t.Fatalf("lease on runner %s from %s: %v", rp.rn.ID, l.replicaName(), err)
@@ -753,10 +774,14 @@ func launchOn(t *testing.T, l *Server, rp *runnerProcess) types.AgentRun {
 	if err == nil {
 		err = l.bindRunnerExecution(ctx, e, execID)
 	}
+	if err == nil {
+		err = rp.st.SetRunAgentExecID(ctx, run.ID, cmp.Or(execID, mainProcessExecID))
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	return run
+	run.AgentExecID = cmp.Or(execID, mainProcessExecID)
+	return run, stop
 }
 
 // attachEcho attaches to run through srv and reads back what it writes.
@@ -820,5 +845,168 @@ func TestTwoRunnersEachServedThroughOtherReplica_PG(t *testing.T) {
 	}
 	if b.tailFor(run1.ID) == nil || f.srv.tailFor(run2.ID) == nil {
 		t.Fatal("a launching replica holds no tail for its run")
+	}
+}
+
+// placeOn is the create path's placement decision (resolvePlacement) on srv for a background run its owner launches
+// on rp's runner from the owner's own pool, with the request a launch sends. It must choose that runner with no
+// refusal code.
+func placeOn(t *testing.T, srv *Server, rp *runnerProcess) {
+	t.Helper()
+	pool, err := rp.st.CreateRunnerPool(rp.ctx, types.RunnerPool{Name: "Own runner", Scope: types.RunnerPoolUser, Owner: rp.rn.Owner}, rp.rn.Owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := rp.st.AddOwnRunnerToPool(rp.ctx, pool.ID, rp.rn.ID, rp.rn.Owner, rp.rn.OrgURLSHA256); err != nil {
+		t.Fatal(err)
+	}
+	ctx := operatorCtx(rp.rn.Owner, rp.rn.Owner+"@corp.example", oidc.RoleUser)
+	ceiling, err := srv.effectiveCeiling(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerPoolID: pool.ID.String(), Experience: client.ExperienceBackground}
+	plan, refusal := srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling})
+	if refusal != nil {
+		t.Fatalf("placement on %s refused: %d %+v", srv.replicaName(), refusal.status, refusal.body)
+	}
+	if plan.placement != types.PlacementLocal || !slices.ContainsFunc(plan.eligible, func(p poolTarget) bool { return p.runnerID != nil && *p.runnerID == rp.rn.ID }) {
+		t.Fatalf("placement on %s chose %s %+v, want the runner %s", srv.replicaName(), plan.placement, plan.eligible, rp.rn.ID)
+	}
+}
+
+// outputVia is GET /runs/{id}/output on srv as the run's owner; a refusal answers its status as the output, so a
+// poll never matches it.
+func outputVia(t *testing.T, srv *Server, run types.AgentRun) runOutputResponse {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/output", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", run.ID.String())
+	r = r.WithContext(context.WithValue(operatorCtx(run.CreatedBy, run.CreatedBy+"@corp.example", oidc.RoleUser), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	srv.handleRunOutput(w, r)
+	var out runOutputResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+		return runOutputResponse{Output: fmt.Sprintf("status %d: %s", w.Code, w.Body)}
+	}
+	return out
+}
+
+// tailText is what srv's tail for run holds, and false when srv holds none.
+func tailText(srv *Server, run uuid.UUID) (string, bool) {
+	e := srv.tailFor(run)
+	if e == nil {
+		return "", false
+	}
+	e.mw.mu.Lock()
+	defer e.mw.mu.Unlock()
+	return string(e.ring.buf), true
+}
+
+// servable is whether srv's Substrate for runner id has a sink for run that the lease rule serves.
+func servable(ctx context.Context, srv *Server, id uuid.UUID, run uuid.UUID) bool {
+	return srv.runnerEndpoint(id).sub.ServableOutput(ctx, run)
+}
+
+// launcherFresh fails the test unless run's watcher lease is l's and fresh (LeaseFresh) and l's replica row is fresh,
+// so a forward reads l from RunOutputLauncher.
+func launcherFresh(t *testing.T, st store.PG, ctx context.Context, run uuid.UUID, l *Server, at string) {
+	t.Helper()
+	row, err := st.RunOutputLauncher(ctx, run)
+	if err != nil || row.State != store.LauncherFresh || !row.LeaseFresh || row.WatcherOwner != l.leaseOwner() || row.ReplicaID != l.replicaName() {
+		t.Fatalf("%s: launcher %+v %v, want %s's fresh lease and replica row", at, row, err, l.replicaName())
+	}
+}
+
+// heldOutput is the runner-side writer of run's create, which the fake's OutputHold keeps open after part 1.
+func heldOutput(t *testing.T, fake *runnertest.Fake, run uuid.UUID) io.Writer {
+	t.Helper()
+	for _, spec := range fake.Created {
+		if spec.RunID == run && spec.ExecOutput != nil {
+			return spec.ExecOutput
+		}
+	}
+	t.Fatalf("the runner holds no output writer for run %s", run)
+	return nil
+}
+
+// holdOutput makes fake's creates keep their output drain open until the test ends.
+func holdOutput(t *testing.T, fake *runnertest.Fake) {
+	hold := make(chan struct{})
+	fake.OutputHold = hold
+	t.Cleanup(func() { close(hold) })
+}
+
+// leaseSent reports whether the runner accepted a LEASE frame for run.
+func leaseSent(rp *runnerProcess, run uuid.UUID) bool {
+	rp.leaseMu.Lock()
+	defer rp.leaseMu.Unlock()
+	_, ok := rp.leaseEnds[run]
+	return ok
+}
+
+// R16: a runner claimed after a replica booted is chosen by that replica's placement, launched there, and keeps its
+// output at that replica across a reconnect to the holder: the re-open on the holder reaches the launcher's sink.
+func TestLaunchPlacedFromNonHolderReplica_PG(t *testing.T) {
+	f := newPeerFixture(t)
+	f.waitHolder(t, f.session(t))
+	rn, key := registeredLeaseRunner(t, f.ctx, f.st)
+	b := f.nonHolder(t) // B boots before the runner is claimed, so it makes no endpoint for it at boot
+	if hasEndpoint(b, rn.ID) {
+		t.Fatal("B made an endpoint at boot for a runner nobody had claimed")
+	}
+	claimAsOwner(t, f.srv, rn)
+	side := runnerProcessFor(t, f.ctx, f.st, f.srv, rn, key)
+	holdOutput(t, side.fake)
+	side.disconnect = side.connect(t)
+	peerWithin(t, 10*time.Second, "B routes the runner with the holder's caps", func() bool {
+		_, ok := capsAnswers(f.ctx, b, rn.ID)
+		return hasEndpoint(b, rn.ID) && b.RunnerOnline(rn.ID) && ok
+	})
+
+	placeOn(t, b, side)
+	start := time.Now()
+	run, stop := launchVia(t, b, side)
+	stop() // dispatch returned: a runner run has no completion watcher, so nothing stamps B's lease again
+	launcherFresh(t, f.st, f.ctx, run.ID, b, "after the launch")
+	if !leaseSent(side, run.ID) {
+		t.Fatal("the runner accepted no LEASE for the run")
+	}
+	if got, err := f.st.GetRun(f.ctx, run.ID); err != nil || got.State != types.RunRunning {
+		t.Fatalf("the run is %v (%v), want it RUNNING", got.State, err)
+	}
+	part1 := "agent output of " + run.SandboxRef + "\n"
+	peerWithin(t, 10*time.Second, "part 1 is read through B", func() bool { return outputVia(t, b, run).Output == part1 })
+	launcherFresh(t, f.st, f.ctx, run.ID, b, "at part 1")
+
+	// The runner's link to A drops and comes back on a new connection.
+	dropped := time.Now()
+	side.disconnect()
+	side.disconnect = side.connect(t)
+	if d := time.Since(dropped); d >= 5*time.Second {
+		t.Fatalf("the drop lasted %v, want under 5s", d)
+	}
+	part2 := "part 2 after the reconnect " + uuid.NewString() + "\n"
+	if _, err := io.WriteString(heldOutput(t, side.fake, run.ID), part2); err != nil {
+		t.Fatal(err)
+	}
+	peerWithin(t, 10*time.Second, "part 2 reaches B's sink through A's re-open", func() bool {
+		text, ok := tailText(b, run.ID)
+		return ok && strings.HasSuffix(text, part2)
+	})
+	launcherFresh(t, f.st, f.ctx, run.ID, b, "at part 2")
+	if _, ok := tailText(f.srv, run.ID); ok {
+		t.Fatal("A holds a tail for a run B launched")
+	}
+	if !servable(f.ctx, b, rn.ID, run.ID) || servable(f.ctx, f.srv, rn.ID, run.ID) {
+		t.Fatal("the sink check should find a servable sink on B and none on A")
+	}
+	peerWithin(t, 10*time.Second, "the stored output through B is part 1 then part 2", func() bool {
+		o := outputVia(t, b, run)
+		return o.Output == part1+part2 && !o.CaptureGap && !o.Incomplete
+	})
+	launcherFresh(t, f.st, f.ctx, run.ID, b, "at the last assertion")
+	if d := time.Since(start); d >= 90*time.Second {
+		t.Fatalf("launch to last assertion took %v, want under 90s: the dispatch-time lease would be stale", d)
 	}
 }
