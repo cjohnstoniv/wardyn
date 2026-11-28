@@ -435,8 +435,16 @@ vols=$(docker volume ls -q) &&
 ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT id FROM user_drives") || { echo "STOP: this installation's drives could not be read"; exit 1; }
 #    A volume is this installation's only when its label is, as a whole, one
-#    of those ids; every other one is HELD and settled, one by one, before
-#    anything is copied.
+#    of those ids, and no other installation on the host shares them; every
+#    other one is HELD and settled, one by one, before anything is copied.
+#    Two installations share drive ids when one database was restored or
+#    copied from the other's.
+shared=no
+if [ -s "$B/drives.found" ]; then
+  printf "Does another Wardyn installation on this Docker host run from a copy of this database, or this one from a copy of its, or can you not tell? Type no, or yes: "
+  read -r shared || shared=
+  [ "$shared" = no ] || [ "$shared" = yes ] || { echo "STOP: not answered"; exit 1; }
+fi
 : > "$B/drives.list.tmp"
 : > "$B/drives.held"
 while IFS= read -r v <&3; do
@@ -448,10 +456,12 @@ while IFS= read -r v <&3; do
       u=${d#\"}; u=${u%\"}
       for i in $ids; do [ "$i" != "$u" ] || own=1; done ;;
   esac
-  if [ -n "$own" ]; then echo "$v" >> "$B/drives.list.tmp"; else echo "$v" >> "$B/drives.held"; fi
+  if [ -n "$own" ] && [ "$shared" = no ]; then echo "$v" >> "$B/drives.list.tmp"; else echo "$v" >> "$B/drives.held"; fi
 done 3< "$B/drives.found"
 while IFS= read -r v <&3; do
-  printf "HELD: %s names none of this installation's drives. Is it this installation's? Type yes, or no if it is another installation's: " "$v"
+  h=$(docker volume inspect --format '{{json (index .Labels "wardyn.home")}}' "$v") ||
+    { echo "STOP: $v could not be inspected"; exit 1; }
+  printf "HELD: %s (home %s) is not shown to be this installation's. Is it? Type yes, or no if it is another installation's: " "$v" "$h"
   read -r a || a=
   case "$a" in
     yes) echo "$v" >> "$B/drives.list.tmp" ;;
@@ -498,6 +508,11 @@ done 3< "$B/drives.list"
 #    label is not exactly one of this installation's drive ids (another
 #    installation's, a drive deleted here, one with no label or a malformed
 #    one) is HELD, and the script asks about each before anything is copied.
+#    When another installation runs from a copy of this database, or you
+#    cannot tell, every drive volume is held, its label included: match its
+#    home against this installation's allocations, each of which names its
+#    home on the Drives page: note them before you run this script, since
+#    step 0 stops wardynd.
 #    yes backs it up here; with only this installation on the host every
 #    held volume is its own. no records it in drives.elsewhere, to back up
 #    with the installation it belongs to. A volume you cannot place stops the
