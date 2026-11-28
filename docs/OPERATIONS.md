@@ -531,7 +531,9 @@ fi
 #    before step 3 left the database running on), never a lower value in its place.
 #    It reuses a saved mark only after reading the database's own: if that read
 #    fails, it stops, since nothing then shows the mark is still the highest.
-#    Giving up on a restore? Remove the mark file it printed before wardynd starts.
+#    Giving up before step 3 loads the dump? Remove the mark file it printed.
+#    After step 3, apply the saved mark (step 3b) or rotate the session key (see
+#    "Revocation order") before you remove it and start wardynd.
 #    Run every attempt from this directory; only one runs per installation at a
 #    time. (That database is gone, with no mark file? The script stops here:
 #    see "Revocation order".)
@@ -544,20 +546,20 @@ if [ -f "$M" ]; then
   { IFS= read -r stored && IFS= read -r hwm; } < "$M" || { echo "STOP: $M cannot be read: see \"Revocation order\""; exit 1; }
   [ "$stored" = "$id" ] || { echo "STOP: $M belongs to another installation"; exit 1; }
   case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
-  now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-    "SELECT last_value FROM oidc_revocation_seq" || true)
+  if ! now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+    "SELECT last_value FROM oidc_revocation_seq"); then now=; fi
   case "$now" in
     ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again, or see \"Revocation order\""; exit 1 ;;
   esac
   [ "$now" -le "$hwm" ] || hwm=$now
-  printf '%s\n%s\n' "$id" "$hwm" > "$M.new" && mv "$M.new" "$M"
+  { printf '%s\n%s\n' "$id" "$hwm" > "$M.new" && mv "$M.new" "$M"; } || { echo "STOP: mark $hwm not saved in $M: free space and run again"; exit 1; }
   echo "An unfinished restore of this installation left a mark: using $hwm"
 else
   hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-    "SELECT last_value FROM oidc_revocation_seq")
+    "SELECT last_value FROM oidc_revocation_seq") || hwm=
   case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
-  (set -C; printf '%s\n%s\n' "$id" "$hwm" > "$M")
-  echo "Saved mark $hwm in $M: if you give up on this restore, remove it before wardynd starts"
+  (set -C; printf '%s\n%s\n' "$id" "$hwm" > "$M") || { echo "STOP: mark $hwm not saved in $M: free space and run again"; exit 1; }
+  echo "Saved mark $hwm in $M: giving up before step 3, remove it; after step 3, apply it (step 3b) or see \"Revocation order\" first"
 fi
 case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 
