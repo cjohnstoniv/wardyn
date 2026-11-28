@@ -406,7 +406,7 @@ echo "$REC" > "$B/recording-store"
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 
 # 1. Postgres, through this project's postgres service
-(cd "$B" && docker compose -f "$OLDPWD/deploy/compose/docker-compose.yaml" exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql")
+(cd "$B" && docker compose -f "$OLDPWD/deploy/compose/docker-compose.yaml" exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql" < /dev/null)
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
@@ -427,10 +427,50 @@ ask "WARDYN_AGE_KEY from deploy/compose/.env is in your secret manager"
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
 vols=$(docker volume ls -q) &&
-  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.list.tmp" &&
-  mv "$B/drives.list.tmp" "$B/drives.list" ||
+  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.found" ||
   { echo "STOP: the drive volumes could not be listed"; exit 1; }
-ask "$B/drives.list names only this installation's drive volumes (note below)"
+#    A volume is copied when its wardyn.drive label is one of this
+#    installation's drive ids, read from its postgres, which still runs, and
+#    no other installation shares them, or when you answer yes for it below.
+ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+  "SELECT id FROM user_drives" < /dev/null) || { echo "STOP: this installation's drives could not be read"; exit 1; }
+#    A volume is this installation's only when its label is, as a whole, one
+#    of those ids, and no other installation on the host shares them; every
+#    other one is HELD and settled, one by one, before anything is copied.
+#    Two installations share drive ids when one database was restored or
+#    copied from the other's.
+shared=no
+if [ -s "$B/drives.found" ]; then
+  printf "Does another Wardyn installation on this Docker host run from a copy of this database, or this one from a copy of its, or can you not tell? Type no, or yes: "
+  read -r shared || shared=
+  [ "$shared" = no ] || [ "$shared" = yes ] || { echo "STOP: not answered"; exit 1; }
+fi
+: > "$B/drives.list.tmp"
+: > "$B/drives.held"
+while IFS= read -r v <&3; do
+  d=$(docker volume inspect --format '{{json (index .Labels "wardyn.drive")}}' "$v") ||
+    { echo "STOP: $v could not be inspected"; exit 1; }
+  own=
+  case "$d" in
+    \"????????-????-????-????-????????????\")
+      u=${d#\"}; u=${u%\"}
+      for i in $ids; do [ "$i" != "$u" ] || own=1; done ;;
+  esac
+  if [ -n "$own" ] && [ "$shared" = no ]; then echo "$v" >> "$B/drives.list.tmp"; else echo "$v" >> "$B/drives.held"; fi
+done 3< "$B/drives.found"
+while IFS= read -r v <&3; do
+  h=$(docker volume inspect --format '{{json (index .Labels "wardyn.home")}}' "$v") ||
+    { echo "STOP: $v could not be inspected"; exit 1; }
+  printf "HELD: %s (home %s) is not shown to be this installation's. Is it? Type yes, no if it is another installation's, or retired if its drive was deleted here: " "$v" "$h"
+  read -r a || a=
+  case "$a" in
+    yes) echo "$v" >> "$B/drives.list.tmp" ;;
+    no) echo "$v" >> "$B/drives.elsewhere" ;;
+    retired) echo "$v" >> "$B/drives.retired" ;;
+    *) echo "STOP: $v is not settled: find which installation it belongs to, then run again"; exit 1 ;;
+  esac
+done 3< "$B/drives.held"
+mv "$B/drives.list.tmp" "$B/drives.list"
 while IFS= read -r v <&3; do
   docker run --rm -v "$v":/from -v "$B":/to alpine \
     tar czf "/to/$v.tar.gz" -C /from . &&
@@ -448,6 +488,13 @@ while IFS= read -r v <&3; do
     echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
   fi
 done 3< "$B/drives.list"
+if [ -f "$B/drives.retired" ]; then
+  mkdir -p "$B/retired"
+  while IFS= read -r v <&3; do
+    docker run --rm -v "$v":/from -v "$B/retired":/to alpine \
+      tar czf "/to/$v.tar.gz" -C /from . || { echo "STOP: retired $v is not backed up"; exit 1; }
+  done 3< "$B/drives.retired"
+fi
 #    A STOP line ends the script, and the attempt stays incomplete: fix the
 #    cause and run the script again, which makes a new directory. drives.list names every drive volume the backup must
 #    hold, and the restore works from it. Keep each .labels file with its
@@ -456,19 +503,34 @@ done 3< "$B/drives.list"
 #    with no wardyn.subject line comes from a volume that had none. A volume
 #    whose label values span lines cannot be recorded that way and prints
 #    UNRESOLVED too.
-#    The list is every volume named wardyn-drive-* or wardyn-portal-* (a
+#    drives.found is every volume named wardyn-drive-* or wardyn-portal-* (a
 #    portal's folder on a team drive), so a home created before
-#    the drive label existed, or restored by hand without it, is backed up
-#    too. Such a volume prints UNRESOLVED: its archive is kept, but nothing
+#    the drive label existed, or restored by hand without it, is asked about
+#    too, and backed up when you answer yes. Such a volume prints UNRESOLVED:
+#    its archive is kept, but nothing
 #    in it says whose it is. The backup is not complete until you have
 #    worked out each one's drive and owner from the drive list and the
 #    allocations, and written that down beside it. The owner is a person, or,
 #    for a t- (group) or p- (portal) home, the allocation sharing that folder.
-#    Drive volumes carry no installation label: on a host with two
-#    installations, keep only the volumes whose wardyn.drive id this
-#    installation's GET /api/v1/drives lists: remove the others from
-#    drives.list before the loop. An UNRESOLVED volume on such a host
-#    stays in the list until you know which installation it belongs to.
+#    Drive volumes carry no installation label, so a volume whose wardyn.drive
+#    label is not exactly one of this installation's drive ids (another
+#    installation's, a drive deleted here, one with no label or a malformed
+#    one) is HELD, and the script asks about each before anything is copied.
+#    A drive deleted here has nothing to restore into: answer retired, and
+#    its volume is archived under retired/, which the restore leaves alone.
+#    Keep or discard it under your own retention rules.
+#    When another installation runs from a copy of this database, or you
+#    cannot tell, every drive volume is held, its label included. Answer from
+#    the volume names this installation itself reports, noted before you run
+#    this script, since step 0 stops wardynd: for a person, the object name
+#    the Drives page's Preview shows for their claims; for a group or
+#    everyone grant, each member's Preview; for a portal, the object name
+#    its allocation returns; for a volume older than drive labels, your own
+#    record of whose it is.
+#    yes backs it up here; with only this installation on the host every
+#    held volume is its own. no records it in drives.elsewhere, to back up
+#    with the installation it belongs to. A volume you cannot place stops the
+#    backup until you know.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
