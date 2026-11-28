@@ -280,13 +280,34 @@ func hasEndpoint(srv *Server, id uuid.UUID) bool {
 	return ok
 }
 
-// peerWithin polls cond every 20 ms until it holds or d passes.
+// peerWithin polls cond every 20 ms until it holds or d passes. A d of zero or less fails at once.
 func peerWithin(t *testing.T, d time.Duration, what string, cond func() bool) {
 	t.Helper()
+	if d <= 0 {
+		t.Fatalf("no time left (%v): %s", d, what)
+	}
 	for deadline := time.Now().Add(d); !cond(); time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("not within %v: %s", d, what)
 		}
+	}
+}
+
+// peerBy polls cond every 20 ms and fails unless it holds by deadline: a deadline already passed fails before the
+// first poll, and a cond that held only once deadline had passed fails too.
+func peerBy(t *testing.T, deadline time.Time, what string, cond func() bool) {
+	t.Helper()
+	if !time.Now().Before(deadline) {
+		t.Fatalf("the deadline passed before the wait began: %s", what)
+	}
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("not by the deadline: %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if late := time.Since(deadline); late > 0 {
+		t.Fatalf("held %v past the deadline: %s", late, what)
 	}
 }
 
@@ -1089,8 +1110,8 @@ func (o *outputStreams) firstRefused(target string) bool {
 }
 
 // R16c: a Placement-local task run launched on B, which has no completion watcher, is adopted by the holder once its
-// lease ages out: B's sink yields within one sink check, the runner sees its old stream refused, A holds the live
-// capture, and B reads the stored chunks with each part once.
+// lease ages out: by one deadline from the adoption B's sink yields, the runner sees its old stream refused, and B
+// reads parts 1 and 2 from the stored chunks; A holds the live capture, and B reads each part once.
 func TestPlacementLocalRunFromNonHolderReplicaAdopted_PG(t *testing.T) {
 	f := newPeerFixture(t)
 	f.waitHolder(t, f.session(t))
@@ -1118,7 +1139,9 @@ func TestPlacementLocalRunFromNonHolderReplicaAdopted_PG(t *testing.T) {
 	if err := f.srv.sweepRunWatchers(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	peerWithin(t, 10*time.Second, "A holds the run's lease", func() bool {
+	// One deadline from the adoption: the lease, B's yield and B's read of parts 1 and 2 all hold by it.
+	deadline := time.Now().Add(time.Second)
+	peerBy(t, deadline, "A holds the run's lease", func() bool {
 		var owner *string
 		err := f.st.Pool.QueryRow(f.ctx, `SELECT watcher_owner FROM agent_runs WHERE id = $1`, run.ID).Scan(&owner)
 		return err == nil && owner != nil && *owner == f.srv.leaseOwner()
@@ -1128,13 +1151,19 @@ func TestPlacementLocalRunFromNonHolderReplicaAdopted_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Within one sink check B yields: no sink, no tail; the runner's old stream was refused; A's live capture holds
-	// the post-adoption part, and A stored it as its recovery's chunk.
-	peerWithin(t, time.Second, "B's sink and tail are gone and the runner saw its old stream refused", func() bool {
+	// B yields: no sink, no tail, and the runner's old stream was refused. Here this is an eventual observation
+	// bounded by the adoption deadline; the bound in sink check passes is the remote package's
+	// TestPeerOutputSinkCheckSlowLeaseDoesNotDelayOthers (a keep=false sink yields within two passes).
+	peerBy(t, deadline, "B's sink and tail are gone and the runner saw its old stream refused", func() bool {
 		_, tail := tailText(b, run.ID)
 		return !tail && !servable(f.ctx, b, f.rn.ID, run.ID) && streams.firstRefused(run.ID.String())
 	})
-	yielded := time.Now()
+	// B, with no tail, answers from the chunks.
+	peerBy(t, deadline, "B reads part 1 then part 2 from the chunks", func() bool {
+		return outputVia(t, b, run).Output == part1+part2
+	})
+
+	// A's live capture holds the post-adoption part, and A stored it as its recovery's chunk.
 	peerWithin(t, 5*time.Second, "A's tail holds the part written after the adoption", func() bool {
 		text, ok := tailText(f.srv, run.ID)
 		return ok && strings.Contains(text, part2)
@@ -1144,11 +1173,6 @@ func TestPlacementLocalRunFromNonHolderReplicaAdopted_PG(t *testing.T) {
 		err := f.st.Pool.QueryRow(f.ctx, `SELECT count(*) FROM run_output_chunks WHERE run_id = $1 AND replica = $2 AND position($3::bytea in bytes_masked) > 0`,
 			run.ID, "recovered:"+f.srv.replicaName(), []byte(part2)).Scan(&n)
 		return err == nil && n > 0
-	})
-
-	// B, with no tail, answers from the chunks.
-	peerWithin(t, time.Second-time.Since(yielded), "B reads part 1 then part 2 from the chunks", func() bool {
-		return outputVia(t, b, run).Output == part1+part2
 	})
 	part3 := "part 3 " + uuid.NewString() + "\n"
 	if _, err := io.WriteString(heldOutput(t, f.fake, run.ID), part3); err != nil {
