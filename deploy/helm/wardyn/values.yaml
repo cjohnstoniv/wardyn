@@ -654,8 +654,9 @@ k8s:
   # The two cluster-scoped ValidatingAdmissionPolicies and their bindings (<fullname>-keep-service and
   # <fullname>-keep-endpoints) that hold wardynd's Service and EndpointSlice writes and deletes to a run's own
   # Service. They render only with runService.enabled. create unset, the default, follows k8s.rbac.create; set false
-  # where a platform team applies equivalent policies itself (apply them before an upgrade that removes the chart's
-  # copies), or true to render them with rbac.create=false.
+  # where a platform team applies equivalent policies itself, or true to render them with rbac.create=false. On an
+  # existing release the platform team's copies take names other than the chart's, and both bindings enforce Deny,
+  # before the upgrade to false: Helm then deletes the chart's names, and an object applied under them with it.
   admissionPolicies: {}
   # The cluster's DNS domain (kubelet --cluster-domain). Only the Service FQDN the
   # proxies dial for WARDYN_CONTROL_PLANE_URL uses it; change it on a cluster whose

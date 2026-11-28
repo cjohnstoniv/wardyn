@@ -5,7 +5,9 @@ delete on Services and create, get, update and deletecollection on EndpointSlice
 policies hold its writes and deletes to what a run needs: a ClusterIP Service named for a run, with no selector and
 no external IPs, and EndpointSlices labelled for such a Service, before and after an update. Like the pod policies, they select on the
 authenticated requester. One policy per kind, so each expression is type-checked against the one kind it reads.
-The names say "keep" because keep introduced them; scripts and CI select them by those names.
+The names say "keep" because keep introduced them; scripts and CI select them by those names. A platform team that
+takes them over (k8s.admissionPolicies.create=false) on an existing release applies its own under other names first:
+Helm deletes these names when it stops rendering them.
 */ -}}
 {{- if include "wardyn.runServicePolicies" . }}
 {{- if or (semverCompare "<1.30-0" .Capabilities.KubeVersion.Version) (not (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1")) }}

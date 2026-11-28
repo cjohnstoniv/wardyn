@@ -375,10 +375,13 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `k8s.runService.enabled`: give each run its own Service and EndpointSlice (`WARDYN_K8S_RUN_SERVICE`).
   - Default `true`: the agent pod starts beside its proxy and reaches it at the Service's address.
   - Set `false` to start the agent pod once its proxy pod is Ready, reaching that pod's IP, as in 0.11.0-rc.3. The runner Role then has no `services` or `endpointslices` rule and the chart renders no run Service admission policy, so an install with `k8s.rbac.create=false` whose GitOps project may not create cluster-scoped objects needs neither. `watch` on `pods` stays optional.
+    - With `k8s.agentSandbox.enabled` off too, the chart renders no admission policy of either kind.
     - `k8s.agentSandbox.keep.enabled` needs it on; wardynd refuses to boot otherwise.
     - On an install whose runs already have a Service, end those runs and let their cleanup finish before you turn it off and remove the verbs (CHANGELOG, Before you upgrade).
 - `k8s.admissionPolicies.create`: render the two run Service admission policies and their bindings.
-  - Unset (the default), it follows `k8s.rbac.create`. Set `false` when a platform team applies equivalent policies itself, and apply them before the upgrade that removes the chart's copies. Set `true` to render them with `k8s.rbac.create=false`.
+  - Unset (the default), it follows `k8s.rbac.create`. Set `false` when a platform team applies equivalent policies itself. Set `true` to render them with `k8s.rbac.create=false`; a 0.11.0-rc.4 install with `k8s.rbac.create=false` sets it before upgrading, or it loses the policies it has.
+  - On an existing release, the platform team's policies and bindings take names other than the chart's: the upgrade to `false` deletes the chart's four objects, and an object of the same name with them. The chart's own names suit only a fresh install.
+    - Each binding's `policyName` names its own policy, with the chart's namespace selector and wardynd ServiceAccount match. Confirm both bindings enforce `Deny` before that upgrade.
   - With the Service on and no policies rendered, the install notes name the policies the platform team must apply.
 - `k8s.runsNamespace`: namespace every sandbox (Secret/NetworkPolicies/pods) is created in.
   - **Required with `k8s.enabled=true`** — the chart refuses to render an empty value (it would put the k8s-runner Role, and every run's pods, in the CONTROL-PLANE namespace, where those verbs cover every other workload sharing it);
@@ -422,7 +425,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
   - Refused with `k8s.ackAmbientDefaultDeny` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` too, as a literal or a `valueFrom`.
   - `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`, default `false`, **experimental**): keeps an ended interactive `claude-code` or `codex-cli` run whose work folder is a kept drive, and revives it. Needs `k8s.agentSandbox.enabled=true`.
-    - Adds no Role verb: every Kubernetes install already holds the per-run Service verbs. See [keep and revive](../../../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
+    - Needs the per-run Service on (`k8s.runService.enabled`) and the Role's per-run Service verbs, which the chart grants with it; a Role you write yourself must grant them. It adds no other verb. See [keep and revive](../../../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
 - `k8s.warmPools` (`WARDYN_K8S_WARM_POOLS`, default `[]`, **experimental**): idle placeholder pods per pool that hold room on a node with the pool's image pulled. No new Role verb. See [Kubernetes: warm pools](../../../docs/operations/kubernetes-warm-pools.md).
   - `k8s.warmPoolPriorityClass.create` (default `true`) renders a PriorityClass of value -10 that never preempts. `.name` names it (`WARDYN_K8S_WARM_PRIORITY_CLASS`).
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).

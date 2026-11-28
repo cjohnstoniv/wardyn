@@ -260,7 +260,8 @@ rules:
   # the Service's address, so its pod starts beside the proxy rather than after it. Exactly runAddressAccess
   # (internal/runner/k8s/agentsandbox_keep.go; R-02c). No list or watch; no other discovery resource. The
   # <fullname>-keep-service and -keep-endpoints admission policies hold what wardynd writes or deletes to a run's own
-  # ClusterIP Service and its EndpointSlices. Only with k8s.runService.enabled.
+  # ClusterIP Service and its EndpointSlices; with k8s.admissionPolicies.create=false, the platform team's equivalents
+  # under their own names must hold them instead. Only with k8s.runService.enabled.
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["create", "get", "delete"]

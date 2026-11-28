@@ -161,7 +161,7 @@
 
 ## Keep and revive
 
-- Experimental, off by default: `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`). Needs the backend on.
+- Experimental, off by default: `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`). Needs the backend on, and the per-run Service on (`k8s.runService.enabled`, `WARDYN_K8S_RUN_SERVICE`) with the Role's verbs on `services` and `endpointslices`. The chart grants them with the Service; a Role you write yourself must grant them.
 - Kubernetes has no pause button. A run is kept only when its time runs out. Extend it, then revive it from its page.
 
 | Step | What happens |

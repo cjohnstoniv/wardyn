@@ -26,7 +26,9 @@
 #   - k8s.admissionPolicies.create follows k8s.rbac.create unless set: rbac.create=false renders no policy, either
 #     explicit value overrides it, and the 1.30 refusal applies only when the policies render;
 #   - k8s.runService.enabled=false renders no policy and no services or endpointslices rule, whatever
-#     admissionPolicies.create says, and sets WARDYN_K8S_RUN_SERVICE=off; the defaults render as before.
+#     admissionPolicies.create says, and sets WARDYN_K8S_RUN_SERVICE=off; the defaults render as before;
+#   - the backend's pod policies keep their own 1.30 refusal when the run Service policies do not render, and with
+#     both families off a 1.29 render carries no admission object.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -346,7 +348,12 @@ render -f "$ALLON" --set k8s.rbac.create=false >"$TMP/norbac.out"
 grep -q 'kind: ValidatingAdmissionPolicy' "$TMP/norbac.out" && die "rbac.create=false: a ValidatingAdmissionPolicy rendered"
 grep -qE '^kind: (Role|RoleBinding|ClusterRole|ClusterRoleBinding)$' "$TMP/norbac.out" && die "rbac.create=false: RBAC rendered"
 render -f "$ALLON" --set k8s.rbac.create=false --kube-version 1.29.0 >/dev/null || die "rbac.create=false for Kubernetes 1.29: refused, want a render"
-ok "rbac.create=false: no ValidatingAdmissionPolicy, no RBAC, no Kubernetes 1.30 refusal"
+# An unchanged rc.4 values file with rbac.create=false drops the policies that rc.4 rendered, with the Service still on,
+# so the upgrade note must tell that install to set admissionPolicies.create=true first.
+[[ -z "$(runsvcenv "$TMP/norbac.out")" ]] || die "rbac.create=false: the run Service is off, want it on by default"
+grep -q 'set `k8s.admissionPolicies.create=true` before its first upgrade to this release' CHANGELOG.md \
+  || die "CHANGELOG no longer tells an rc.4 install with rbac.create=false to set admissionPolicies.create=true before upgrading"
+ok "rbac.create=false: no ValidatingAdmissionPolicy, no RBAC, no Kubernetes 1.30 refusal; the upgrade note says to set admissionPolicies.create=true"
 
 render -f "$ALLON" --set k8s.admissionPolicies.create=false >"$TMP/nopol.out"
 [[ -z "$(keepvaps "$TMP/nopol.out")" ]] || die "admissionPolicies.create=false with rbac.create=true: a run Service policy rendered"
@@ -373,7 +380,17 @@ render -f "$ALLON" --set k8s.runService.enabled=false --set k8s.rbac.create=fals
 [[ -z "$(keepvaps "$TMP/rsoff-norbac.out")" ]] || die "runService.enabled=false with rbac.create=false and admissionPolicies.create=true: a run Service policy rendered"
 ok "runService.enabled=false (any admissionPolicies.create): no policy, no Service rules, WARDYN_K8S_RUN_SERVICE=off, no 1.30 refusal"
 
+# The agent-sandbox pod policies keep their own Kubernetes 1.30 check when the run Service policies do not render.
+refused "backend on, run Service off, Kubernetes 1.29" "k8s.agentSandbox.enabled needs Kubernetes 1.30 or later" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.runService.enabled=false --kube-version 1.29.0
+refused "backend on, admissionPolicies.create=false, Kubernetes 1.29" "k8s.agentSandbox.enabled needs Kubernetes 1.30 or later" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.admissionPolicies.create=false --kube-version 1.29.0
+render -f "$ALLON" --set k8s.rbac.create=false --set k8s.runService.enabled=false --kube-version 1.29.0 >"$TMP/adopter.out" \
+  || die "rbac.create=false, run Service off, backend off, Kubernetes 1.29: refused, want a render"
+grep -q 'admissionregistration' "$TMP/adopter.out" && die "rbac.create=false, run Service off, backend off: an admission object rendered"
+ok "backend on below 1.30 is refused without the run Service policies; with both off nothing admission renders at 1.29"
+
 # helm template does not render NOTES, so read the source, as test-helm-runnerd.sh does.
 grep -A4 'not (include "wardyn.runServicePolicies" .)' "$CHART/templates/NOTES.txt" | grep 'The platform team must apply equivalent policies' >/dev/null \
   || die "NOTES no longer name the equivalent policies when the Service is on and the chart does not render them"
-ok "NOTES: the platform team applies equivalent policies when the chart does not render them"
+grep -A9 'not (include "wardyn.runServicePolicies" .)' "$CHART/templates/NOTES.txt" | grep 'give all four objects names other than the chart' >/dev/null \
+  || die "NOTES no longer tell an existing release to give the platform team's policies their own names"
+ok "NOTES: the platform team applies equivalent policies under its own names when the chart does not render them"

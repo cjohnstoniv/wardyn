@@ -908,6 +908,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_K8S_AGENT_SANDBOX_KEEP`
 
 - Experimental, off by default (`-tags k8s`). Needs `WARDYN_K8S_AGENT_SANDBOX`. Boot refuses it alone, under `wardyn-runnerd`, with `WARDYN_K8S_RUN_SERVICE` off, and when wardynd lacks a verb on `services` or `endpointslices.discovery.k8s.io` in a runs namespace.
+- Keep needs the per-run Service and the Role's verbs for it.
 - With `WARDYN_K8S_RUN_SERVICE` on, every run on the server's cluster reaches its proxy through its own ClusterIP Service with no selector and an EndpointSlice Wardyn writes. Its agent's `wardyn-proxy` address and nameserver are the Service's. DNS lookups sent before that EndpointSlice names the proxy are neither answered nor recorded as `run.dns.query`.
 - Keep makes a run that can be kept (interactive, with its work folder on a kept drive) own its agent by that Service, so a replaced proxy is reached without changing the agent pod.
 - Every other run is built as with the switch off.
@@ -917,7 +918,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - On by default (`-tags k8s`). Server only: a runner makes no Service either way.
 - On, each run on the server's cluster gets its own ClusterIP Service with no selector and an EndpointSlice Wardyn writes. The agent pod is made right after the proxy pod and pins the Service's address. The runs Role needs `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `deletecollection` on `endpointslices.discovery.k8s.io`.
-- Off, as in 0.11.0-rc.3: the agent pod is made once its proxy pod is Ready and pins that pod's IP. No run makes, reads or deletes a Service or EndpointSlice, so the Role needs none of those verbs and no admission policy is needed.
+- Off, as in 0.11.0-rc.3: the agent pod is made once its proxy pod is Ready and pins that pod's IP. No run makes, reads or deletes a Service or EndpointSlice, so the Role needs none of those verbs and no Service or EndpointSlice admission policy is needed. The agent-sandbox backend's pod policies are separate.
 - Turning it off leaves behind the Service and EndpointSlice of any run that still has them. Let those runs end, and their cleanup finish, first. `WARDYN_K8S_AGENT_SANDBOX_KEEP` refuses to boot with it off.
 
 ### `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`
