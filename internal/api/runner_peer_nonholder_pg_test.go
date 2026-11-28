@@ -715,3 +715,110 @@ func TestPeerDoorOutputRefusalsAfterUpgrade_PG(t *testing.T) {
 		t.Fatalf("a run whose lease another process holds fresh: %d, class %q; want 403 %s", w.Code, w.Header().Get(remote.HeaderPeerRefused), peerRefusedNoSink)
 	}
 }
+
+// launchOn is a RUNNING task run on rp's runner launched by l, as dispatch does at the substrate: l holds the run's
+// watcher lease, leases and creates the run on the runner with l's output sink, and starts its agent under G1.
+func launchOn(t *testing.T, l *Server, rp *runnerProcess) types.AgentRun {
+	t.Helper()
+	ctx := rp.ctx
+	run := newFinalizeRun()
+	run.CreatedBy, run.Placement, run.RunnerID, run.State = rp.rn.Owner, types.PlacementLocal, &rp.rn.ID, types.RunRunning
+	run, err := rp.st.CreateRun(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.st.RaiseRunDataOut(ctx, run.ID, types.TransferAllowed); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.st.SetRunRunnerTrustClass(ctx, run.ID, types.RunnerTrustPersonal); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.st.InsertPendingRunOutput(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.holdRunWatcherLease(ctx, run.ID))
+	e, err := l.leaseRunOnRunner(ctx, run)
+	if err != nil {
+		t.Fatalf("lease on runner %s from %s: %v", rp.rn.ID, l.replicaName(), err)
+	}
+	sb, err := l.createSandboxAtTarget(ctx, run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1, ExecOutput: l.openExecOutput(run, false)})
+	if err != nil {
+		t.Fatalf("create on runner %s from %s: %v", rp.rn.ID, l.replicaName(), err)
+	}
+	run.SandboxRef = sb.Ref
+	if err := rp.st.SetSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	execID, err := l.cfg.Runner.Exec(e.bind(ctx), run.SandboxRef, []string{"/usr/local/bin/agent-run", "t"})
+	if err == nil {
+		err = l.bindRunnerExecution(ctx, e, execID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// attachEcho attaches to run through srv and reads back what it writes.
+func attachEcho(t *testing.T, ctx context.Context, srv *Server, run types.AgentRun, msg string) {
+	t.Helper()
+	sess, err := srv.cfg.Runner.Attach(ctx, run.SandboxRef, runner.AttachOptions{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("an attach to %s through %s = %v", run.SandboxRef, srv.replicaName(), err)
+	}
+	defer sess.Close()
+	if _, err := io.WriteString(sess, msg); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(sess, buf); err != nil || string(buf) != msg {
+		t.Fatalf("the attach through %s read %q, %v; want the runner's echo %q", srv.replicaName(), buf, err, msg)
+	}
+}
+
+// R18: two runners, each held by a different replica, launch and attach through the other replica. Each run reaches
+// its own runner, each stream carries bytes, each run's output reaches its stored output through the replica that
+// launched it, and neither runner sees the other's call.
+func TestTwoRunnersEachServedThroughOtherReplica_PG(t *testing.T) {
+	f := newPeerFixture(t)
+	f.waitHolder(t, f.session(t))
+	b := f.nonHolder(t)
+	r2 := newRunnerSide(t, f.ctx, f.st, b) // R2's session is held by B
+	peerWithin(t, 10*time.Second, "R2's holder row names B", func() bool {
+		r, ok, err := f.st.RunnerSessionHolder(f.ctx, r2.rn.ID)
+		return err == nil && ok && r.ReplicaID == b.replicaName()
+	})
+	peerWithin(t, 6*time.Second, "each replica reads the other's runner online", func() bool {
+		return b.RunnerOnline(f.rn.ID) && f.srv.RunnerOnline(r2.rn.ID) && hasEndpoint(f.srv, r2.rn.ID)
+	})
+
+	run1 := launchOn(t, b, f.runnerProcess) // R1, held by A, launched through B
+	run2 := launchOn(t, f.srv, r2)          // R2, held by B, launched through A
+	ctx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
+	defer cancel()
+	attachEcho(t, ctx, b, run1, "one")
+	attachEcho(t, ctx, f.srv, run2, "two")
+
+	for _, c := range []struct {
+		run  types.AgentRun
+		own  *runnertest.Fake
+		peer *runnertest.Fake
+	}{{run1, f.fake, r2.fake}, {run2, r2.fake, f.fake}} {
+		for _, verb := range []string{"exec", "attach"} {
+			if !c.own.Called(verb, c.run.SandboxRef) {
+				t.Errorf("run %s: its runner saw no %s", c.run.ID, verb)
+			}
+			if c.peer.Called(verb, c.run.SandboxRef) {
+				t.Errorf("run %s: the other runner saw its %s", c.run.ID, verb)
+			}
+		}
+		want := "agent output of " + c.run.SandboxRef + "\n"
+		peerWithin(t, 10*time.Second, "run "+c.run.ID.String()+"'s output reaches its stored output", func() bool {
+			ch, err := f.st.ReadRunOutputChunks(f.ctx, c.run.ID, 1<<20)
+			return err == nil && string(ch.Bytes) == want
+		})
+	}
+	if b.tailFor(run1.ID) == nil || f.srv.tailFor(run2.ID) == nil {
+		t.Fatal("a launching replica holds no tail for its run")
+	}
+}
