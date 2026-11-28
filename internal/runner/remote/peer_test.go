@@ -894,6 +894,8 @@ type forwardRig struct {
 	door      func(ctx context.Context, d runnerwire.Conn) // replaces the launcher's door when set
 }
 
+// newForwardRig builds the rig. Call it after the test's shorten calls: its cleanup then waits out the holder's
+// forward attempts before the restores run.
 func newForwardRig(t *testing.T, ctx context.Context) *forwardRig {
 	t.Helper()
 	r := &forwardRig{run: uuid.New(), launchers: map[string]*Substrate{}}
@@ -934,6 +936,20 @@ func newForwardRig(t *testing.T, ctx context.Context) *forwardRig {
 		defer r.mu.Unlock()
 		return r.at, r.atErr
 	}})
+	// An attempt reads the durations a test shortens until it records its result, under the holder's mu: when
+	// none is attempting, none reads them any more, and no new one starts once the test's opens have returned.
+	t.Cleanup(func() {
+		waitUntil(t, "the holder's forward attempts return", func() bool {
+			r.holder.mu.Lock()
+			defer r.holder.mu.Unlock()
+			for _, f := range r.holder.forwards {
+				if f.attempting {
+					return false
+				}
+			}
+			return true
+		})
+	})
 	r.connect(ctx)
 	return r
 }
