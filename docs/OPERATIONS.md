@@ -541,7 +541,7 @@ mkdir "$M.lock" || { echo "STOP: another restore of this installation holds $M.l
 trap 'rmdir "$M.lock"' EXIT
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 if [ -f "$M" ]; then
-  { IFS= read -r stored; IFS= read -r hwm; } < "$M"
+  { IFS= read -r stored && IFS= read -r hwm; } < "$M" || { echo "STOP: $M cannot be read: see \"Revocation order\""; exit 1; }
   [ "$stored" = "$id" ] || { echo "STOP: $M belongs to another installation"; exit 1; }
   case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
   now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
@@ -550,7 +550,7 @@ if [ -f "$M" ]; then
     ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again, or see \"Revocation order\""; exit 1 ;;
   esac
   [ "$now" -le "$hwm" ] || hwm=$now
-  printf '%s\n%s\n' "$id" "$hwm" > "$M"
+  printf '%s\n%s\n' "$id" "$hwm" > "$M.new" && mv "$M.new" "$M"
   echo "An unfinished restore of this installation left a mark: using $hwm"
 else
   hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
