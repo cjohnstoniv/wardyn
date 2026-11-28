@@ -73,7 +73,7 @@ func (s *Server) recoverRunOutput(ctx context.Context, st store.RunOutputStore, 
 		s.declineAgentOutput(ctx, run, reason)
 		return
 	}
-	tw := s.openRecoveryTail(ctx, run)
+	tw := s.openRecoveryTail(ctx, run, false)
 	if tw == nil {
 		// Erased, or coverage lost between the check and the open.
 		s.writeGapRow(ctx, st, run.ID, "mask_uncovered")
@@ -120,14 +120,20 @@ func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, run 
 // drain, or returns nil when the run keeps none. A fresh ring is what makes a
 // re-read replace the capture, never append to one. A macOS VM task run's re-read
 // is recorded as agent-recovered (attachAgentCast), beside any agent cast the
-// process that dispatched it saved.
-func (s *Server) openRecoveryTail(ctx context.Context, run types.AgentRun) *tailWriter {
+// process that dispatched it saved. With mirror, the tail replaces the run's
+// chunks (recoverChunks): only a runner run's live adoption, whose launcher
+// yields; any other tail writes none.
+func (s *Server) openRecoveryTail(ctx context.Context, run types.AgentRun, mirror bool) *tailWriter {
 	w := s.openExecOutputOn(ctx, run, false)
 	tw, _ := w.(*tailWriter)
 	if tw == nil {
 		return nil
 	}
-	tw.t.dropChunks()
+	if mirror {
+		tw.t.recoverChunks()
+	} else {
+		tw.t.dropChunks()
+	}
 	tw.t.fmu.Lock()
 	tw.t.recovered = true
 	tw.t.fmu.Unlock()
@@ -219,7 +225,7 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 	if owed, _ := s.recoveryOwed(ctx, st, run); !owed || !s.maskCovered(ctx, runID) {
 		return
 	}
-	tw := s.openRecoveryTail(ctx, run)
+	tw := s.openRecoveryTail(ctx, run, onRunner(ref))
 	if tw == nil {
 		return
 	}

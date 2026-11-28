@@ -23,6 +23,7 @@ type RunOutputChunks struct {
 	Bytes     []byte
 	Truncated bool
 	Found     bool
+	Recovered bool // a recovery's chunk is among them (RunOutputChunkReplacer)
 }
 
 // RunOutputChunkStore is the live-chunk record. Optional like RunOutputStore: the api layer
@@ -44,7 +45,28 @@ type RunOutputChunkStore interface {
 	SaveChunkedRunOutput(ctx context.Context, runID uuid.UUID, maskScope string, limit int) (bool, error)
 }
 
-var _ RunOutputChunkStore = PG{}
+// RunOutputChunkReplacer is a chunk store a live adoption's recovery tail writes into, replacing the chunks the
+// run's launcher wrote. Optional: the api layer type-asserts, and a store without it keeps v0.10.2's recovery tail,
+// which writes no chunks. A recovery's chunk is stored under recoveredChunkMark plus the replica name it is given,
+// a mark no real replica name (a uuid string) can hold.
+type RunOutputChunkReplacer interface {
+	// AppendRecoveredRunOutputChunk is AppendRunOutputChunk for a recovery tail. With first it deletes every chunk
+	// of the run before it writes, since the re-read starts at the runner's first byte; otherwise it deletes the
+	// chunks another replica appended meanwhile. Without first it writes nothing, and reports false, while another
+	// recovery's chunk is present, so a later adoption supersedes an earlier one.
+	AppendRecoveredRunOutputChunk(ctx context.Context, runID uuid.UUID, replica string, b []byte, keep int, first bool) (bool, error)
+	// RecoveredRunOutputChunks reports whether runID holds a recovery's chunk from a replica other than mine;
+	// with mine "" every recovery's chunk counts.
+	RecoveredRunOutputChunks(ctx context.Context, runID uuid.UUID, mine string) (bool, error)
+}
+
+var (
+	_ RunOutputChunkStore    = PG{}
+	_ RunOutputChunkReplacer = PG{}
+)
+
+// recoveredChunkMark prefixes the replica of a recovery's chunk.
+const recoveredChunkMark = "recovered:"
 
 // AppendRunOutputChunk — see RunOutputChunkStore.
 func (s PG) AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica string, b []byte, keep int) (bool, error) {
@@ -53,27 +75,8 @@ func (s PG) AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica s
 	}
 	wrote := false
 	err := s.runOutputTx(ctx, runID, false, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `
-			INSERT INTO run_output_chunks (run_id, seq, replica, bytes_masked)
-			SELECT $1, COALESCE((SELECT max(seq) FROM run_output_chunks WHERE run_id = $1), 0) + 1, $2, $3
-			WHERE NOT EXISTS (SELECT 1 FROM run_outputs WHERE run_id = $1 AND captured_at IS NOT NULL)`,
-			runID, replica, b)
-		if err != nil {
-			return err
-		}
-		if wrote = tag.RowsAffected() == 1; !wrote {
-			return nil
-		}
-		// The owed row InsertPendingRunOutput writes, for a run whose dispatch-time insert failed.
-		if _, err = tx.Exec(ctx, `INSERT INTO run_outputs (run_id, source) VALUES ($1, 'stdout') ON CONFLICT (run_id) DO NOTHING`, runID); err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `
-			DELETE FROM run_output_chunks WHERE run_id = $1 AND seq < COALESCE((
-				SELECT seq FROM (
-					SELECT seq, sum(octet_length(bytes_masked)) OVER (ORDER BY seq DESC) AS cum
-					FROM run_output_chunks WHERE run_id = $1) t
-				WHERE cum >= $2 ORDER BY seq DESC LIMIT 1), 0)`, runID, keep)
+		var err error
+		wrote, err = appendRunOutputChunk(ctx, tx, runID, replica, b, keep)
 		return err
 	})
 	if err != nil && !errors.Is(err, ErrRunOutputErased) {
@@ -82,11 +85,80 @@ func (s PG) AppendRunOutputChunk(ctx context.Context, runID uuid.UUID, replica s
 	return wrote, err
 }
 
+// AppendRecoveredRunOutputChunk — see RunOutputChunkReplacer.
+func (s PG) AppendRecoveredRunOutputChunk(ctx context.Context, runID uuid.UUID, replica string, b []byte, keep int, first bool) (bool, error) {
+	if len(b) == 0 {
+		return false, nil
+	}
+	mark := recoveredChunkMark + replica
+	wrote := false
+	err := s.runOutputTx(ctx, runID, false, func(tx pgx.Tx) error {
+		if !first {
+			var other bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_output_chunks WHERE run_id = $1 AND replica LIKE 'recovered:%' AND replica <> $2)`,
+				runID, mark).Scan(&other); err != nil || other {
+				return err // another recovery's chunk: a later adoption's queue supersedes this one
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1 AND (replica <> $2 OR $3)`, runID, mark, first); err != nil {
+			return err
+		}
+		var err error
+		wrote, err = appendRunOutputChunk(ctx, tx, runID, mark, b, keep)
+		return err
+	})
+	if err != nil && !errors.Is(err, ErrRunOutputErased) {
+		err = fmt.Errorf("store: append a recovered run output chunk: %w", err)
+	}
+	return wrote, err
+}
+
+// RecoveredRunOutputChunks — see RunOutputChunkReplacer.
+func (s PG) RecoveredRunOutputChunks(ctx context.Context, runID uuid.UUID, mine string) (bool, error) {
+	mark := ""
+	if mine != "" {
+		mark = recoveredChunkMark + mine
+	}
+	var found bool
+	err := s.runOutputTx(ctx, runID, true, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_output_chunks WHERE run_id = $1 AND replica LIKE 'recovered:%' AND replica <> $2)`,
+			runID, mark).Scan(&found)
+	})
+	if err != nil && !errors.Is(err, ErrRunOutputErased) {
+		err = fmt.Errorf("store: read whether a run's chunks are a recovery's: %w", err)
+	}
+	return found, err
+}
+
+// appendRunOutputChunk writes b as runID's next chunk under replica, inside the caller's transaction, and trims the
+// oldest chunks to keep bytes. It reports false, writing nothing, once the run's final row exists.
+func appendRunOutputChunk(ctx context.Context, tx pgx.Tx, runID uuid.UUID, replica string, b []byte, keep int) (bool, error) {
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO run_output_chunks (run_id, seq, replica, bytes_masked)
+		SELECT $1, COALESCE((SELECT max(seq) FROM run_output_chunks WHERE run_id = $1), 0) + 1, $2, $3
+		WHERE NOT EXISTS (SELECT 1 FROM run_outputs WHERE run_id = $1 AND captured_at IS NOT NULL)`,
+		runID, replica, b)
+	if err != nil || tag.RowsAffected() != 1 {
+		return false, err
+	}
+	// The owed row InsertPendingRunOutput writes, for a run whose dispatch-time insert failed.
+	if _, err = tx.Exec(ctx, `INSERT INTO run_outputs (run_id, source) VALUES ($1, 'stdout') ON CONFLICT (run_id) DO NOTHING`, runID); err != nil {
+		return false, err
+	}
+	_, err = tx.Exec(ctx, `
+		DELETE FROM run_output_chunks WHERE run_id = $1 AND seq < COALESCE((
+			SELECT seq FROM (
+				SELECT seq, sum(octet_length(bytes_masked)) OVER (ORDER BY seq DESC) AS cum
+				FROM run_output_chunks WHERE run_id = $1) t
+			WHERE cum >= $2 ORDER BY seq DESC LIMIT 1), 0)`, runID, keep)
+	return err == nil, err
+}
+
 // ReadRunOutputChunks — see RunOutputChunkStore.
 func (s PG) ReadRunOutputChunks(ctx context.Context, runID uuid.UUID, limit int) (RunOutputChunks, error) {
 	var out RunOutputChunks
 	err := s.runOutputTx(ctx, runID, true, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT seq, bytes_masked FROM run_output_chunks WHERE run_id = $1 ORDER BY seq`, runID)
+		rows, err := tx.Query(ctx, `SELECT seq, bytes_masked, replica LIKE 'recovered:%' FROM run_output_chunks WHERE run_id = $1 ORDER BY seq`, runID)
 		if err != nil {
 			return err
 		}
@@ -95,9 +167,11 @@ func (s PG) ReadRunOutputChunks(ctx context.Context, runID uuid.UUID, limit int)
 		for rows.Next() {
 			var seq int64
 			var b []byte
-			if err := rows.Scan(&seq, &b); err != nil {
+			var recovered bool
+			if err := rows.Scan(&seq, &b, &recovered); err != nil {
 				return err
 			}
+			out.Recovered = out.Recovered || recovered
 			if !out.Found {
 				first = seq
 			}

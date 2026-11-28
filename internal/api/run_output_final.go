@@ -336,7 +336,13 @@ func (s *Server) prepareRunOutputSeen(ctx context.Context, runID uuid.UUID, grac
 // no gap, which would delete them unread: the chunks stay, with a pending row
 // (made here when there was none) that the stale-pending sweep tries again.
 func (s *Server) writeGapRow(ctx context.Context, st store.RunOutputStore, runID uuid.UUID, reason string) {
-	switch s.saveRowFromChunks(ctx, runID, reason) {
+	s.writeGapRowFor(ctx, st, runID, reason, false)
+}
+
+// writeGapRowFor is writeGapRow for a tail's own finaliser: own says the seal reported the tail's own recovered
+// chunks covered, so they may become the row (saveRowFromChunks).
+func (s *Server) writeGapRowFor(ctx context.Context, st store.RunOutputStore, runID uuid.UUID, reason string, own bool) {
+	switch s.saveRowFromChunks(ctx, runID, reason, own) {
 	case chunksDone:
 		return
 	case chunksFailed:
@@ -407,8 +413,9 @@ func (s *Server) finishRunOutput(ctx context.Context, runID uuid.UUID) {
 	}
 	if gap != "" {
 		s.releaseRunOutput(runID, e)
+		own := e.mirrored() && !uncovered // the seal's verdict on this tail's own chunks
 		if st != nil {
-			s.writeGapRow(ctx, st, runID, gap)
+			s.writeGapRowFor(ctx, st, runID, gap, own)
 		}
 		return
 	}

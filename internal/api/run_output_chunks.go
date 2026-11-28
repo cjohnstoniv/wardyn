@@ -16,8 +16,9 @@ package api
 //   - the table keeps about one tail's worth per run (the store deletes the oldest chunks as it
 //     appends), the final row's transaction deletes them, and a write honours the run's erasure
 //     tombstone like every other run-output write;
-//   - a recovery tail (run_output_recover.go) writes none: it re-reads the whole log into a fresh
-//     ring, and chunks beside the first writer's would duplicate it.
+//   - a runner run's live adoption replaces the chunks from its recovery tail (recoverChunks): it
+//     re-reads the whole log into a fresh ring, so its first append clears the launcher's copy of
+//     the same bytes. Every other recovery tail (run_output_recover.go) writes none.
 //
 // A read on another replica serves the chunks (readSharedOutput). When the replica that held the
 // tail is gone and the substrate cannot be re-read, the run's row is written from the chunks,
@@ -74,6 +75,10 @@ type chunkQueue struct {
 	keep int
 
 	wmu sync.Mutex // serialises writes, so chunks land in order
+	// rs is set, before the queue's first write, when the queue is a live adoption's recovery tail: its appends
+	// replace the run's chunks (recoverChunks). first is true until one of them writes; read and set under wmu.
+	rs    store.RunOutputChunkReplacer
+	first bool
 
 	mu      sync.Mutex
 	pend    []byte
@@ -163,7 +168,14 @@ func (q *chunkQueue) flush(ctx context.Context) error {
 	for len(b) > 0 {
 		n := min(len(b), runOutputChunkMax)
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runOutputChunkWriteTimeout)
-		wrote, err := q.st.AppendRunOutputChunk(wctx, q.run, q.s.replicaName(), b[:n], q.keep)
+		var wrote bool
+		var err error
+		if q.rs != nil {
+			wrote, err = q.rs.AppendRecoveredRunOutputChunk(wctx, q.run, q.s.replicaName(), b[:n], q.keep, q.first)
+			q.first = q.first && !wrote
+		} else {
+			wrote, err = q.st.AppendRunOutputChunk(wctx, q.run, q.s.replicaName(), b[:n], q.keep)
+		}
 		cancel()
 		switch {
 		case errors.Is(err, store.ErrRunOutputErased):
@@ -176,7 +188,7 @@ func (q *chunkQueue) flush(ctx context.Context) error {
 			q.putBack(b)
 			return err
 		case !wrote:
-			q.stop() // the final row exists: nothing more to keep
+			q.stop() // the final row exists, or a later adoption's recovery replaced this one: nothing more to keep
 			return nil
 		}
 		b = b[n:]
@@ -205,6 +217,39 @@ func (e *execOutputTail) dropChunks() {
 		e.sink.q.stop()
 		e.sink.q = nil
 	}
+}
+
+// recoverChunks makes a live adoption's recovery tail replace the run's chunks, when the store can
+// (store.RunOutputChunkReplacer). Otherwise it stops the tail mirroring itself, as dropChunks does.
+func (e *execOutputTail) recoverChunks() {
+	e.mw.mu.Lock()
+	defer e.mw.mu.Unlock()
+	if e.sink == nil || e.sink.q == nil {
+		return
+	}
+	if rs, ok := e.sink.q.st.(store.RunOutputChunkReplacer); ok {
+		e.sink.q.rs, e.sink.q.first = rs, true // the queue is fresh: nothing has written yet
+		return
+	}
+	e.sink.q.stop()
+	e.sink.q = nil
+}
+
+// mirrored reports whether the tail's queue is a recovery's that wrote a chunk. The seal stopped the queue, so
+// taking its write lock waits out an append in flight and none starts after it.
+func (e *execOutputTail) mirrored() bool {
+	e.mw.mu.Lock()
+	var q *chunkQueue
+	if e.sink != nil {
+		q = e.sink.q
+	}
+	e.mw.mu.Unlock()
+	if q == nil {
+		return false
+	}
+	q.wmu.Lock()
+	defer q.wmu.Unlock()
+	return q.rs != nil && !q.first
 }
 
 // readSharedOutput answers a live read from the chunks another replica wrote, when this replica
@@ -238,6 +283,8 @@ func (s *Server) readSharedOutput(w http.ResponseWriter, r *http.Request, run ty
 		return true
 	case !ch.Found:
 		return false
+	case ch.Recovered && run.State.IsTerminal():
+		return false // a recovery's chunks are never a terminal run's output: the pending row answers
 	}
 	s.writeRunOutput(w, r, id, runOutputResponse{
 		Output: string(ch.Bytes), Truncated: ch.Truncated, Source: "stdout", MaskScope: s.liveMaskScope(false),
@@ -261,10 +308,27 @@ const (
 
 // saveRowFromChunks writes runID's row from the chunks a replica that is gone left, as an
 // incomplete capture gap, and reports how that ended.
-func (s *Server) saveRowFromChunks(ctx context.Context, runID uuid.UUID, reason string) chunkSave {
+func (s *Server) saveRowFromChunks(ctx context.Context, runID uuid.UUID, reason string, own bool) chunkSave {
 	cs, ok := s.cfg.Store.(store.RunOutputChunkStore)
 	if !ok {
 		return chunksAbsent
+	}
+	if rs, ok := cs.(store.RunOutputChunkReplacer); ok {
+		mine := "" // every recovered chunk counts
+		if own {
+			mine = s.replicaName() // this tail's covered seal vouches for its own chunks, never another recovery's
+		}
+		switch recovered, err := rs.RecoveredRunOutputChunks(ctx, runID, mine); {
+		case errors.Is(err, store.ErrRunOutputErased):
+			s.fenceRunOutput(runID)
+			return chunksDone
+		case err != nil:
+			slog.WarnContext(ctx, "wardynd: could not read whether a run's live chunks are a recovery's",
+				slog.String("run_id", runID.String()), slog.Any("err", err))
+			return chunksFailed
+		case recovered:
+			return chunksAbsent // a recovery's chunks become a row only through its own covered seal
+		}
 	}
 	wrote, err := cs.SaveChunkedRunOutput(ctx, runID, s.liveMaskScope(false), s.cfg.RunOutputTailBytes)
 	switch {

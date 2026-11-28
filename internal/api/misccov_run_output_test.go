@@ -609,14 +609,14 @@ func TestMiscCovReadSharedOutput(t *testing.T) {
 func TestMiscCovSaveRowFromChunks(t *testing.T) {
 	t.Run("a store with no chunk record writes nothing", func(t *testing.T) {
 		f := newOutputFixture(t)
-		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "no_tail"); got != chunksAbsent {
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "no_tail", false); got != chunksAbsent {
 			t.Errorf("saveRowFromChunks = %v, want chunksAbsent", got)
 		}
 	})
 	t.Run("a row from chunks is audited as an incomplete capture gap", func(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		cs.saveRes = true
-		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "replica_gone"); got != chunksDone {
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "replica_gone", false); got != chunksDone {
 			t.Fatalf("saveRowFromChunks = %v, want chunksDone", got)
 		}
 		if len(cs.saveArgs) != 1 || cs.saveArgs[0].run != f.run.ID || cs.saveArgs[0].limit != f.srv.cfg.RunOutputTailBytes || cs.saveArgs[0].scope != "" {
@@ -629,7 +629,7 @@ func TestMiscCovSaveRowFromChunks(t *testing.T) {
 	})
 	t.Run("no chunks to save is left to the plain gap row", func(t *testing.T) {
 		f, _ := miscCovOutFixture(t)
-		if f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x") != chunksAbsent || len(miscCovFinalizeData(t, f)) != 0 {
+		if f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x", false) != chunksAbsent || len(miscCovFinalizeData(t, f)) != 0 {
 			t.Error("reported or audited a row with nothing saved")
 		}
 	})
@@ -637,7 +637,7 @@ func TestMiscCovSaveRowFromChunks(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		cs.saveErr = errors.New("save refused")
 		logs := miscCovCaptureLogs(t)
-		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x"); got != chunksFailed {
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x", false); got != chunksFailed {
 			t.Errorf("saveRowFromChunks = %v, want chunksFailed", got)
 		}
 		if _, ok := logs.find("could not write a run's row from its live chunks"); !ok {
@@ -648,7 +648,7 @@ func TestMiscCovSaveRowFromChunks(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		f.open(t)
 		cs.saveErr = store.ErrRunOutputErased
-		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x"); got != chunksDone {
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x", false); got != chunksDone {
 			t.Errorf("saveRowFromChunks = %v, want chunksDone for an erased run", got)
 		}
 		if f.srv.tailFor(f.run.ID) != nil || len(miscCovFinalizeData(t, f)) != 0 {
