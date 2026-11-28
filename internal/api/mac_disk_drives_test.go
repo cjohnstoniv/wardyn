@@ -121,6 +121,8 @@ func macDiskDeleteRig(t *testing.T) (*Server, *macDiskStore, *diskMacTransport, 
 	st.drives[d.ID] = d
 	srv := New(Config{BaseCtx: context.Background(), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker",
 		RunnerOnline: func(id uuid.UUID) bool { return id == mac }})
+	// One replica: the session held here is the online answer, and the disk delete reaches the Mac only through one.
+	srv.runnerStreams.heldHere = srv.runnerOnline
 	tr := &diskMacTransport{capsTransport: capsTransport{online: true}}
 	sub := remote.New(mac.String(), tr, remote.Options{})
 	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{DiskDrives: true}})

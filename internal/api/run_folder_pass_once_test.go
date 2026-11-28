@@ -55,15 +55,17 @@ type passFixture struct {
 	sb    *folderSandboxRunner
 	home  string
 	now   atomic.Int64
+	away  atomic.Bool // the folder's runner is offline (runnerAs)
 }
 
 func newPassFixture(t *testing.T, gen, settled int, resume *types.FolderResume) *passFixture {
 	t.Helper()
 	s, cs, audit, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	f := &passFixture{s: s, cs: cs, audit: audit, run: run, sb: sb, home: filepath.Dir(filepath.Dir(app))}
+	s.cfg.RunnerOnline = func(id uuid.UUID) bool { return id != cs.runner.ID || !f.away.Load() }
 	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
 		t.Fatal(cs.FailureHint())
 	}
-	f := &passFixture{s: s, cs: cs, audit: audit, run: run, sb: sb, home: filepath.Dir(filepath.Dir(app))}
 	f.now.Store(time.Now().UnixNano())
 	s.cfg.Now = func() time.Time { return time.Unix(0, f.now.Load()) }
 	cs.dbNow = s.cfg.Now
@@ -94,6 +96,7 @@ func (f *passFixture) back() bool {
 func (f *passFixture) runnerAs(t *testing.T, caps *runnerwire.Caps) *runnerwire.Peer {
 	t.Helper()
 	id := f.cs.runner.ID
+	f.away.Store(caps == nil)
 	var ep runnerEndpoint
 	var peer *runnerwire.Peer
 	if caps != nil {

@@ -174,6 +174,7 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 	srv, f := newWorkloadSweepServer(t)
 	online, offline := uuid.New(), uuid.New()
 	srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return id == online }
+	srv.runnerStreams.heldHere = srv.runnerOnline // one replica: online is held here
 	fake := runnertest.NewFake()
 	attachRunner(t, srv, online, fake)
 
