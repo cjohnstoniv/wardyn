@@ -427,10 +427,35 @@ ask "WARDYN_AGE_KEY from deploy/compose/.env is in your secret manager"
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
 vols=$(docker volume ls -q) &&
-  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.list.tmp" &&
-  mv "$B/drives.list.tmp" "$B/drives.list" ||
+  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.found" ||
   { echo "STOP: the drive volumes could not be listed"; exit 1; }
-ask "$B/drives.list names only this installation's drive volumes (note below)"
+#    Only this installation's drives are copied: its postgres still runs, and
+#    names its own drive ids, which each volume's wardyn.drive label must match.
+ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+  "SELECT id FROM user_drives") || { echo "STOP: this installation's drives could not be read"; exit 1; }
+: > "$B/drives.list.tmp"
+: > "$B/drives.held"
+while IFS= read -r v <&3; do
+  d=$(docker volume inspect --format '{{index .Labels "wardyn.drive"}}' "$v") ||
+    { echo "STOP: $v could not be inspected"; exit 1; }
+  if [ -n "$d" ] && printf '%s\n' "$ids" | grep -qxF -- "$d"; then
+    echo "$v" >> "$B/drives.list.tmp"
+  else
+    echo "$v" >> "$B/drives.held"
+  fi
+done 3< "$B/drives.found"
+if [ -s "$B/drives.held" ]; then
+  echo "HELD: no label names one of this installation's drives:"
+  cat "$B/drives.held"
+  printf 'Is this the only Wardyn installation on this Docker host? Type yes or no: '
+  read -r a
+  case "$a" in
+    yes) cat "$B/drives.held" >> "$B/drives.list.tmp"; : > "$B/drives.held" ;;
+    no) echo "HELD volumes are not in this backup: see the note below" ;;
+    *) echo "STOP: not answered"; exit 1 ;;
+  esac
+fi
+mv "$B/drives.list.tmp" "$B/drives.list"
 while IFS= read -r v <&3; do
   docker run --rm -v "$v":/from -v "$B":/to alpine \
     tar czf "/to/$v.tar.gz" -C /from . &&
@@ -456,7 +481,7 @@ done 3< "$B/drives.list"
 #    with no wardyn.subject line comes from a volume that had none. A volume
 #    whose label values span lines cannot be recorded that way and prints
 #    UNRESOLVED too.
-#    The list is every volume named wardyn-drive-* or wardyn-portal-* (a
+#    drives.found is every volume named wardyn-drive-* or wardyn-portal-* (a
 #    portal's folder on a team drive), so a home created before
 #    the drive label existed, or restored by hand without it, is backed up
 #    too. Such a volume prints UNRESOLVED: its archive is kept, but nothing
@@ -464,11 +489,13 @@ done 3< "$B/drives.list"
 #    worked out each one's drive and owner from the drive list and the
 #    allocations, and written that down beside it. The owner is a person, or,
 #    for a t- (group) or p- (portal) home, the allocation sharing that folder.
-#    Drive volumes carry no installation label: on a host with two
-#    installations, keep only the volumes whose wardyn.drive id this
-#    installation's GET /api/v1/drives lists: remove the others from
-#    drives.list before the loop. An UNRESOLVED volume on such a host
-#    stays in the list until you know which installation it belongs to.
+#    Drive volumes carry no installation label, so a volume whose wardyn.drive
+#    id is not one of this installation's drives (another installation's, a
+#    drive deleted here, or one with no label) is HELD before anything is
+#    copied. With only this installation on the host, answer yes and they are
+#    backed up too. On a shared host answer no: drives.held lists what this
+#    backup leaves out, and each one is backed up with its own installation
+#    once you know which that is.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
