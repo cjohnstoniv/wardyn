@@ -523,13 +523,23 @@ fi
 
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
-#    high-water mark: every session it issued sits at or below it. It is kept
-#    in this script's own variable, so a second restore elsewhere cannot change
-#    it. (That database is gone? The script stops here: see "Revocation order".)
+#    high-water mark: every session it issued sits at or below it. The mark is
+#    written to a file named for this installation before anything changes, and
+#    stays there until step 3b has used it. A restore that stopped part-way
+#    reuses it, and never reads the restored database's lower value in its place.
+#    Run every attempt from this directory. (That database is gone, with no mark
+#    file? The script stops here: see "Revocation order".)
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
-hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-  "SELECT last_value FROM oidc_revocation_seq")
-case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
+M="$PWD/.wardyn-restore-mark-${COMPOSE_PROJECT_NAME:-compose}-$NS"
+if [ -f "$M" ]; then
+  hwm=$(cat "$M"); echo "An unfinished restore of this installation left mark $hwm: using it"
+else
+  hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+    "SELECT last_value FROM oidc_revocation_seq")
+  case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
+  (set -C; printf '%s\n' "$hwm" > "$M")
+fi
+case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 
 # 1. Age key FIRST, before anything boots against the restored data — copy
 #    it back into deploy/compose/.env (wherever you stashed it in backup
@@ -556,6 +566,7 @@ docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wa
 #     run `wardynd -migrate-only` first, then this step.
 docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c \
   "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $hwm) + 1)"
+rm "$M"
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
