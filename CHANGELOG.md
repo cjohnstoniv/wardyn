@@ -60,6 +60,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The drive backup and restore steps in Operations now keep each drive's ownership label. Backup records every label
+  beside each volume or claim, and restore puts them back as recorded. Before, the guide said to leave the label off,
+  and a restored drive could then be mounted for another person who resolves to the same drive and home.
+- Before copying from or deleting an old Kubernetes drive claim by hand, the guide now has you stop the person's runs
+  and check that no pod still refers to the claim, and to keep the claim if that cannot be shown.
 - The Kubernetes drive guide in Operations no longer tells you that renaming any drive leaves its claims behind. A drive registered from migration `0067` onward names its claims by its id, so a rename leaves its claims in use as they were. Before reclaiming a claim, the guide now has you work out the claim each current home resolves to. Before, following it could delete a claim still in use.
 - `wardyn sync --git` and `--pull-commits` across a SHA-1 and a SHA-256 repository stop before any fetch with a message naming both hashes, where git used to report a corrupted pack and could leave a partial pack behind; no laptop ref is written.
 - `wardyn run --wait` and `wardyn run get` now show a failed run's reason even when more than a page of refused output reads come before it in the audit trail. The CLI reads up to 100 pages of failure rows (100,000 rows) and then stops.
