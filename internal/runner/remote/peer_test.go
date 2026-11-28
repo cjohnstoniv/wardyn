@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -489,5 +490,62 @@ func TestPeerExecControlOutlivesItsStreams(t *testing.T) {
 	r.doorEnded(t)
 	if !r.runner.Online() {
 		t.Fatal("closing the execs ended the runner's session")
+	}
+}
+
+// redirectingDoor answers every request with one redirect and records each request it sees.
+type redirectingDoor struct {
+	code     int
+	location string
+	mu       sync.Mutex
+	seen     []*http.Request
+}
+
+func (d *redirectingDoor) RoundTrip(req *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	d.seen = append(d.seen, req)
+	d.mu.Unlock()
+	return &http.Response{StatusCode: d.code, Header: http.Header{"Location": {d.location}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+}
+
+// A peer dial never follows a redirect: the dial fails with errPeerRedirect after the one request, and the signed
+// headers never reach the redirect's address. Values: 302 to another host over https, 302 to another host over
+// plain http, 307 to the same host over https, 308 to the same host over plain http, and 301.
+func TestPeerDialRefusesRedirects(t *testing.T) {
+	for _, tc := range []struct {
+		code     int
+		location string
+	}{
+		{http.StatusFound, "https://c.example/api/v1/internal/runner-peer"},
+		{http.StatusFound, "http://c.example/api/v1/internal/runner-peer"},
+		{http.StatusTemporaryRedirect, "https://b.example/elsewhere"},
+		{http.StatusPermanentRedirect, "http://b.example/api/v1/internal/runner-peer"},
+		{http.StatusMovedPermanently, "https://b.example/elsewhere"},
+	} {
+		door := &redirectingDoor{code: tc.code, location: tc.location}
+		pt := NewPeerTransport(PeerConfig{Key: make([]byte, 32)}, "a", nil)
+		pt.rt = door
+		h := http.Header{}
+		PeerToken{From: "a", To: "b", Runner: uuid.New(), Session: uuid.New(), Method: runnerwire.MethodStatus, Exp: time.Now().Add(10 * time.Second).Unix()}.SetHeaders(h, bytes.Repeat([]byte{7}, 32))
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		conn, err := pt.dialWebSocket(ctx, PeerRoute{ReplicaID: "b", PeerURL: "https://b.example"}, h)
+		cancel()
+		if conn != nil || !errors.Is(err, errPeerRedirect) {
+			t.Fatalf("%d to %s: dial = %v, %v; want errPeerRedirect", tc.code, tc.location, conn, err)
+		}
+		door.mu.Lock()
+		seen := append([]*http.Request(nil), door.seen...)
+		door.mu.Unlock()
+		if len(seen) != 1 {
+			t.Fatalf("%d to %s: the transport saw %d requests, want 1", tc.code, tc.location, len(seen))
+		}
+		if got := seen[0].URL.String(); got != "https://b.example"+PeerPath {
+			t.Fatalf("%d to %s: the one request went to %s", tc.code, tc.location, got)
+		}
+		for k := range h {
+			if seen[0].Header.Get(k) != h.Get(k) {
+				t.Fatalf("%d to %s: the first request lacks the signed header %s", tc.code, tc.location, k)
+			}
+		}
 	}
 }

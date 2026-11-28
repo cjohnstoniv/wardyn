@@ -189,7 +189,9 @@ type PeerTransport struct {
 	lookup func(ctx context.Context, runnerID uuid.UUID) (PeerRoute, bool, error)
 	// dial opens the peer WebSocket; a test replaces it.
 	dial func(ctx context.Context, route PeerRoute, h http.Header) (runnerwire.Conn, error)
-	now  func() time.Time
+	// rt carries dialWebSocket's requests; nil is the TLS transport of ClientTLS. A test replaces it.
+	rt  http.RoundTripper
+	now func() time.Time
 }
 
 // NewPeerTransport is the peer client of replica self.
@@ -208,10 +210,22 @@ func ClientTLS(cfg PeerConfig) *tls.Config {
 	return &tls.Config{RootCAs: cfg.Roots, ServerName: cfg.ServerName, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS13}
 }
 
+// errPeerRedirect fails a peer dial whose door answered a redirect, before a second request is sent.
+var errPeerRedirect = errors.New("runner peer dial refused: the door answered a redirect")
+
+// peerHTTPClient is the one HTTP client a peer dial uses, over rt (nil: the TLS transport of ClientTLS). It never
+// follows a redirect: the handshake's signed headers would be sent on to the new address, over plain HTTP too.
+func peerHTTPClient(cfg PeerConfig, rt http.RoundTripper) *http.Client {
+	if rt == nil {
+		rt = &http.Transport{TLSClientConfig: ClientTLS(cfg), ForceAttemptHTTP2: false}
+	}
+	return &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errPeerRedirect }}
+}
+
 func (pt *PeerTransport) dialWebSocket(ctx context.Context, route PeerRoute, h http.Header) (runnerwire.Conn, error) {
 	u := strings.TrimSuffix(route.PeerURL, "/") + PeerPath
 	u = "wss" + strings.TrimPrefix(strings.TrimPrefix(u, "https"), "wss")
-	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: ClientTLS(pt.cfg), ForceAttemptHTTP2: false}}
+	hc := peerHTTPClient(pt.cfg, pt.rt)
 	c, resp, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPClient: hc, HTTPHeader: h, CompressionMode: websocket.CompressionDisabled})
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
