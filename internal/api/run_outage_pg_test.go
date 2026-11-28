@@ -154,9 +154,13 @@ func TestDispatchOutageTerms_PG(t *testing.T) {
 	if _, err := f.st.SetRunOutageTerms(f.ctx, termed.ID, want); err != nil {
 		t.Fatal(err)
 	}
+	// Only the leases of the placed generations are checked: the runner's session can become READY after
+	// the runs exist but before their terms are recorded, and its re-lease of every live run then carries
+	// no generation and the terms of that moment.
+	placedGen := map[uuid.UUID]uuid.UUID{}
 	for _, r := range []*types.AgentRun{&termed, &plain} {
 		f.running(t, r, &first)
-		f.placed(t, r)
+		placedGen[r.ID] = f.placed(t, r).generation
 		if got := f.leaseEnd(r.ID, first); !got.Equal(first) {
 			t.Fatalf("the runner holds a lease ending %s for a run placed with the end %s", got, first)
 		}
@@ -166,6 +170,9 @@ func TestDispatchOutageTerms_PG(t *testing.T) {
 	f.leaseMu.Unlock()
 	var sawTermed, sawPlain bool
 	for _, l := range frames {
+		if l.ExecutionGeneration != placedGen[l.RunID] {
+			continue
+		}
 		switch l.RunID {
 		case termed.ID:
 			sawTermed = true
