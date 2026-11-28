@@ -60,6 +60,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The Kubernetes drive guide in Operations no longer tells you that renaming any drive leaves its claims behind. A drive registered from migration `0067` onward names its claims by its id, so a rename leaves its claims in use as they were. Before reclaiming a claim, the guide now has you work out the claim each current home resolves to. Before, following it could delete a claim still in use.
 - `wardyn sync --git` and `--pull-commits` across a SHA-1 and a SHA-256 repository stop before any fetch with a message naming both hashes, where git used to report a corrupted pack and could leave a partial pack behind; no laptop ref is written.
 - `wardyn run --wait` and `wardyn run get` now show a failed run's reason even when more than a page of refused output reads come before it in the audit trail. The CLI reads up to 100 pages of failure rows (100,000 rows) and then stops.
 - Saving a policy with two copies of an approval-gated api_key grant is refused when only one copy was already stored; each stored grant now covers one submitted copy.

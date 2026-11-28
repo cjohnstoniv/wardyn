@@ -5211,9 +5211,10 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
   the same 422, and `GET /me` no allocation.
 - So the console never offers a claim this deployment will not bind (see "Turning drives OFF deployment-wide").
 - **Two backends, two lifecycles.**
-  - A **managed** drive (`k8s_pvc`) is one claim per person, named `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the
-    drive's name lowercased, every run of characters outside `a-z0-9` folded to one
-    `-`, at most 40 characters).
+  - A **managed** drive (`k8s_pvc`) is one claim per person. A drive registered from migration `0067` onward
+    (`object_scheme: id`) names it `wardyn-drive-<drive-id-hex>-<home>`. An older `slug` drive names it
+    `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the drive's name lowercased, every run of characters outside
+    `a-z0-9` folded to one `-`, at most 40 characters). See "Legacy rows keep their old object name, permanently" below.
   - It is created by wardynd on the first run that mounts
     it:
     - `accessModes: [ReadWriteOnce]`, the allocation as
@@ -5275,36 +5276,36 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
     been handed the runs namespace or the runner's ServiceAccount name.
 
 > [!WARNING]
-> **Renaming a drive orphans its claims, and Wardyn will not clean that up.**
+> **Renaming a `slug` drive leaves its old claims behind, and Wardyn will not clean that up. Renaming an `id` drive
+> does not.**
 
-- A
-  claim's name folds the drive's NAME into a slug
-  (`wardyn-drive-<drive-slug>-<home>`), so renaming a drive in the console changes
-  the name every FUTURE claim is
-  created under.
-- The claims already provisioned keep their old names, keep the
-  member data in them, and are never looked up again.
-- The next run for each
-  person provisions a fresh, empty claim under the new name.
-- Nothing deletes the
-  old ones, on purpose.
+- Check the drive's scheme first: `GET /api/v1/drives` returns each drive's `object_scheme`.
+- An `id` drive (every drive registered from migration `0067` onward) names its claims by the drive's id,
+  `wardyn-drive-<drive-id-hex>-<home>`.
+  - A rename changes nothing about them. The claims in use before the rename are the claims in use after it.
+  - No claim of an `id` drive becomes an orphan through a rename. Never reclaim one because of a rename.
+- A `slug` drive folds its NAME into its claim names, `wardyn-drive-<drive-slug>-<home>`.
+  - A rename that folds to a different slug (the API asks for `?confirm=rehome`, below) changes the name every
+    FUTURE claim is created under.
+  - The claims already provisioned keep their old names, keep the member data in them, and are never looked up again.
+  - The next run for each person provisions a fresh, empty claim under the new name.
+- Nothing deletes the old ones, on purpose.
 - No run path, teardown or sweep can reach a claim — the
   only delete in the product is the operator's explicit reclaim — and a rename
   must never be able to destroy storage.
 - The `wardyn.drive` label carries the drive's row **id**
-  rather than its name precisely so the orphans stay findable:
+  rather than its name, so every claim of the drive stays findable:
 
 ```sh
 kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
 ```
 
-- Everything that comes back under a name that is not
-  `wardyn-drive-<new drive-slug>-*` predates the rename.
-- Move the data (`kubectl
-  cp`, or a snapshot restore into the new claim) and reclaim the old claim with
-  the `delete pvc` above.
-- The cheap
-  alternative is not renaming a drive that has claims.
+- Before you treat any claim in that list as left behind, work out the claim each current home resolves to: the
+  drive's `object_scheme`, its current slug for a `slug` drive, and each allocation's home.
+- Only a claim that no current home resolves to, on a `slug` drive that was renamed, is left behind.
+- Copy its data into the current claim (`kubectl cp`, or a snapshot restore), check the copy, and only then reclaim the
+  old claim with the `delete pvc` above.
+- The cheap alternative is not renaming a `slug` drive that has claims.
 
 > [!WARNING]
 > **The API refuses the edit; the console has no way to confirm it.**
@@ -5538,8 +5539,11 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
   deliberate command, by hand:
 
 ```sh
-kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
+kubectl -n <runsNamespace> delete pvc <the claim>
 ```
+
+- `<the claim>` is the one the departed person's home resolves to: `wardyn-drive-<drive-id-hex>-<home>` on an `id`
+  drive, `wardyn-drive-<drive-slug>-<home>` on a `slug` drive (see the rename caveat above).
 
 - or, when `drives.reclaim.enabled` is set, through the product's own verb
   (`wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes`, super-admin
@@ -5557,8 +5561,8 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   `home_subject` says which claim it used (the console does not yet show it).
 - The
   claim carries `wardyn.managed`, `wardyn.drive` (the drive's
-  row **id**, not its name, so the claims a rename orphans stay findable with the
-  `get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels.
+  row **id**, not its name, so every claim of the drive, including any a `slug` rename left behind, stays findable
+  with the `get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels.
 - That is the same
   pair the Docker driver stamps on a managed volume.
 - And it carries, deliberately, **no
