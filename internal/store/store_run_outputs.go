@@ -57,8 +57,9 @@ type RunOutputStore interface {
 	// is being retried, so the sweeper must not resolve it yet.
 	RefreshRunOutputClaim(ctx context.Context, runID uuid.UUID) error
 	// SaveFinalRunOutput writes the run's final row (output, flags and
-	// mask_scope as given), replacing a pending or stdout capture-gap row. The
-	// database stamps captured_at.
+	// mask_scope as given), replacing a pending or stdout capture-gap row, or an
+	// incomplete stdout row when this one is a complete stdout capture of the
+	// same mask scope. The database stamps captured_at.
 	SaveFinalRunOutput(ctx context.Context, o RunOutput) error
 	// SaveGapRunOutput writes a capture-gap row with no bytes, only over a
 	// pending row or none: a final row already committed is never overwritten.
@@ -158,6 +159,14 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 		if body == nil {
 			body = []byte{}
 		}
+		// The run's lock keeps every writer out, and FOR UPDATE the retention delete, so the row this reads is the
+		// one the upsert meets.
+		var partial bool
+		switch err := tx.QueryRow(ctx, `SELECT captured_at IS NOT NULL AND incomplete AND NOT capture_gap FROM run_outputs WHERE run_id = $1 FOR UPDATE`, o.RunID).Scan(&partial); {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO run_outputs (run_id, output, truncated, incomplete, capture_gap, source, mask_scope, captured_at, claimed_at)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), now(), now())
@@ -166,15 +175,36 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 				capture_gap = EXCLUDED.capture_gap, source = EXCLUDED.source, mask_scope = EXCLUDED.mask_scope,
 				captured_at = EXCLUDED.captured_at, claimed_at = EXCLUDED.claimed_at
 			WHERE run_outputs.captured_at IS NULL
-			   OR (run_outputs.capture_gap AND run_outputs.source = 'stdout')`,
+			   OR (run_outputs.capture_gap AND run_outputs.source = 'stdout')
+			   OR (run_outputs.source='stdout' AND run_outputs.incomplete AND NOT run_outputs.capture_gap AND EXCLUDED.source='stdout' AND NOT EXCLUDED.incomplete AND NOT EXCLUDED.capture_gap AND EXCLUDED.mask_scope IS NOT DISTINCT FROM run_outputs.mask_scope)`,
 			o.RunID, body, o.Truncated, o.Incomplete, o.CaptureGap, o.Source, o.MaskScope)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		// The live chunks (0129) were the tail's stand-in until this row: they go in the transaction that writes it.
-		_, err = tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, o.RunID)
-		return err
+		if _, err = tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, o.RunID); err != nil {
+			return err
+		}
+		if rep, ok := ctx.Value(replacedIncompleteKey{}).(*ReplacedIncomplete); ok && partial {
+			rep.Replaced = true // only the complete-over-incomplete arm matches a final row that was incomplete
+		}
+		return nil
 	})
+}
+
+// ReplacedIncomplete is set by SaveFinalRunOutput when its write replaced an incomplete stdout row an earlier
+// finaliser of the run wrote.
+type ReplacedIncomplete struct {
+	Replaced bool
+}
+
+type replacedIncompleteKey struct{}
+
+// WithReplacedIncomplete returns a context whose SaveFinalRunOutput reports a replaced incomplete row in the
+// returned value. A transaction that does not commit leaves it set, so read it only after a nil error.
+func WithReplacedIncomplete(ctx context.Context) (context.Context, *ReplacedIncomplete) {
+	rep := &ReplacedIncomplete{}
+	return context.WithValue(ctx, replacedIncompleteKey{}, rep), rep
 }
 
 // SaveGapRunOutput — see RunOutputStore.

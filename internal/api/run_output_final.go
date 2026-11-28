@@ -504,7 +504,8 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 	}
 	wrote := row.Incomplete
 	e.fmu.Unlock()
-	err := st.SaveFinalRunOutput(ctx, *row)
+	wctx, rep := store.WithReplacedIncomplete(ctx)
+	err := st.SaveFinalRunOutput(wctx, *row)
 	switch {
 	case err == nil:
 		e.fmu.Lock()
@@ -512,6 +513,9 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 		lateSince := e.late && !wrote
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
+		if rep.Replaced {
+			s.auditOutputFinalize(ctx, row.RunID, map[string]any{"replaced_incomplete": true})
+		}
 		if lateSince {
 			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
 			id := row.RunID
@@ -650,12 +654,16 @@ func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) bool {
 	return true
 }
 
-// auditOutputFinalize records a capture that was not clean: its flags, never
-// its content.
+// auditOutputFinalize records a capture that was not clean, or a complete one that replaced an incomplete
+// row (outcome success): its flags, never its content.
 func (s *Server) auditOutputFinalize(ctx context.Context, runID uuid.UUID, data map[string]any) {
 	data = withFinalizeStep(data)
+	outcome := "failure"
+	if data["replaced_incomplete"] == true {
+		outcome = "success" // a repair: the stored row is now the complete one
+	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.output.finalize",
-		runID.String(), "failure", mustJSON(data)))
+		runID.String(), outcome, mustJSON(data)))
 }
 
 // finalizeSteps is the capture step and plain reason behind each flag of a run.output.finalize row,
@@ -666,6 +674,7 @@ var finalizeSteps = []struct{ flag, step, reason string }{
 	{"capture_gap", "capture", "no output could be captured for the run"},
 	{"drain", "drain", "a driver's output copy did not end inside the drain barrier"},
 	{"dropped", "buffer", "part of the output was dropped before it was stored"},
+	{"replaced_incomplete", "replace", "a complete capture replaced the incomplete row an earlier finaliser of the run wrote"},
 }
 
 // withFinalizeStep adds the failing step and its reason beside the flags (additive; a copy).

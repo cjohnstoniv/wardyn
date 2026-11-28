@@ -107,6 +107,87 @@ func TestPG_RunOutputs(t *testing.T) {
 	}
 }
 
+// A complete stdout capture replaces an incomplete one of the same mask scope, and only that write reports it;
+// nothing else that v0.10.2 refused is let through.
+func TestPeerCompleteFinalReplacesIncomplete_PG(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	save := func(o store.RunOutput) bool {
+		t.Helper()
+		wctx, rep := store.WithReplacedIncomplete(ctx)
+		if err := pg.SaveFinalRunOutput(wctx, o); err != nil {
+			t.Fatal(err)
+		}
+		return rep.Replaced
+	}
+	read := func(run uuid.UUID) store.RunOutput {
+		t.Helper()
+		got, found, err := pg.GetRunOutput(ctx, run)
+		if err != nil || !found {
+			t.Fatalf("row of %s: found=%v err=%v", run, found, err)
+		}
+		return got
+	}
+	newPending := func() uuid.UUID {
+		t.Helper()
+		run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+		if err := pg.InsertPendingRunOutput(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+
+	run := newPending()
+	if save(store.RunOutput{RunID: run, Output: []byte("part"), Incomplete: true, Source: "stdout", MaskScope: "run"}) {
+		t.Error("an incomplete final over a pending row reported a replaced incomplete row")
+	}
+	if !save(store.RunOutput{RunID: run, Output: []byte("part and rest"), Source: "stdout", MaskScope: "run"}) {
+		t.Error("the complete final over the incomplete row did not report the replacement")
+	}
+	if got := read(run); string(got.Output) != "part and rest" || got.Incomplete {
+		t.Fatalf("after the complete write: %q incomplete=%v, want the complete bytes", got.Output, got.Incomplete)
+	}
+	if save(store.RunOutput{RunID: run, Output: []byte("part"), Incomplete: true, Source: "stdout", MaskScope: "run"}) {
+		t.Error("an incomplete final over the complete row reported a replacement")
+	}
+	if got := read(run); string(got.Output) != "part and rest" || got.Incomplete {
+		t.Fatalf("an incomplete final over the complete row changed it: %q incomplete=%v", got.Output, got.Incomplete)
+	}
+
+	run2 := newPending()
+	save(store.RunOutput{RunID: run2, Output: []byte("part"), Incomplete: true, Source: "stdout", MaskScope: "run"})
+	for name, o := range map[string]store.RunOutput{
+		"empty scope":   {RunID: run2, Output: []byte("other scope"), Source: "stdout"},
+		"pane snapshot": {RunID: run2, Output: []byte("pane"), Source: "pane_snapshot", MaskScope: "run"},
+	} {
+		if save(o) {
+			t.Errorf("%s: reported a replacement", name)
+		}
+		if got := read(run2); string(got.Output) != "part" || !got.Incomplete {
+			t.Errorf("%s: replaced the incomplete row: %q incomplete=%v", name, got.Output, got.Incomplete)
+		}
+	}
+
+	run3 := newPending()
+	save(store.RunOutput{RunID: run3, Output: []byte("part"), Incomplete: true, Source: "stdout"})
+	if !save(store.RunOutput{RunID: run3, Output: []byte("all of it"), Source: "stdout"}) {
+		t.Error("a complete final with no scope over an incomplete one with no scope did not report the replacement")
+	}
+	if got := read(run3); string(got.Output) != "all of it" || got.Incomplete {
+		t.Fatalf("no-scope replacement: %q incomplete=%v", got.Output, got.Incomplete)
+	}
+
+	run4 := newPending()
+	save(store.RunOutput{RunID: run4, Output: []byte("part"), Incomplete: true, Source: "stdout", MaskScope: "globals_only"})
+	if save(store.RunOutput{RunID: run4, Output: []byte("all of it"), Source: "stdout", MaskScope: "run"}) {
+		t.Error("a run-scope write over a globals_only row reported a replacement")
+	}
+	if got := read(run4); string(got.Output) != "part" || got.MaskScope != "globals_only" {
+		t.Fatalf("a run-scope write replaced a globals_only row: %q scope=%q", got.Output, got.MaskScope)
+	}
+}
+
 // The sweeper's queries: only final rows past the window go, and only a terminal
 // run's pending row with a stale claim is listed.
 func TestPG_RunOutputs_RetentionAndStalePending(t *testing.T) {
