@@ -63,14 +63,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The drive backup and restore steps in Operations now keep each drive's ownership label. Backup records every label
   beside each volume or claim, and restore puts them back as recorded. Before, the guide said to leave the label off,
   and a restored drive could then be mounted for another person who resolves to the same drive and home.
-- Each backup in Operations now writes into a new directory of its own and is marked complete only at the end. The
-  restore reads one complete directory, so a retry cannot pair new files with an earlier owner's labels. The Docker
-  drive backup lists every `wardyn-drive-` volume, and every `wardyn-portal-` volume a portal keeps on a team drive,
-  first, and says so if it cannot. A volume with no drive label,
-  or with a label value spread over lines, is still archived and marked unresolved until its owner is worked out. The restore works from that list and
-  stops on any missing archive. It creates each volume new, and checks the volume's labels
-  and that it is empty before writing any file. It stops on a missing label record or a drive the restored database
-  does not hold. A backup with no label record is untarred to a plain directory, never straight into a managed volume.
+- The Compose backup and restore in Operations now run as scripts that stop at the first failed command, and pause
+  for the steps only you can do. Each backup writes into a new directory of its own, and you mark it complete only
+  once it has finished. The restore reads one complete directory, so a retry cannot pair new files with an earlier
+  owner's labels. The recording store is chosen once at backup and kept with it. The drive backup lists every
+  `wardyn-drive-` volume, and every `wardyn-portal-` volume a portal keeps on a team drive, and stops if it cannot.
+  A volume with no drive label, or with a label value spread over lines, is still archived and marked unresolved
+  until its owner is worked out. The restore works from that list and stops on any missing archive. It creates each
+  volume new, and checks the volume's labels and that it is empty before writing any file. It stops before starting
+  the stack on a missing label record or a drive the restored database does not hold. A backup with no label
+  record is untarred to a plain directory, never straight into a managed volume, and a group or portal folder is
+  restored through its own allocation.
 - Before copying from or deleting an old Kubernetes drive claim by hand, the guide now has you stop the person's runs.
   It has you check the claim's labels and that no pod names it. The delete is conditional on the claim's recorded UID
   and version, so a replaced claim is refused instead of deleted. Removing a departed person's claim or volume by hand

@@ -387,18 +387,19 @@ Compose recipe.
 # that installation's containers and volumes only.
 export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
-# Run steps 0-7 as one script (save them as backup.sh, then bash backup.sh), not
-# line by line: set -e stops it at the first failed command, so nothing after a
+# Run steps 0-7 as one script (save them as backup.sh, then bash backup.sh pg, or
+# fs if deploy/compose/.env sets WARDYN_RECORDING_STORE=fs), not line by line: set -e stops it at the first failed command, so nothing after a
 # failure runs. If it stops after step 0, start wardynd again once you know why.
 set -eu
-# Set REC=fs if this installation runs WARDYN_RECORDING_STORE=fs (deploy/compose/.env).
-REC="${WARDYN_RECORDING_STORE:-pg}"
+REC="${1:-}"
+case "$REC" in pg|fs) ;; *) echo "STOP: give the recording store, pg or fs"; exit 1 ;; esac
 # A step the script cannot do for you stops it until you type yes.
 ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
 # Each attempt writes into a new directory of its own: mktemp -d creates it, or
 # fails. A retry is a new run of the script, so a new directory, never an old
 # one. The restore reads one such directory, and only once it is COMPLETE.
-B=$(mktemp -d "$NS-backup-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+B=$(mktemp -d "$PWD/$NS-backup-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+echo "$REC" > "$B/recording-store"
 
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
@@ -414,7 +415,7 @@ docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 #     this host does not have)
 if [ "$REC" = fs ]; then
   docker volume inspect "$NS-recordings" >/dev/null
-  docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
+  docker run --rm -v "$NS-recordings":/from -v "$B":/to alpine \
     tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
 fi
 
@@ -426,12 +427,12 @@ ask "WARDYN_AGE_KEY from deploy/compose/.env is in your secret manager"
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
 vols=$(docker volume ls -q) &&
-  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || true; } > "$B/drives.list.tmp" &&
+  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.list.tmp" &&
   mv "$B/drives.list.tmp" "$B/drives.list" ||
   { echo "STOP: the drive volumes could not be listed"; exit 1; }
 ask "$B/drives.list names only this installation's drive volumes (note below)"
 while IFS= read -r v <&3; do
-  docker run --rm -v "$v":/from -v "$PWD/$B":/to alpine \
+  docker run --rm -v "$v":/from -v "$B":/to alpine \
     tar czf "/to/$v.tar.gz" -C /from . &&
   docker volume inspect --format \
     '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
@@ -504,12 +505,13 @@ NS="${WARDYN_NS:-wardyn}"
 # stops it at the first failed command. The backup is ONE directory marked
 # COMPLETE, and every file below comes from it: nothing runs before it is checked.
 set -eu
-# Set REC=fs if this installation runs WARDYN_RECORDING_STORE=fs (deploy/compose/.env).
-REC="${WARDYN_RECORDING_STORE:-pg}"
 # A step the script cannot do for you stops it until you type yes.
 ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
-B="${1:?give the backup directory}"
+B=$(cd "${1:?give the backup directory}" && pwd)
 [ -f "$B/COMPLETE" ] || { echo "STOP: $B is not a complete backup"; exit 1; }
+# The recording store is the one the backup recorded, never this shell's.
+REC=$(cat "$B/recording-store")
+case "$REC" in pg|fs) ;; *) echo "STOP: $B records no recording store"; exit 1 ;; esac
 set -- "$B/$NS-"*.sql
 [ "$#" = 1 ] && [ -f "$1" ] || { echo "STOP: $B does not hold exactly one dump"; exit 1; }
 dump=$1
@@ -521,11 +523,13 @@ fi
 
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
-#    high-water mark: every session it issued sits at or below it. (That
-#    database is gone? The script stops here: see "Revocation order" below.)
+#    high-water mark: every session it issued sits at or below it. It is kept
+#    in this script's own variable, so a second restore elsewhere cannot change
+#    it. (That database is gone? The script stops here: see "Revocation order".)
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-  "SELECT last_value FROM oidc_revocation_seq" > revocation-hwm.txt
+hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+  "SELECT last_value FROM oidc_revocation_seq")
+case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
 
 # 1. Age key FIRST, before anything boots against the restored data — copy
 #    it back into deploy/compose/.env (wherever you stashed it in backup
@@ -551,12 +555,12 @@ docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wa
 #     after the first restore. A dump from a release that predates the sequence has none:
 #     run `wardynd -migrate-only` first, then this step.
 docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c \
-  "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $(cat revocation-hwm.txt)) + 1)"
+  "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $hwm) + 1)"
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
 if [ "$REC" = fs ]; then
-  docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
+  docker run --rm -v "$NS-recordings":/to -v "$B":/from alpine \
     tar xzf "/from/$rec" -C /to
 fi
 
@@ -592,7 +596,7 @@ while IFS= read -r v <&3; do
   docker volume inspect --format \
     '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' "$v" |
     cmp -s - "$l" &&
-  docker run --rm -v "$v":/to -v "$PWD/$B":/from alpine \
+  docker run --rm -v "$v":/to -v "$B":/from alpine \
     sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
     { echo "STOP: $v is not restored"; exit 1; }
 done 3< "$B/drives.list"
