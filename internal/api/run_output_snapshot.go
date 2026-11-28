@@ -37,6 +37,9 @@ const (
 	paneSnapshotSource = "pane_snapshot"
 	// paneSnapshotAction is the audit action of one attempt.
 	paneSnapshotAction = "run.output.snapshot"
+	// paneRowFinal is capturePane's answer when the run's row was already final, so nothing was stored. It is
+	// never audited: the row is left as it is, as when the check before the capture finds it.
+	paneRowFinal = "row_final"
 )
 
 // paneSnapshotArgv dumps the whole scrollback of the session both drivers name
@@ -73,6 +76,9 @@ func (s *Server) snapshotRunPane(ctx context.Context, st store.RunOutputStore, r
 		return
 	}
 	n, reason := s.capturePane(ctx, st, run)
+	if reason == paneRowFinal {
+		return
+	}
 	outcome := "success"
 	data := map[string]any{"bytes": n}
 	if reason != "" {
@@ -150,12 +156,14 @@ func (s *Server) capturePane(ctx context.Context, st store.RunOutputStore, run t
 		RunID: run.ID, Output: out, Truncated: truncated, Incomplete: dropped,
 		Source: paneSnapshotSource, MaskScope: s.liveMaskScope(false),
 	}
-	switch _, err := st.SaveFinalRunOutput(ctx, row); {
+	switch stored, err := st.SaveFinalRunOutput(ctx, row); {
 	case errors.Is(err, store.ErrRunOutputErased):
 		s.fenceRunOutput(run.ID)
 		return 0, "erased"
 	case err != nil:
 		return 0, "persist_failed"
+	case !stored:
+		return 0, paneRowFinal // a final row appeared after the check: a transient read error, or a race
 	}
 	return len(out), ""
 }

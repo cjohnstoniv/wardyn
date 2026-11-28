@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -114,5 +115,38 @@ func TestGapCovPaneSnapshotStoreRefusals(t *testing.T) {
 				t.Errorf("run's tail held = %v, want %v", held, tc.tailHeld)
 			}
 		})
+	}
+}
+
+// A snapshot whose write finds the run's row already final, because the row appeared after the check before the
+// capture, stores nothing and audits nothing, as that check does: no success claims bytes that were never stored.
+// A snapshot that is stored audits its real byte count.
+func TestGapCovPaneSnapshotOverAFinalRowIsNotAudited(t *testing.T) {
+	f, cs := gapCovPaneFixture(t, textPane("pane text\n", 0))
+	cs.saveFinalFn = func(int) error {
+		now := time.Now()
+		f.mem.mu.Lock()
+		f.mem.rows[f.run.ID] = store.RunOutput{RunID: f.run.ID, Output: []byte("line one\n"), Source: "stdout", CapturedAt: &now}
+		f.mem.mu.Unlock()
+		return nil
+	}
+	f.srv.snapshotRunPane(t.Context(), cs, f.run)
+	if r, _ := f.mem.row(f.run.ID); r.Source != "stdout" || string(r.Output) != "line one\n" {
+		t.Fatalf("row %+v, want the final row that was there left as it is", r)
+	}
+	if n := len(f.pr.execs()); n != 1 {
+		t.Fatalf("%d execs, want the capture taken once", n)
+	}
+	if evs := f.snapshotAudit(); len(evs) != 0 {
+		t.Fatalf("audit rows %+v, want none for a snapshot that stored nothing", evs)
+	}
+
+	g, gs := gapCovPaneFixture(t, textPane("pane text\n", 0))
+	g.srv.snapshotRunPane(t.Context(), gs, g.run)
+	if r, _ := g.mem.row(g.run.ID); r.Source != paneSnapshotSource || string(r.Output) != "pane text\n" {
+		t.Fatalf("row %+v, want the stored pane", r)
+	}
+	if evs := g.snapshotAudit(); len(evs) != 1 || evs[0].Outcome != "success" || !strings.Contains(string(evs[0].Data), `"bytes":10`) {
+		t.Fatalf("audit rows %+v, want one success with the 10 stored bytes", evs)
 	}
 }
