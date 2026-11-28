@@ -30,6 +30,9 @@ type Fake struct {
 	ExitCode int // the agent's exit code, and an exec's
 	// RecoverHold, when set, holds RecoverOutput's bytes back until it is closed (or the call's context ends).
 	RecoverHold chan struct{}
+	// OutputHold, when set, keeps each create's output drain open after its one line until it is closed, so a test
+	// can write more through the create's ExecOutput (in Created). Nil ends the drain after the line.
+	OutputHold chan struct{}
 	// stderrWriters counts the stderr-line goroutines still running, so a test can see them end.
 	stderrWriters sync.WaitGroup
 
@@ -191,8 +194,12 @@ func (f *Fake) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner
 	f.mu.Unlock()
 	if spec.ExecOutput != nil {
 		end := runner.BeginOutputDrain(spec.ExecOutput)
+		hold := f.OutputHold
 		go func() {
 			_, err := io.WriteString(spec.ExecOutput, "agent output of "+ref+"\n")
+			if hold != nil && err == nil {
+				<-hold
+			}
 			end(err)
 		}()
 	}
