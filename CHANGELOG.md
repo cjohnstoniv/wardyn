@@ -61,7 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - The drive backup and restore steps in Operations now keep each drive's ownership label. Backup records every label
-  beside each volume or claim, and restore puts them back as recorded. Before, the guide said to leave the label off,
+  beside each volume or claim it backs up for the restore, and restore puts them back as recorded. Before, the guide said to leave the label off,
   and a restored drive could then be mounted for another person who resolves to the same drive and home.
 - The Compose backup and restore in Operations now run as scripts that stop at the first failed command, and pause
   for the steps only you can do. Each backup writes into a new directory of its own, and you mark it complete only
