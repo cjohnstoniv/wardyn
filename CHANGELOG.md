@@ -181,6 +181,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
     2. Confirm both bindings enforce `Deny`.
     3. Only then upgrade with `k8s.admissionPolicies.create=false`. The chart's own names suit only a fresh install that never rendered them.
 
+### Known issues
+
+- A drive fill into a folder Wardyn cannot list, for example one that allows entering but not listing, or a read that fails for a moment, can copy into that folder even when it already holds files, and can overwrite a file of the same name. Until this is fixed in a later candidate, fill only a new, empty folder that the run can read (`into`), and do not fill an existing drive whose contents you are not sure of.
+
 ## [0.11.0-rc.4] — 2026-11-26
 
 ### Added
