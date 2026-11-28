@@ -26,7 +26,9 @@
 #   - k8s.admissionPolicies.create follows k8s.rbac.create unless set: rbac.create=false renders no policy, either
 #     explicit value overrides it, and the 1.30 refusal applies only when the policies render;
 #   - k8s.runService.enabled=false renders no policy and no services or endpointslices rule, whatever
-#     admissionPolicies.create says, and sets WARDYN_K8S_RUN_SERVICE=off; the defaults render as before;
+#     admissionPolicies.create says, and sets WARDYN_K8S_RUN_SERVICE=off; the defaults set it on;
+#   - the chart's WARDYN_K8S_RUN_SERVICE is the only one in the container, over an env or extraEnv entry of that name;
+#   - a k8s.admissionPolicies.create or k8s.runService.enabled that is not a boolean or null (a string) is refused;
 #   - the backend's pod policies keep their own 1.30 refusal when the run Service policies do not render, and with
 #     both families off a 1.29 render carries no admission object.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
@@ -335,13 +337,24 @@ bothvaps="ValidatingAdmissionPolicy r-wardyn-keep-endpoints ValidatingAdmissionP
 svcrulecount() { y "$k8srole | [.rules[] | select((.resources | any_c(. == \"services\" or . == \"endpointslices\")))] | length" "$1" | grep -vx 0 || true; }
 runsvcenv() { y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_RUN_SERVICE") | .value' "$1"; }
 [[ "$(keepvaps "$TMP/key-absent.out")" == "$bothvaps" ]] || die "defaults: not both run Service policies and both bindings"
-[[ -z "$(runsvcenv "$TMP/key-absent.out")" ]] || die "defaults: WARDYN_K8S_RUN_SERVICE rendered"
+[[ "$(runsvcenv "$TMP/key-absent.out")" == "on" ]] || die "defaults: WARDYN_K8S_RUN_SERVICE is not on"
 for args in "--set k8s.runService.enabled=true" "--set k8s.runService=null" "--set k8s.admissionPolicies.create=true" "--set k8s.admissionPolicies=null"; do
   # shellcheck disable=SC2086
   render -f "$ALLON" $args >"$TMP/rs-default.out"
   cmp -s "$TMP/key-absent.out" "$TMP/rs-default.out" || die "$args renders differently from the defaults"
 done
-ok "run Service defaults: both policies and bindings, the Service rules, no WARDYN_K8S_RUN_SERVICE; explicit defaults and null render the same bytes"
+ok "run Service defaults: both policies and bindings, the Service rules, WARDYN_K8S_RUN_SERVICE=on; explicit defaults and null render the same bytes"
+
+# An upgrade with --reuse-values from a release whose chart had no runService key keeps that chart's defaults, so a
+# null enabled survives coalescing: a chart copy without the key stands in for them. It must still mean on.
+mkdir -p "$TMP/nokey"
+cp -r "$CHART" "$TMP/nokey/"
+yq -i 'del(.k8s.runService)' "$TMP/nokey/wardyn/values.yaml"
+helm template r "$TMP/nokey/wardyn" -f "$ALLON" --set k8s.rbac.create=false --set k8s.admissionPolicies.create=true \
+  --set k8s.runService.enabled=null >"$TMP/nokey.out"
+[[ "$(runsvcenv "$TMP/nokey.out")" == "on" ]] || die "null enabled with no chart default: WARDYN_K8S_RUN_SERVICE is not on"
+[[ "$(keepvaps "$TMP/nokey.out")" == "$bothvaps" ]] || die "null enabled with no chart default: not both run Service policies and both bindings"
+ok "null runService.enabled with no chart default (rc.4 --reuse-values): Service on, both policies and bindings"
 
 render -f "$ALLON" --set k8s.rbac.create=false >"$TMP/norbac.out"
 [[ -z "$(keepvaps "$TMP/norbac.out")" ]] || die "rbac.create=false: a run Service policy rendered"
@@ -350,7 +363,7 @@ grep -qE '^kind: (Role|RoleBinding|ClusterRole|ClusterRoleBinding)$' "$TMP/norba
 render -f "$ALLON" --set k8s.rbac.create=false --kube-version 1.29.0 >/dev/null || die "rbac.create=false for Kubernetes 1.29: refused, want a render"
 # An unchanged rc.4 values file with rbac.create=false drops the policies that rc.4 rendered, with the Service still on,
 # so the upgrade note must tell that install to set admissionPolicies.create=true first.
-[[ -z "$(runsvcenv "$TMP/norbac.out")" ]] || die "rbac.create=false: the run Service is off, want it on by default"
+[[ "$(runsvcenv "$TMP/norbac.out")" == "on" ]] || die "rbac.create=false: the run Service is off, want it on by default"
 grep -q 'set `k8s.admissionPolicies.create=true` before its first upgrade to this release' CHANGELOG.md \
   || die "CHANGELOG no longer tells an rc.4 install with rbac.create=false to set admissionPolicies.create=true before upgrading"
 ok "rbac.create=false: no ValidatingAdmissionPolicy, no RBAC, no Kubernetes 1.30 refusal; the upgrade note says to set admissionPolicies.create=true"
@@ -379,6 +392,24 @@ done
 render -f "$ALLON" --set k8s.runService.enabled=false --set k8s.rbac.create=false --set k8s.admissionPolicies.create=true >"$TMP/rsoff-norbac.out"
 [[ -z "$(keepvaps "$TMP/rsoff-norbac.out")" ]] || die "runService.enabled=false with rbac.create=false and admissionPolicies.create=true: a run Service policy rendered"
 ok "runService.enabled=false (any admissionPolicies.create): no policy, no Service rules, WARDYN_K8S_RUN_SERVICE=off, no 1.30 refusal"
+
+# A string for either switch is refused, not read as a default or as truthy; null still takes the default.
+refused "admissionPolicies.create as the string true" "k8s.admissionPolicies.create must be true or false, got true (string)" -f "$ALLON" --set k8s.rbac.create=false --set-string k8s.admissionPolicies.create=true
+refused "runService.enabled as the string false" "k8s.runService.enabled must be true or false, got false (string)" -f "$ALLON" --set-string k8s.runService.enabled=false
+render -f "$ALLON" --set k8s.admissionPolicies.create=null --set k8s.runService.enabled=null >"$TMP/nulls.out" || die "null switches: refused, want a render"
+cmp -s "$TMP/key-absent.out" "$TMP/nulls.out" || die "null switches render differently from the defaults"
+ok "a string for admissionPolicies.create or runService.enabled is refused; null takes the default"
+
+# The chart's WARDYN_K8S_RUN_SERVICE replaces an env or extraEnv entry of the same name, whichever way the Service goes.
+runsvcall() { y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_RUN_SERVICE") | .value' "$1" | tr '\n' ' '; }
+for rs in true false; do
+  want=on; [[ $rs == false ]] && want=off
+  render -f "$ALLON" --set k8s.runService.enabled=$rs --set-string env.WARDYN_K8S_RUN_SERVICE=off >"$TMP/rsenv.out"
+  [[ "$(runsvcall "$TMP/rsenv.out")" == "$want " ]] || die "runService.enabled=$rs with env WARDYN_K8S_RUN_SERVICE=off: want one entry $want, got: $(runsvcall "$TMP/rsenv.out")"
+  render -f "$ALLON" --set k8s.runService.enabled=$rs --set 'extraEnv[0].name=WARDYN_K8S_RUN_SERVICE' --set-string 'extraEnv[0].value=off' >"$TMP/rsxe.out"
+  [[ "$(runsvcall "$TMP/rsxe.out")" == "$want " ]] || die "runService.enabled=$rs with extraEnv WARDYN_K8S_RUN_SERVICE=off: want one entry $want, got: $(runsvcall "$TMP/rsxe.out")"
+done
+ok "WARDYN_K8S_RUN_SERVICE is rendered once, from k8s.runService.enabled, over an env or extraEnv entry"
 
 # The agent-sandbox pod policies keep their own Kubernetes 1.30 check when the run Service policies do not render.
 refused "backend on, run Service off, Kubernetes 1.29" "k8s.agentSandbox.enabled needs Kubernetes 1.30 or later" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.runService.enabled=false --kube-version 1.29.0
