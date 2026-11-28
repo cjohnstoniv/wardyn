@@ -15,6 +15,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - `wardyn run --wait` and `wardyn run get` now show a failed run's reason even when more than a page of refused output reads come before it in the audit trail. The CLI reads up to 100 pages of failure rows (100,000 rows) and then stops.
 - Saving a policy with two copies of an approval-gated api_key grant is refused when only one copy was already stored; each stored grant now covers one submitted copy.
+- Correction to the 0.10.0 notes: `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` does not change how new run networks are created on Docker Engine 28 or later, but while it is on a restart or proxy replacement can still keep an existing host-reachable network. It is off by default; turn it off to stop reusing such networks.
 
 ## [0.11.0-rc.5] — 2026-11-27
 

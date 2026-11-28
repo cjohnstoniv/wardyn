@@ -3254,8 +3254,9 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 ### Docker host: run networks
 
 - Docker sandboxes need Docker Engine 28.0.0 or later. Each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
-- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`.
-- A network keeps the shape it was created with. A run started before the upgrade is refused a restart or a revive; start a new run instead.
+- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`. It is off by default.
+- On Engine 28.0.0 or later the setting no longer changes how new networks are created. While it is on, a restart or a proxy replacement still keeps an existing host-reachable network. To stop reusing such networks, turn it off.
+- A network keeps the shape it was created with. With the setting off, a run started before the upgrade is refused a restart or a revive; start a new run instead.
 - A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs.
 
 ### Docker host: one subnet per run
