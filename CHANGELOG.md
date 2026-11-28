@@ -206,6 +206,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Known issues
 
 - A drive fill into a folder Wardyn cannot list, for example one that allows entering but not listing, or a read that fails for a moment, can copy into that folder even when it already holds files, and can overwrite a file of the same name. Until this is fixed in a later candidate, fill only a new, empty folder that the run can read (`into`), and do not fill an existing drive whose contents you are not sure of.
+- Moving a paused run to another machine stays off in this release, which cannot turn it on. The archive a move carries does not yet tell apart two file names, or two link targets, that differ only in bytes that are not valid UTF-8, and it accepts extra data after its manifest. Both are fixed before moves can be turned on.
 
 ## [0.11.0-rc.4] — 2026-11-26
 
