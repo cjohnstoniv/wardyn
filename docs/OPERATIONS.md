@@ -194,7 +194,8 @@ copy is permanent.
     - and stores it as a `source: "pane_snapshot"` row.
   - It is bounded to 3 seconds: a pane that never finishes, a sandbox with no tmux or no session, or a failed read
     leaves no row and the stop goes on.
-  - Each attempt is audited as `run.output.snapshot` (the outcome and the byte count, never the text).
+  - Wardyn records the outcome and byte count as `run.output.snapshot`, without the pane text. If another writer has
+    already stored the final output, Wardyn leaves it in place and skips this audit entry.
   - A kill, a failed or reconciled run, and a deployment with persistence off take none.
   - **The pane is text the sandbox controls:** the sandbox runs as the tmux server's user and can make the pane, or
     `tmux` itself, print anything, so the snapshot shows what the sandbox chose to show.
