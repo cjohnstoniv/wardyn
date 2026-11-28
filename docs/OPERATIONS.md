@@ -529,6 +529,9 @@ fi
 #    stays there until step 3b has used it. A restore that stopped part-way
 #    reuses it, or the database's current mark if that is higher (a restore given up
 #    before step 3 left the database running on), never a lower value in its place.
+#    It reuses a saved mark only after reading the database's own: if that read
+#    fails, it stops, since nothing then shows the mark is still the highest.
+#    Giving up on a restore? Remove the mark file it printed before wardynd starts.
 #    Run every attempt from this directory; only one runs per installation at a
 #    time. (That database is gone, with no mark file? The script stops here:
 #    see "Revocation order".)
@@ -542,8 +545,11 @@ if [ -f "$M" ]; then
   [ "$stored" = "$id" ] || { echo "STOP: $M belongs to another installation"; exit 1; }
   case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
   now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-    "SELECT last_value FROM oidc_revocation_seq" 2>/dev/null || true)
-  case "$now" in ''|*[!0-9]*) ;; *) [ "$now" -le "$hwm" ] || hwm=$now ;; esac
+    "SELECT last_value FROM oidc_revocation_seq" || true)
+  case "$now" in
+    ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again, or see \"Revocation order\""; exit 1 ;;
+  esac
+  [ "$now" -le "$hwm" ] || hwm=$now
   printf '%s\n%s\n' "$id" "$hwm" > "$M"
   echo "An unfinished restore of this installation left a mark: using $hwm"
 else
@@ -551,6 +557,7 @@ else
     "SELECT last_value FROM oidc_revocation_seq")
   case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
   (set -C; printf '%s\n%s\n' "$id" "$hwm" > "$M")
+  echo "Saved mark $hwm in $M: if you give up on this restore, remove it before wardynd starts"
 fi
 case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 
