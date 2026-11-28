@@ -67,7 +67,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   for the steps only you can do. Each backup writes into a new directory of its own, and you mark it complete only
   once it has finished. The restore reads one complete directory, so a retry cannot pair new files with an earlier
   owner's labels. The recording store is chosen once at backup and kept with it. The drive backup lists every
-  `wardyn-drive-` volume, and every `wardyn-portal-` volume a portal keeps on a team drive, and stops if it cannot.
+  `wardyn-drive-*` volume, and every `wardyn-portal-*` volume a portal keeps on a team drive, and stops if it cannot.
   Before copying one it checks which installation owns it: a volume whose drive label is one of this installation's
   drives is backed up with its labels, and every other one, or every one where two installations run from copies of
   one database, is asked about first. A volume confirmed as this installation's is backed up, and marked unresolved
