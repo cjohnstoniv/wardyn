@@ -181,6 +181,20 @@ func (f *kblFixture) connect(t *testing.T, c *runnerwire.Client) (*runnerwire.Pe
 	return p, resumed, done
 }
 
+// ended waits for a session's Connect to return and then for the hub's Serve of it: the runner hears its link close
+// before that Serve lets go of the session slot, and a connection that finds the slot held is refused. A real runner
+// waits its reconnect delay first; the test waits for the Serve.
+func (f *kblFixture) ended(t *testing.T, done <-chan error) {
+	t.Helper()
+	_ = awaitValue(t, f.ctx, done)
+	served := make(chan struct{})
+	go func() {
+		f.serving.Wait()
+		close(served)
+	}()
+	awaitValue(t, f.ctx, served)
+}
+
 // requireKillBeforeReady fails unless a session's record is a fresh PENDING carrying kill, then STATE, then READY, with
 // no LEASE.
 func requireKillBeforeReady(t *testing.T, seen []string) {
@@ -201,7 +215,7 @@ func TestKillsBeforeLeases_FreshSession(t *testing.T) {
 	f := newKBL(t)
 	p, _, done := f.connect(t, f.client(t))
 	p.Close()
-	_ = awaitValue(t, f.ctx, done)
+	f.ended(t, done)
 	f.session()
 
 	ref := placement.RunnerRefPrefix(f.row.ID.String()) + "sandbox"
@@ -221,7 +235,7 @@ func TestKillsBeforeLeases_ResumedSession(t *testing.T) {
 	c := f.client(t)
 	p, _, done := f.connect(t, c)
 	p.Close()
-	_ = awaitValue(t, f.ctx, done)
+	f.ended(t, done)
 	f.session()
 
 	ref := placement.RunnerRefPrefix(f.row.ID.String()) + "sandbox"
@@ -249,7 +263,7 @@ func TestKillsBeforeLeases_HalfOpenLink(t *testing.T) {
 		t.Fatalf("a kill the runner never answered = %v, want it queued for the runner's next session", err)
 	}
 	p.Close() // the dead link is noticed and the session ends
-	_ = awaitValue(t, f.ctx, done)
+	f.ended(t, done)
 	f.session()
 
 	if _, resumed, _ := f.connect(t, f.client(t)); resumed {
