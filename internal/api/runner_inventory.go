@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -73,15 +74,17 @@ func runnerLapsed(row types.Runner, now time.Time) bool {
 
 // runnerView is the row as a reader sees it. admin is the administrators' view: the owner is named
 // and the fingerprint is whole. On an owner's own route an unclaimed runner's fingerprint is
-// abbreviated, so the console cannot be the place it is copied from into the claim.
-func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool) types.RunnerView {
+// abbreviated, so the console cannot be the place it is copied from into the claim. The runner's caps are read
+// once, under ctx, for every field that shows them; a failed read leaves only this runner's fields empty.
+func (s *Server) runnerView(ctx context.Context, row types.Runner, used types.RunnerTally, admin bool) types.RunnerView {
+	caps, capsOK := s.runnerCapsWithin(ctx, row.ID)
 	v := types.RunnerView{
 		ID: row.ID, Name: row.Name, State: row.State, MintedBy: row.MintedBy,
 		Online:         row.State == types.RunnerClaimed && s.runnerOnline(row.ID),
 		KeyFingerprint: row.KeyFingerprint, Version: row.Version, CreatedAt: row.CreatedAt,
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
 		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
-		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Limits: row.Limits, Usage: s.selfHostedUsage(row, used),
+		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Limits: row.Limits, Usage: s.selfHostedUsage(row, used, caps, capsOK),
 		MachineName: row.MachineName, Arch: row.Arch, OwnerKind: row.OwnerKind, TrustClass: row.TrustClass,
 	}
 	if admin {
@@ -98,18 +101,17 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 		v.Posture, v.PostureReportedAt = &posture, row.PostureReportedAt
 	}
 	if row.State == types.RunnerClaimed {
-		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
-		v.Folders = s.runnerSharesFolders(row.ID)
-		v.MacOSVM = s.runnerMacOSVM(row.ID)
+		v.Capacity, v.Classes, v.AllowedRoots = reportedCaps(caps, capsOK)
+		v.Folders = capsOK && caps.Folders
+		v.MacOSVM = macOSVMView(caps, capsOK)
 	}
 	return v
 }
 
-// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded without Refusal;
+// macOSVMView is the macos_vm object of the runner's last caps event, re-encoded without Refusal;
 // nil when the runner has not reported one. Refusal is the runner's own sentence, kept for
 // placement: the console reads Reason and the numbers beside it and words them itself.
-func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
-	caps, ok := s.runnerLastCaps(id)
+func macOSVMView(caps runnerwire.Caps, ok bool) json.RawMessage {
 	if !ok || caps.MacOSVM == nil {
 		return nil
 	}
@@ -124,37 +126,28 @@ func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
 
 // runnerLastCaps is the runner's last caps event as this process holds it, read like runnerReportedCaps.
 func (s *Server) runnerLastCaps(id uuid.UUID) (runnerwire.Caps, bool) {
+	return s.runnerCapsWithin(context.Background(), id)
+}
+
+// runnerCapsWithin is runnerLastCaps with a read from the replica holding the session also ended by ctx.
+func (s *Server) runnerCapsWithin(ctx context.Context, id uuid.UUID) (runnerwire.Caps, bool) {
 	s.runnerStreams.subsMu.Lock()
 	ep, ok := s.runnerStreams.subs[id]
 	s.runnerStreams.subsMu.Unlock()
 	if !ok {
 		return runnerwire.Caps{}, false
 	}
-	return ep.sub.Caps()
-}
-
-// runnerSharesFolders is the runner's last caps event's folders flag, read like runnerReportedCaps.
-func (s *Server) runnerSharesFolders(id uuid.UUID) bool {
-	s.runnerStreams.subsMu.Lock()
-	ep, ok := s.runnerStreams.subs[id]
-	s.runnerStreams.subsMu.Unlock()
-	if !ok {
-		return false
-	}
-	caps, ok := ep.sub.Caps()
-	return ok && caps.Folders
+	return ep.sub.CapsContext(ctx)
 }
 
 // runnerReportedCaps is the runner's last caps event as this process holds it. It reads the endpoint
 // map and never creates one (runnerEndpoint would): a runner that has not connected here reports nothing.
 func (s *Server) runnerReportedCaps(id uuid.UUID) (*types.RunnerCapacity, []types.ConfinementClass, []string) {
-	s.runnerStreams.subsMu.Lock()
-	ep, ok := s.runnerStreams.subs[id]
-	s.runnerStreams.subsMu.Unlock()
-	if !ok {
-		return nil, nil, nil
-	}
-	caps, ok := ep.sub.Caps()
+	return reportedCaps(s.runnerLastCaps(id))
+}
+
+// reportedCaps is the capacity, classes and roots of one caps read; nothing when ok is false.
+func reportedCaps(caps runnerwire.Caps, ok bool) (*types.RunnerCapacity, []types.ConfinementClass, []string) {
 	if !ok {
 		return nil, nil, nil
 	}
@@ -205,7 +198,7 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 		return email
 	}
 	for i, row := range rows {
-		out[i] = s.runnerView(row, used[row.ID.String()], admin)
+		out[i] = s.runnerView(r.Context(), row, used[row.ID.String()], admin)
 		out[i].Pools = append([]types.RunnerPoolRef{}, pools[row.ID]...)
 		if admin {
 			continue

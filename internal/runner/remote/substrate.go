@@ -147,10 +147,14 @@ func (s *Substrate) RunnerID() string { return s.id }
 // Caps is the runner's last advertised capabilities, if any. While another replica holds the runner's session, by
 // the holder view, it is that replica's answer (door method caps), kept for peerCapsFor per session; a failed read
 // answers none, so capabilities are never guessed.
-func (s *Substrate) Caps() (runnerwire.Caps, bool) {
+func (s *Substrate) Caps() (runnerwire.Caps, bool) { return s.CapsContext(context.Background()) }
+
+// CapsContext is Caps with the holder's read bound by ctx as well as by its own limit, so a caller that goes away
+// stops waiting on an unreachable holder.
+func (s *Substrate) CapsContext(ctx context.Context) (runnerwire.Caps, bool) {
 	if l, ok := s.t.(*Link); ok && !l.HeldHere() {
 		if route, held := l.holder(); held && route.ReplicaID != l.peerTransport().Self() {
-			return s.holderCaps(l, route)
+			return s.holderCaps(ctx, l, route)
 		}
 	}
 	s.mu.Lock()

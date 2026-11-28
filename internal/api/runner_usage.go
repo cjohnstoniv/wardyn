@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -36,15 +37,16 @@ func diskCapped(e types.StorageEnforcement) bool {
 }
 
 // selfHostedUsage is a self-hosted runner's usage: online is the holder view, and what it reports is
-// its last caps event, read from the replica that holds its session.
-func (s *Server) selfHostedUsage(row types.Runner, used types.RunnerTally) types.RunnerUsage {
+// caps (capsOK false for none), its last caps event, read once by the caller from the replica that holds its
+// session. Its disk is capped as the runner's advertised facts say: only while it is online.
+func (s *Server) selfHostedUsage(row types.Runner, used types.RunnerTally, caps runnerwire.Caps, capsOK bool) types.RunnerUsage {
 	online := row.State == types.RunnerClaimed && s.runnerOnline(row.ID)
-	facts, _ := s.runnerFacts(row.ID)
 	var reported *types.RunnerAmounts
-	if caps, _, _ := s.runnerReportedCaps(row.ID); caps != nil {
-		reported = &types.RunnerAmounts{CPUMillis: caps.CPUMillisMax, MemoryMiB: caps.MemoryMiBMax}
+	if capacity, _, _ := reportedCaps(caps, capsOK); capacity != nil {
+		reported = &types.RunnerAmounts{CPUMillis: capacity.CPUMillisMax, MemoryMiB: capacity.MemoryMiBMax}
 	}
-	return runnerpool.Usage(row.Limits, used, online, diskCapped(facts.EphemeralDiskEnforcement), reported)
+	capped := capsOK && online && diskCapped(caps.Support.EphemeralDiskEnforcement)
+	return runnerpool.Usage(row.Limits, used, online, capped, reported)
 }
 
 // remoteUsage is a remote-hosted runner's usage: online is its last health read, and what it reports

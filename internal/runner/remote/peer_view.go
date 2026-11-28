@@ -92,8 +92,8 @@ type peerCapsRead struct {
 }
 
 // holderCaps is the runner's caps as the holder of session route answers them, kept for peerCapsFor. No lock is
-// held across the read.
-func (s *Substrate) holderCaps(l *Link, route PeerRoute) (runnerwire.Caps, bool) {
+// held across the read, which ends with ctx or after peerLookupTimeout, whichever comes first.
+func (s *Substrate) holderCaps(ctx context.Context, l *Link, route PeerRoute) (runnerwire.Caps, bool) {
 	pt := l.peerTransport()
 	now := pt.now()
 	s.mu.Lock()
@@ -102,7 +102,7 @@ func (s *Substrate) holderCaps(l *Link, route PeerRoute) (runnerwire.Caps, bool)
 	if kept.session == route.SessionID && now.Sub(kept.at) < peerCapsFor {
 		return kept.caps, kept.ok
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), peerLookupTimeout)
+	ctx, cancel := context.WithTimeout(ctx, peerLookupTimeout)
 	defer cancel()
 	var res PeerCaps
 	if err := pt.CallHolder(ctx, l.runner, PeerMethodCaps, nil, &res); err != nil {

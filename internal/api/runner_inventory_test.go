@@ -684,7 +684,7 @@ func TestRunnerViewNamesWhoRevokedAndWhy(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
 	row := types.Runner{ID: uuid.New(), State: types.RunnerRevoked, RevokedBy: "alice", RevokeReason: types.RunnerRevokeNotMine}
 	for _, admin := range []bool{true, false} {
-		b, err := json.Marshal(srv.runnerView(row, types.RunnerTally{}, admin))
+		b, err := json.Marshal(srv.runnerView(t.Context(), row, types.RunnerTally{}, admin))
 		if err != nil {
 			t.Fatal(err)
 		}
