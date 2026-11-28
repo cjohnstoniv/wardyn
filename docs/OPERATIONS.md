@@ -391,6 +391,10 @@ NS="${WARDYN_NS:-wardyn}"
 # line by line: set -e stops it at the first failed command, so nothing after a
 # failure runs. If it stops after step 0, start wardynd again once you know why.
 set -eu
+# Set REC=fs if this installation runs WARDYN_RECORDING_STORE=fs (deploy/compose/.env).
+REC="${WARDYN_RECORDING_STORE:-pg}"
+# A step the script cannot do for you stops it until you type yes.
+ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
 # Each attempt writes into a new directory of its own: mktemp -d creates it, or
 # fails. A retry is a new run of the script, so a new directory, never an old
 # one. The restore reads one such directory, and only once it is COMPLETE.
@@ -408,38 +412,41 @@ docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 #    (`recordings` is the ONE explicitly-named volume, $NS-recordings, so no
 #     project prefix — see docker-compose.yaml; the inspect stops on a name
 #     this host does not have)
-docker volume inspect "$NS-recordings" >/dev/null &&
-docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
-  tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
+if [ "$REC" = fs ]; then
+  docker volume inspect "$NS-recordings" >/dev/null
+  docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
+    tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
+fi
 
 # 3. The age key — copy WARDYN_AGE_KEY out of deploy/compose/.env into your
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
+ask "WARDYN_AGE_KEY from deploy/compose/.env is in your secret manager"
 
 # 4. User drives — one object per person, and step 1's dump does NOT contain
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
-#      vols=$(docker volume ls -q) &&
-#        { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || true; } > "$B/drives.list.tmp" &&
-#        mv "$B/drives.list.tmp" "$B/drives.list" ||
-#        { echo "STOP: the drive volumes could not be listed"; exit 1; }
-#      # On a host with two installations, edit $B/drives.list here (below).
-#      while IFS= read -r v <&3; do
-#        docker run --rm -v "$v":/from -v "$PWD/$B":/to alpine \
-#          tar czf "/to/$v.tar.gz" -C /from . &&
-#        docker volume inspect --format \
-#          '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
-#          "$v" > "$B/$v.labels.tmp" ||
-#        { echo "STOP: $v is not backed up with its labels"; exit 1; }
-#        n=$(docker volume inspect --format '{{len .Labels}}' "$v")
-#        if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] &&
-#          grep -q '^wardyn.drive=.' "$B/$v.labels.tmp" &&
-#          grep -q '^wardyn.home=.' "$B/$v.labels.tmp"; then
-#          mv "$B/$v.labels.tmp" "$B/$v.labels"
-#        else
-#          mv "$B/$v.labels.tmp" "$B/$v.unresolved"
-#          echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
-#        fi
-#      done 3< "$B/drives.list"
+vols=$(docker volume ls -q) &&
+  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || true; } > "$B/drives.list.tmp" &&
+  mv "$B/drives.list.tmp" "$B/drives.list" ||
+  { echo "STOP: the drive volumes could not be listed"; exit 1; }
+ask "$B/drives.list names only this installation's drive volumes (note below)"
+while IFS= read -r v <&3; do
+  docker run --rm -v "$v":/from -v "$PWD/$B":/to alpine \
+    tar czf "/to/$v.tar.gz" -C /from . &&
+  docker volume inspect --format \
+    '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
+    "$v" > "$B/$v.labels.tmp" ||
+  { echo "STOP: $v is not backed up with its labels"; exit 1; }
+  n=$(docker volume inspect --format '{{len .Labels}}' "$v")
+  if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] &&
+    grep -q '^wardyn.drive=.' "$B/$v.labels.tmp" &&
+    grep -q '^wardyn.home=.' "$B/$v.labels.tmp"; then
+    mv "$B/$v.labels.tmp" "$B/$v.labels"
+  else
+    mv "$B/$v.labels.tmp" "$B/$v.unresolved"
+    echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
+  fi
+done 3< "$B/drives.list"
 #    A STOP line ends the script, and the attempt stays incomplete: fix the
 #    cause and run the script again, which makes a new directory. drives.list names every drive volume the backup must
 #    hold, and the restore works from it. Keep each .labels file with its
@@ -468,6 +475,7 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD/$B":/to alpine \
 # 5. Snapshot/copy the audit-fallback directory, including its .consumed and
 #    .quarantine sidecars (see "Audit fallback recovery"). On stock Compose
 #    it is /data/audit on <project>_audit, not the unprefixed volume "audit".
+ask "the audit-fallback directory and its sidecars are copied into $B"
 
 # 6. Once both the database and fallback copies are complete:
 docker compose -f deploy/compose/docker-compose.yaml start wardynd
@@ -492,17 +500,29 @@ dump loads.
 # that installation's containers and volumes only.
 export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
-# Run steps 0-7 as one script too (restore.sh): set -e stops it at the first
-# failed command. The backup to restore is ONE directory marked COMPLETE, and
-# every file below comes from it: nothing runs before that is checked.
+# Run steps 0-6 as one script too (bash restore.sh <backup directory>): set -e
+# stops it at the first failed command. The backup is ONE directory marked
+# COMPLETE, and every file below comes from it: nothing runs before it is checked.
 set -eu
-B=<backup directory>
+# Set REC=fs if this installation runs WARDYN_RECORDING_STORE=fs (deploy/compose/.env).
+REC="${WARDYN_RECORDING_STORE:-pg}"
+# A step the script cannot do for you stops it until you type yes.
+ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
+B="${1:?give the backup directory}"
 [ -f "$B/COMPLETE" ] || { echo "STOP: $B is not a complete backup"; exit 1; }
+set -- "$B/$NS-"*.sql
+[ "$#" = 1 ] && [ -f "$1" ] || { echo "STOP: $B does not hold exactly one dump"; exit 1; }
+dump=$1
+if [ "$REC" = fs ]; then
+  set -- "$B/$NS-recordings-"*.tar.gz
+  [ "$#" = 1 ] && [ -f "$1" ] || { echo "STOP: $B does not hold one recordings archive"; exit 1; }
+  rec=${1##*/}
+fi
 
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
 #    high-water mark: every session it issued sits at or below it. (That
-#    database is gone? See "Revocation order" below the block.)
+#    database is gone? The script stops here: see "Revocation order" below.)
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT last_value FROM oidc_revocation_seq" > revocation-hwm.txt
@@ -510,6 +530,7 @@ docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wa
 # 1. Age key FIRST, before anything boots against the restored data — copy
 #    it back into deploy/compose/.env (wherever you stashed it in backup
 #    step 3 above).
+ask "WARDYN_AGE_KEY is back in deploy/compose/.env"
 
 # 2. Start Postgres ALONE, not the full stack, so nothing else touches the
 #    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
@@ -522,7 +543,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
 #    abort the whole load with a nonzero exit, instead of silently skipping
 #    it and leaving a partial database with no error.
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < "$B/$NS-<date>.sql"
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < "$dump"
 
 # 3b. A restore rewinds the sequence that orders revocations against sessions. Before any
 #     wardynd starts, set it strictly above step 0's mark. A fixed increment cannot prove
@@ -534,8 +555,10 @@ docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wa
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
-docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
-  tar xzf "/from/$NS-recordings-<date>.tar.gz" -C /to
+if [ "$REC" = fs ]; then
+  docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
+    tar xzf "/from/$rec" -C /to
+fi
 
 # 5. User drives — backup step 4's tarballs and .labels files. The dump in
 #    step 3 brought back the drive ROWS; it holds none of the BYTES. Skip this
@@ -547,33 +570,33 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
 #    into it. The recorded wardyn.subject is what lets the runner refuse the
 #    volume to anyone but its owner: put it back exactly as recorded, and never
 #    work out a value from whoever holds the drive and home now.
-#      [ -f "$B/drives.list" ] || { echo "STOP: $B has no drives.list: see below"; exit 1; }
-#      h=
-#      while IFS= read -r v <&3; do
-#        f="$v.tar.gz"; l="$B/$v.labels"
-#        [ -f "$B/$f" ] || { echo "STOP: $f is missing"; exit 1; }
-#        id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null || true)
-#        [ ! -e "$B/$v.unresolved" ] && grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
-#          printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
-#          { echo "HOLD: $f has no usable label record: see below"; h=1; continue; }
-#        docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
-#          psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
-#          grep -qx 1 || { echo "STOP: the restored database has no drive $id"; exit 1; }
-#        if docker volume inspect "$v" >/dev/null 2>&1; then
-#          echo "SKIP: $v already exists: see below"; h=1; continue
-#        fi
-#        set --
-#        while IFS= read -r x; do [ -n "$x" ] && set -- "$@" --label "$x"; done < "$l"
-#        docker volume create "$@" "$v" >/dev/null &&
-#        [ "$(docker volume inspect --format '{{.Driver}} {{len .Options}}' "$v")" = "local 0" ] &&
-#        docker volume inspect --format \
-#          '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' "$v" |
-#          cmp -s - "$l" &&
-#        docker run --rm -v "$v":/to -v "$PWD/$B":/from alpine \
-#          sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
-#          { echo "STOP: $v is not restored"; exit 1; }
-#      done 3< "$B/drives.list"
-#      [ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run 5b-7"; exit 1; }
+[ -f "$B/drives.list" ] || { echo "STOP: $B has no drives.list: see below"; exit 1; }
+h=
+while IFS= read -r v <&3; do
+  f="$v.tar.gz"; l="$B/$v.labels"
+  [ -f "$B/$f" ] || { echo "STOP: $f is missing"; exit 1; }
+  id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null || true)
+  [ ! -e "$B/$v.unresolved" ] && grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
+    printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
+    { echo "HOLD: $f has no usable label record: see below"; h=1; continue; }
+  docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+    psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
+    grep -qx 1 || { echo "STOP: the restored database has no drive $id"; exit 1; }
+  if docker volume inspect "$v" >/dev/null 2>&1; then
+    echo "SKIP: $v already exists: see below"; h=1; continue
+  fi
+  set --
+  while IFS= read -r x; do [ -n "$x" ] && set -- "$@" --label "$x"; done < "$l"
+  docker volume create "$@" "$v" >/dev/null &&
+  [ "$(docker volume inspect --format '{{.Driver}} {{len .Options}}' "$v")" = "local 0" ] &&
+  docker volume inspect --format \
+    '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' "$v" |
+    cmp -s - "$l" &&
+  docker run --rm -v "$v":/to -v "$PWD/$B":/from alpine \
+    sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
+    { echo "STOP: $v is not restored"; exit 1; }
+done 3< "$B/drives.list"
+[ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run 5b-7"; exit 1; }
 #    Every file comes from the one directory step 3's dump came from: files
 #    from two backup attempts must never both go into a volume. The loop restores
 #    exactly the volumes drives.list names and stops on any missing
@@ -605,22 +628,23 @@ docker run --rm -v "$NS-recordings":/to -v "$PWD/$B":/from alpine \
 
 # 5b. Restore the matching audit-fallback directory and sidecars before
 #     wardynd starts, preserving ownership/modes ("Audit fallback recovery").
+ask "the matching audit-fallback directory and sidecars are restored"
 
 # 6. Now bring up the rest of the stack.
 make setup
 
-# 7. Verify — row count first:
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
+# 7. Verify, by hand once the script ends — row count first:
+#      docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
 #    Startup already decrypts the persisted signing key and fails closed if
 #    the age key does not match. Also verify an application secret, which a
 #    row count cannot prove: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts without a
 #    decrypt error (see docs/operations/secrets-and-keys.md "Rotating the age key"):
-wardyn run --agent claude-code --workspace <workspace-id>
+#      wardyn run --agent claude-code --workspace <workspace-id>
 #    and, if this deployment allocates user drives, that a drive came back with
 #    its bytes rather than as a fresh empty volume — step 5 is the only thing
 #    that puts them there:
-docker volume ls --filter label=wardyn.drive=<drive id>
+#      docker volume ls --filter label=wardyn.drive=<drive id>
 #    then launch one run WITH a drive (the console's new-run form, or POST /runs
 #    with a `drive` selection — there is no CLI flag for it) and confirm
 #    /home/agent/drive holds that person's data rather than an empty directory.
