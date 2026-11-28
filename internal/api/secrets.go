@@ -59,6 +59,10 @@ var reservedSecretNames = map[string]bool{
 	// The audit checkpoint signing key (cmd/wardynd's loadOrCreateAuditReceiptKey):
 	// overwriting it would orphan every checkpoint already sent off-box.
 	"wardyn-audit-receipt-key": true,
+	// The runner peer key (cmd/wardynd's loadRunnerPeer): overwriting it puts a
+	// replica that restarts after it on another key than the rest, and each side
+	// then refuses the other's peer requests.
+	"wardyn-runner-peer-key": true,
 	// The hybrid device credential (cmd/wardynd's bootHybrid): overwriting it
 	// would swap which organisation identity this laptop pushes its audit as.
 	"wardyn-org-device-credential": true,

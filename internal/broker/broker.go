@@ -774,6 +774,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"wardyn-gateway-client-ca": true,
 	// The audit checkpoint signing key: no grant may hand it into a sandbox.
 	"wardyn-audit-receipt-key": true,
+	// The runner peer key: no grant may hand it into a sandbox.
+	"wardyn-runner-peer-key": true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
 	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.

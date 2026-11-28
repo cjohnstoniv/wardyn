@@ -150,6 +150,8 @@ var PlatformNames = map[string]bool{
 	"wardyn-gateway-client-ca": true,
 	// The audit checkpoint signing key (cmd/wardynd's loadOrCreateAuditReceiptKey).
 	"wardyn-audit-receipt-key": true,
+	// The runner peer key (cmd/wardynd's loadRunnerPeer).
+	"wardyn-runner-peer-key": true,
 	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid).
 	"wardyn-org-device-credential": true,
 }
