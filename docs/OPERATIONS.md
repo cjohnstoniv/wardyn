@@ -487,11 +487,15 @@ while IFS= read -r v <&3; do
     "$v" > "$B/$v.labels.tmp" ||
   { echo "STOP: $v is not backed up with its labels"; exit 1; }
   n=$(docker volume inspect --format '{{len .Labels}}' "$v")
-  if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] && usable "$B/$v.labels.tmp" >/dev/null; then
+  u=$(usable "$B/$v.labels.tmp") || u=
+  own=
+  for i in $ids; do [ "$i" != "$u" ] || own=1; done
+  # docker ends the record with one empty line of its own, so it is n+1 lines long.
+  if [ "$(wc -l < "$B/$v.labels.tmp")" -eq "$((n + 1))" ] && [ -n "$own" ]; then
     mv "$B/$v.labels.tmp" "$B/$v.labels"
   else
     mv "$B/$v.labels.tmp" "$B/$v.unresolved"
-    echo "UNRESOLVED: $v has no usable drive, home and managed labels, or one line per label cannot hold it: see below"
+    echo "UNRESOLVED: $v has no usable drive, home and managed labels for one of this installation's drives, or one line per label cannot hold it: see below"
   fi
 done 3< "$B/drives.list"
 if [ -f "$B/drives.retired" ]; then
@@ -617,7 +621,7 @@ if [ -f "$M" ]; then
   if ! now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
     "SELECT last_value FROM oidc_revocation_seq"); then now=; fi
   case "$now" in
-    ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again, or see \"Revocation order\""; exit 1 ;;
+    ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again; if step 2 reset it and no dump has loaded since, see \"Revocation order\""; exit 1 ;;
   esac
   [ "$now" -le "$hwm" ] || hwm=$now
   { printf '%s\n%s\n' "$id" "$hwm" > "$M.new" && mv "$M.new" "$M"; } || { echo "STOP: mark $hwm not saved in $M: free space and run again"; exit 1; }
@@ -637,12 +641,27 @@ case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 ask "WARDYN_AGE_KEY is back in deploy/compose/.env"
 
 # 2. Start Postgres ALONE, not the full stack, so nothing else touches the
-#    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
-#    `docker compose -f deploy/compose/docker-compose.yaml down -v` first —
-#    pg_dump's plain-SQL output re-creates the schema from scratch and will
-#    collide with an existing one. Preserve any current spool/quarantine
-#    before down -v deletes the audit volume.)
+#    database mid-restore. Restoring onto a HOST THAT ALREADY HAS DATA? Answer
+#    reset: pg_dump's plain-SQL output re-creates the schema from scratch and
+#    will collide with an existing one, so the script runs down -v itself, for
+#    the installation step 0 named, after step 0 has saved its mark. Keep any
+#    current spool/quarantine elsewhere first: down -v deletes the audit volume.
+printf 'Does %s already hold a Wardyn database on this host? Type no, or reset to run down -v on it now: ' "$id"
+read -r a || a=
+case "$a" in
+  no) ;;
+  reset) ask "The spool and quarantine of $id are kept elsewhere"
+    docker compose -f deploy/compose/docker-compose.yaml down -v || { echo "STOP: down -v did not finish"; exit 1; } ;;
+  *) echo "STOP: not answered"; exit 1 ;;
+esac
 docker compose -f deploy/compose/docker-compose.yaml up -d postgres
+#    A new database first runs a setup server that listens on no TCP port, so
+#    wait for the real one, up to 60 attempts a second apart, before loading.
+i=0
+until docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+  pg_isready -h 127.0.0.1 -U wardyn -d wardyn >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -lt 60 ] || { echo "STOP: postgres did not come up"; exit 1; }; sleep 1
+done
 
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
 #    abort the whole load with a nonzero exit, instead of silently skipping
@@ -686,6 +705,16 @@ usable() {
     grep -q '^wardyn\.home=.' "$1" && grep -qxF 'wardyn.managed=true' "$1" &&
     sed -n 's/^wardyn\.drive=//p' "$1" | grep -xE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 }
+#    docker volume create also succeeds on a volume that already exists, and
+#    a drive volume carries no installation label, so nothing on the volume
+#    shows which installation or restore made it. Until this loop finishes,
+#    only this restore may create, remove or replace a wardyn-drive-* or
+#    wardyn-portal-* volume on this Docker daemon: no Wardyn server runs on it,
+#    and no other restore or manual recovery runs either, even with every
+#    server stopped. A Docker daemon of this restore's own meets that too. The
+#    volumes are listed once, and any failure to list stops.
+ask "Until this loop finishes, only this restore creates, removes or replaces drive volumes on this Docker daemon: no Wardyn server, other restore or manual recovery runs"
+vols=$(docker volume ls -q) || { echo "STOP: the volumes on this host could not be listed"; exit 1; }
 h=
 while IFS= read -r v <&3; do
   f="$v.tar.gz"; l="$B/$v.labels"
@@ -696,7 +725,7 @@ while IFS= read -r v <&3; do
   own=
   for i in $ids; do [ "$i" != "$id" ] || own=1; done
   [ -n "$own" ] || { echo "STOP: the restored database has no drive $id"; exit 1; }
-  if docker volume inspect "$v" >/dev/null 2>&1; then
+  if printf '%s\n' "$vols" | grep -qxF -- "$v"; then
     echo "SKIP: $v already exists: see below"; h=1; continue
   fi
   set --
@@ -708,7 +737,7 @@ while IFS= read -r v <&3; do
     cmp -s - "$l" &&
   docker run --rm -v "$v":/to -v "$B":/from alpine \
     sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
-    { echo "STOP: $v is not restored"; exit 1; }
+    { echo "STOP: $v is not restored: leave it in place and see below"; exit 1; }
 done 3< "$B/drives.list"
 [ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run step 5's loop and 5b-6 by hand"; exit 1; }
 #    A .labels record holds one key=value line per label its volume had:
@@ -728,7 +757,10 @@ done 3< "$B/drives.list"
 #    or HOLD line stops the script before step 6.
 #    SKIP: a volume of that name already exists. Creating it again would
 #    not change its labels, and it may hold someone's files. If this loop
-#    restored it on an earlier pass, that is expected. Otherwise inspect it,
+#    restored it on an earlier pass that did not stop on it, that is expected.
+#    A volume a pass stopped on ("is not restored") may hold only part of its
+#    archive, or may be one that was there before the pass: never remove it
+#    on the strength of that line. Otherwise inspect it,
 #    and back it up, before you decide whose it is. Remove it
 #    (`docker volume rm`) only once you know, then run step 5's loop again by hand.
 #    HOLD on a missing or unusable label record (an UNRESOLVED volume, or a

@@ -71,8 +71,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   Before copying one it checks which installation owns it: a volume whose drive label is one of this installation's
   drives is backed up with its labels, and every other one, or every one where two installations run from copies of
   one database, is asked about first. A volume confirmed as this installation's is backed up, and marked unresolved
-  until its owner is worked out unless its labels hold exactly one drive id, one home and the managed marker. Another installation's is left out, and a deleted drive's
-  is archived apart for you to keep or discard, outside the restore. The restore works from that list and stops on any missing archive. It creates each
+  until its owner is worked out unless its labels hold exactly one of this installation's drive ids, one home and the managed marker. Another installation's is left out, and a deleted drive's
+  is archived apart for you to keep or discard, outside the restore. The restore works from that list and stops on any missing archive. With only this restore creating, removing or replacing drive volumes on the Docker daemon until it finishes (no Wardyn server, other restore or manual recovery), it creates each
   volume new, and checks the volume's labels and that it is empty before writing any file. It stops before starting
   the stack on a missing label record or a drive the restored database does not hold. A backup with no label
   record is untarred to a plain directory, never straight into a managed volume, and a group or portal folder is

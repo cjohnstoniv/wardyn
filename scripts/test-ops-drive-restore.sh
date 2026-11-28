@@ -26,12 +26,15 @@ grep -q '^done 3< "\$B/drives.list"$' "$T/loop.sh" || fail "no step-5 drive loop
 
 ID=0f8c1b2a-3d4e-4f50-8a6b-7c8d9e0f1a2b
 cat >"$T/stub.sh" <<'EOF'
+ask() { echo "ASKED: $1"; }
 docker() {
+  echo "$*" >>"$B/docker.log"
   case "$*" in
     *psql*) printf '%s\n' "$DB_IDS" ;;
     "volume inspect --format {{.Driver}} {{len .Options}} "*) echo "local 0" ;;
-    "volume inspect --format "*) sed -n 's/^--label //p' "$B/create.args" ;;
+    "volume inspect --format "*) sed -n 's/^--label //p' "$B/create.args"; echo ;;
     "volume inspect "*) return 1 ;;
+    "volume ls -q") [ -z "${VOLS_FAIL:-}" ] || return 1; printf '%s\n' "${VOLS:-}" ;;
     "volume create "*) printf '%s\n' "$@" | sed '1,2d;$d' | paste -d' ' - - >"$B/create.args" ;;
     "run "*) return 0 ;;
   esac
@@ -42,7 +45,7 @@ EOF
 run() {
   local B="$T/$1"
   mkdir -p "$B"
-  printf '%s\n' "$3" >"$B/wardyn-drive-a.labels"
+  printf '%s\n\n' "$3" >"$B/wardyn-drive-a.labels"
   : >"$B/wardyn-drive-a.tar.gz"
   echo wardyn-drive-a >"$B/drives.list"
   (cd "$B" && B="$B" DB_IDS="$ID" bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$2")
@@ -78,7 +81,7 @@ wardyn.drive=" "$lookalike"; do
 done
 
 # A drive the restored database does not hold stops the loop.
-out="$(cd "$T" && mkdir -p nodrive && printf '%s\n' "$good" >nodrive/wardyn-drive-a.labels && : >nodrive/wardyn-drive-a.tar.gz &&
+out="$(cd "$T" && mkdir -p nodrive && printf '%s\n\n' "$good" >nodrive/wardyn-drive-a.labels && : >nodrive/wardyn-drive-a.tar.gz &&
   echo wardyn-drive-a >nodrive/drives.list && B="$T/nodrive" DB_IDS=00000000-0000-4000-8000-000000000000 \
   bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" && fail "an unknown drive did not stop the loop: $out"
 [[ "$out" == *"has no drive $ID"* ]] || fail "an unknown drive stopped with the wrong line: $out"
@@ -97,6 +100,103 @@ wardyn.home=other" "${good/wardyn.managed=true/wardyn.managed=yes}"; do
   printf '%s\n' "$bad" >"$T/rec"
   ! (. "$T/usable-backup.sh"; usable "$T/rec" >/dev/null) || fail "the backup took a record it should mark unresolved: $bad"
 done
+
+# The backup's record loop, as the guide prints it, against a stub docker that
+# ends each label record with the empty line the real CLI adds: a good volume of
+# this installation gets a .labels record, and lookalike keys or a drive this
+# database does not hold get .unresolved. The same loop counting n lines, not
+# n+1, must fail the good volume.
+awk '/^mv "\$B\/drives.list.tmp" "\$B\/drives.list"$/{f=1} f{print} f&&/^done 3< "\$B\/drives.list"$/{exit}' \
+  "$doc" >"$T/backup.sh"
+grep -q '^done 3< "\$B/drives.list"$' "$T/backup.sh" || fail "no step-4 record loop found in $doc"
+cat >"$T/bstub.sh" <<'EOF2'
+docker() {
+  case "$*" in
+    "run "*) return 0 ;;
+    "volume inspect --format {{len .Labels}} "*) grep -c . "$B/src/${*: -1}" ;;
+    "volume inspect --format "*) cat "$B/src/${*: -1}"; echo ;;
+  esac
+}
+EOF2
+# backup <name> <loop file> <labels>: runs the loop for one volume, wardyn-drive-a.
+backup() {
+  local B="$T/b-$1"
+  mkdir -p "$B/src"
+  printf '%s\n' "$3" >"$B/src/wardyn-drive-a"
+  echo wardyn-drive-a >"$B/drives.list.tmp"
+  B="$B" ids="${4:-$ID}" bash -c 'set -eu; . "$1"; . "$2"' _ "$T/bstub.sh" "$2" >/dev/null
+}
+backup good "$T/backup.sh" "$good" || fail "the backup loop failed on a good volume"
+[ -f "$T/b-good/wardyn-drive-a.labels" ] && [ ! -e "$T/b-good/wardyn-drive-a.unresolved" ] ||
+  fail "the backup marked a good volume unresolved"
+backup lookalike "$T/backup.sh" "$lookalike" || fail "the backup loop failed on a lookalike volume"
+[ -f "$T/b-lookalike/wardyn-drive-a.unresolved" ] || fail "the backup recorded a volume with only lookalike keys"
+backup foreign "$T/backup.sh" "$good" 00000000-0000-4000-8000-000000000000 || fail "the backup loop failed on a foreign drive"
+[ -f "$T/b-foreign/wardyn-drive-a.unresolved" ] || fail "the backup recorded a drive this database does not hold"
+sed 's/-eq "$((n + 1))"/-eq "$n"/' "$T/backup.sh" >"$T/backup-n.sh"
+! cmp -s "$T/backup.sh" "$T/backup-n.sh" || fail "the n+1 count was not found to change"
+backup mutant "$T/backup-n.sh" "$good" || true
+[ ! -f "$T/b-mutant/wardyn-drive-a.labels" ] || fail "the backup counting n lines still recorded the volume: this test checks nothing"
+
+# A volume another process made between the existence check and create: the
+# create succeeds on the existing volume, its labels differ, and the STOP must
+# leave it in place, with no removal by the loop or in its words.
+sed 's#^    "volume inspect --format "\*).*#    "volume inspect --format "*) printf "owner=other\\n\\n" ;;#' "$T/stub.sh" >"$T/stub-raced.sh"
+! cmp -s "$T/stub.sh" "$T/stub-raced.sh" || fail "the label stub was not found to change"
+rm -rf "$T/raced"
+out="$(cd "$T" && mkdir -p raced && printf '%s\n\n' "$good" >raced/wardyn-drive-a.labels && : >raced/wardyn-drive-a.tar.gz &&
+  echo wardyn-drive-a >raced/drives.list && B="$T/raced" DB_IDS="$ID" \
+  bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub-raced.sh" "$T/loop.sh" 2>&1)" && fail "a raced volume did not stop the loop: $out"
+[[ "$out" == *"is not restored: leave it in place"* ]] || fail "a raced volume stopped with the wrong line: $out"
+[[ "$out" != *"volume rm"* ]] || fail "the STOP for a raced volume says to remove it: $out"
+
+# A volume already there with the full recorded label set (another
+# installation from the same database, say) is skipped, never written; a
+# listing that fails stops before any volume is made; and the loop asks that
+# no other installation runs before it starts.
+rm -rf "$T/there"
+out="$(cd "$T" && mkdir -p there && printf '%s\n\n' "$good" >there/wardyn-drive-a.labels && : >there/wardyn-drive-a.tar.gz &&
+  echo wardyn-drive-a >there/drives.list && B="$T/there" DB_IDS="$ID" VOLS=wardyn-drive-a \
+  bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" || true
+[[ "$out" == *"SKIP: wardyn-drive-a already exists"* ]] || fail "an existing volume was not skipped: $out"
+! grep -q '^volume create\|^run ' "$T/there/docker.log" || fail "an existing volume was created or written"
+[[ "$out" == *"ASKED: Until this loop finishes, only this restore creates, removes or replaces drive volumes"* &&
+  "$out" == *"other restore or manual recovery"* ]] || fail "the loop did not ask that only this restore changes drive volumes: $out"
+rm -rf "$T/nolist"
+out="$(cd "$T" && mkdir -p nolist && printf '%s\n\n' "$good" >nolist/wardyn-drive-a.labels && : >nolist/wardyn-drive-a.tar.gz &&
+  echo wardyn-drive-a >nolist/drives.list && B="$T/nolist" DB_IDS="$ID" VOLS_FAIL=1 \
+  bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" && fail "a failed listing did not stop: $out"
+! grep -q '^volume create' "$T/nolist/docker.log" || fail "a volume was made after a failed listing"
+
+# Step 2 waits for postgres to listen on TCP before step 3 loads, and stops
+# when it never does.
+awk '/^### Restore them/{r=1} r&&/^docker compose .* up -d postgres$/{f=1} f{print} f&&/^done$/{exit}' "$doc" >"$T/wait.sh"
+grep -q 'pg_isready -h 127.0.0.1' "$T/wait.sh" || fail "no step-2 wait for postgres found in $doc"
+cat >"$T/wstub.sh" <<'EOF2'
+docker() { case "$*" in *pg_isready*) n=$(($(cat "$T/n") + 1)); echo "$n" >"$T/n"; [ "$n" -ge "$UP_AT" ] ;; esac; }
+sleep() { :; }
+EOF2
+echo 0 >"$T/n"; T="$T" UP_AT=3 bash -c 'set -eu; . "$1"; . "$2"' _ "$T/wstub.sh" "$T/wait.sh" >/dev/null ||
+  fail "the wait did not end once postgres came up"
+[ "$(cat "$T/n")" = 3 ] || fail "the wait did not poll until postgres came up"
+echo 0 >"$T/n"; ! T="$T" UP_AT=999 bash -c 'set -eu; . "$1"; . "$2"' _ "$T/wstub.sh" "$T/wait.sh" >/dev/null ||
+  fail "the wait did not stop when postgres never came up"
+
+# Step 2's reset runs down -v in the script's own environment, so on the
+# installation step 0 named, and only when answered reset.
+awk '/^### Restore them/{r=1} r&&/^printf .Does %s already hold/{f=1} f{print} f&&/^esac$/{exit}' "$doc" >"$T/reset.sh"
+grep -q 'down -v' "$T/reset.sh" || fail "no step-2 reset found in $doc"
+cat >"$T/rstub.sh" <<'EOF2'
+docker() { echo "${COMPOSE_PROJECT_NAME:-} $*" >>"$T/reset.log"; }
+ask() { :; }
+EOF2
+reset() { : >"$T/reset.log"; printf '%s\n' "$1" | T="$T" COMPOSE_PROJECT_NAME=named id="project=named ns=x" \
+  bash -c 'set -eu; . "$1"; . "$2"' _ "$T/rstub.sh" "$T/reset.sh" >/dev/null; }
+reset reset || fail "the reset answer did not run"
+grep -qxF 'named compose -f deploy/compose/docker-compose.yaml down -v' "$T/reset.log" || fail "down -v did not run for the named installation: $(cat "$T/reset.log")"
+reset no || fail "the no answer did not continue"
+[ ! -s "$T/reset.log" ] || fail "down -v ran on a no answer"
+! reset "" || fail "an empty answer did not stop"
 
 # Mutation: the same loop without the label forwarding must not restore the volume.
 grep -v -- '--label "\$x"' "$T/loop.sh" >"$T/loop-nolabels.sh"
