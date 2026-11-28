@@ -678,8 +678,11 @@ func (s *Server) reclaimMacDisk(ctx context.Context, ms store.MemberDriveStore, 
 // Mac held by another replica counts as away: that replica's sweep finishes the
 // delete (finishMacDiskDeletes).
 func (s *Server) macDiskHeldHere(runnerID uuid.UUID) bool {
+	if !s.runnerHeldHere(runnerID) {
+		return false
+	}
 	caps, ok := s.runnerLastCaps(runnerID)
-	return ok && caps.MacOSVM != nil && caps.MacOSVM.DiskDrives && s.runnerOnline(runnerID)
+	return ok && caps.MacOSVM != nil && caps.MacOSVM.DiskDrives
 }
 
 // macDiskDeleteStore lists the disk drives whose delete waits for their Mac (store.PG).

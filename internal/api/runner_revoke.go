@@ -145,7 +145,7 @@ func (s *Server) revokeRunner(ctx context.Context, id uuid.UUID, actorType types
 	queued, qerr := s.endQueuedRunsPinnedTo(ctx, rev.Runner, id)
 	s.recordAudit(ctx, s.auditEvent(nil, actorType, by, placement.ActionRunnerRevoke, id.String(), "success",
 		mustJSON(map[string]any{"by": by, "reason": reason, "runs_killed": len(rev.Killed) + queued})))
-	online := s.RunnerOnline(id)
+	online := s.runnerHeldHere(id) // whether this replica's own RevokeRunnerSession ends a session
 	errs := []error{qerr, s.RevokeRunnerSession(ctx, id)}
 	for _, k := range rev.Killed {
 		errs = append(errs, s.revokedRunKillTail(ctx, k, actorType, by, online))

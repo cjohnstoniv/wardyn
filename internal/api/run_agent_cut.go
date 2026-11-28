@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// runnerConnected is the runner's caps while its session is live on this replica (folderRunner's test,
+// runnerConnected is the runner's caps while its session is live on any replica (folderRunner's test,
 // in run_computer_folder.go); last-known caps alone never count.
 func (s *Server) runnerConnected(id uuid.UUID) (runnerwire.Caps, bool) {
 	caps, ok := s.runnerLastCaps(id)

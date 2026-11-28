@@ -532,7 +532,7 @@ func (s *Server) pushWorkloadStatuses(ctx context.Context, push func(store.Workl
 // pushed by the replica that holds its runner's session.
 func (s *Server) sweepWorkloadStatuses(ctx context.Context) error {
 	return s.pushWorkloadStatuses(ctx, func(v store.WorkloadView) bool {
-		return s.runnerOnline(*v.SourceRunnerID) && workloadStatusHash(workloadStatusOf(v, time.Now())) != v.StatusPushed
+		return s.runnerHeldHere(*v.SourceRunnerID) && workloadStatusHash(workloadStatusOf(v, time.Now())) != v.StatusPushed
 	})
 }
 

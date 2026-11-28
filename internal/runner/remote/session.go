@@ -31,7 +31,7 @@ func (l *Link) AttachSession(conn runnerwire.Conn, cfg runnerwire.PeerConfig) *r
 			return nil
 		}
 		cfg.OnOpen = func(s *runnerwire.Stream, o runnerwire.Open) error {
-			if !l.Online() {
+			if !l.HeldHere() {
 				return runnerwire.ErrNotReady
 			}
 			return h.HandleOpen(s, o)
@@ -125,7 +125,7 @@ func (l *Link) suspend(peer *runnerwire.Peer) {
 // Send carries LEASE and administrative control on the active session.
 func (l *Link) Send(ctx context.Context, frame runnerwire.Frame) error {
 	p := l.current()
-	if p == nil || !l.Online() {
+	if p == nil || !l.HeldHere() {
 		return errOffline
 	}
 	return p.Send(ctx, frame)

@@ -25,13 +25,16 @@ import (
 )
 
 type runnerStreamState struct {
-	once    sync.Once
-	hub     *remote.Hub
-	limiter principalLimiter
-	global  principalLimiter
-	runners principalLimiter
-	subsMu  sync.Mutex
-	subs    map[uuid.UUID]runnerEndpoint
+	once sync.Once
+	hub  *remote.Hub
+	// heldHere is hubHeldHere, set by New; runnerHeldHere calls it through this field so a function that only
+	// reads the online answer does not reach the hub's construction in the package's initialization order.
+	heldHere func(uuid.UUID) bool
+	limiter  principalLimiter
+	global   principalLimiter
+	runners  principalLimiter
+	subsMu   sync.Mutex
+	subs     map[uuid.UUID]runnerEndpoint
 	// netpolLast is each runner's last NetworkPolicy verdict this process took (auditRunnerNetpol),
 	// under subsMu.
 	netpolLast map[uuid.UUID]string
@@ -217,11 +220,14 @@ func (s *Server) RevokeRunnerSession(ctx context.Context, id uuid.UUID) error {
 	return s.runnerHub(st).Revoke(ctx, id)
 }
 
-// RunnerOnline reports whether this process holds the runner's live session,
-// admitted to READY.
+// RunnerOnline reports whether the runner holds a live session admitted to READY, on this replica or, under
+// high availability, on the replica the holder view names.
 func (s *Server) RunnerOnline(id uuid.UUID) bool {
-	st, ok := s.cfg.Store.(store.RunnerStore)
-	return ok && s.runnerHub(st).Online(id)
+	if s.runnerHeldHere(id) {
+		return true
+	}
+	p := s.runnerPeering()
+	return p != nil && p.view.Online(id)
 }
 
 // RunnersDisabled ends every runner session this process holds once runners
@@ -240,6 +246,7 @@ func (s *Server) RunnersDisabled(ctx context.Context) {
 // defaultRunnerHooks wires the runners routes' online read and switch-off hook
 // to this process's Hub unless the caller injected its own.
 func (s *Server) defaultRunnerHooks() {
+	s.runnerStreams.heldHere = s.hubHeldHere
 	if s.cfg.RunnerOnline == nil {
 		s.cfg.RunnerOnline = s.RunnerOnline
 	}

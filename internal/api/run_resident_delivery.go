@@ -414,7 +414,7 @@ func (s *Server) leaseDeliverCreate(ctx, createCtx context.Context, run types.Ag
 // path, when this replica holds the runner's session; the sweep retries
 // whatever it leaves.
 func (s *Server) kickResidentErase(runnerID uuid.UUID) {
-	if s.runnerOnline(runnerID) {
+	if s.runnerHeldHere(runnerID) {
 		s.startResidentErase(runnerID)
 	}
 }
@@ -472,7 +472,7 @@ func (s *Server) sweepResidentErase(ctx context.Context) error {
 	}
 	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx), s.sweepKeptMachines(ctx)}
 	for _, id := range runners {
-		if s.runnerOnline(id) {
+		if s.runnerHeldHere(id) { // every replica runs this sweep: each erases only on the runners it holds
 			errs = append(errs, s.eraseResidentOn(ctx, st, id))
 		}
 	}

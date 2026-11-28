@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -75,7 +76,7 @@ func TestPeerNeverForwardsTwice(t *testing.T) {
 		return nil, errors.New("dialled")
 	}
 	link := &Link{}
-	link.UsePeer(runnerID, pt)
+	link.UsePeer(runnerID, nil, pt)
 	h := NewHub(t.Context(), HubConfig{})
 	h.mu.Lock()
 	h.sessions[runnerID] = &hubSession{link: link}
@@ -200,7 +201,7 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 		go func() { r.doors <- servePin(ctx, doorConn, pin, h.Get(HeaderPeerMethod), nil) }()
 		return callerConn, nil
 	}
-	r.caller.UsePeer(uuid.New(), pt)
+	r.caller.UsePeer(uuid.New(), nil, pt)
 	return r
 }
 
@@ -416,7 +417,7 @@ func TestPeerLookupHonoursCancel(t *testing.T) {
 		return nil, errors.New("dialled")
 	}
 	l := &Link{}
-	l.UsePeer(uuid.New(), pt)
+	l.UsePeer(uuid.New(), nil, pt)
 	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(100*time.Millisecond, cancel)
 	start := time.Now()
@@ -621,5 +622,103 @@ func TestPeerExecOpensAllStreamsOrNone(t *testing.T) {
 			}
 			cancel()
 		}
+	}
+}
+
+// TestPeerDroppedSocketClosesItsExecs: a caller's WebSocket that drops after its exec's streams ended but before
+// its exec_close leaves the runner no exec: the holder sends exec_close for each exec the socket opened, and only
+// for those.
+func TestPeerDroppedSocketClosesItsExecs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	r := newPeerRig(t, ctx)
+	kept := startPeerExec(t, ctx, r, 4)
+	dropped := startPeerExec(t, ctx, r, 3)
+	dropped.wait(t, ctx, 3)
+	r.mu.Lock()
+	if n := len(r.execs); n != 2 {
+		r.mu.Unlock()
+		t.Fatalf("the runner holds %d execs before the drop, want 2", n)
+	}
+	r.mu.Unlock()
+	p := dropped.sess.(*peerPinned)
+	p.mu.Lock()
+	ws := p.p
+	p.mu.Unlock()
+	if ws == nil {
+		t.Fatal("the pin holds no WebSocket while its exec is open")
+	}
+	ws.Close() // the caller's socket drops with the exec not closed
+	r.doorEnded(t)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		r.mu.Lock()
+		n := len(r.execs) // the runner's own exec ids, not the sockets'
+		r.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the drop the runner holds %d execs, want only the other socket's", n)
+		}
+	}
+	kept.wait(t, ctx, 4)
+	if err := kept.sess.Call(ctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: kept.ex.ID()}, nil); err != nil {
+		t.Fatalf("close the other socket's exec: %v", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.execs) != 0 {
+		t.Fatalf("the runner holds %d execs at the end, want 0", len(r.execs))
+	}
+}
+
+// TestLinkOnlineReadsHolderView: a Link with no session here reads Online from the holder view: true for a fresh
+// row naming another replica, with HeldHere false; false once the row ages out of a refresh, for a row naming this
+// replica, and after a failed refresh, which empties the view rather than keep a stale answer.
+func TestLinkOnlineReadsHolderView(t *testing.T) {
+	ctx := t.Context()
+	runnerID := uuid.New()
+	rows := map[uuid.UUID]PeerRoute{runnerID: {ReplicaID: "b", PeerURL: "https://b", SessionID: uuid.New()}}
+	var fail bool
+	v := NewHolderView("a", func(context.Context) (map[uuid.UUID]PeerRoute, error) {
+		if fail {
+			return nil, errors.New("database down")
+		}
+		return maps.Clone(rows), nil
+	})
+	var elsewhere []uuid.UUID
+	v.OnRefresh = func(_ context.Context, ids []uuid.UUID) { elsewhere = ids }
+	l := &Link{}
+	l.UsePeer(runnerID, v, NewPeerTransport(PeerConfig{}, "a", nil))
+	if l.Online() {
+		t.Fatal("online before the first refresh")
+	}
+	if err := v.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !l.Online() || l.HeldHere() {
+		t.Fatalf("a fresh row on another replica: Online=%v HeldHere=%v, want true, false", l.Online(), l.HeldHere())
+	}
+	if len(elsewhere) != 1 || elsewhere[0] != runnerID {
+		t.Fatalf("OnRefresh got %v, want the runner held elsewhere", elsewhere)
+	}
+	fail = true
+	elsewhere = nil
+	if err := v.Refresh(ctx); err == nil {
+		t.Fatal("a failed read refreshed")
+	}
+	if l.Online() || elsewhere != nil {
+		t.Fatalf("after a failed refresh: Online=%v OnRefresh=%v, want offline and no call", l.Online(), elsewhere)
+	}
+	fail = false
+	rows[runnerID] = PeerRoute{ReplicaID: "a", PeerURL: "https://a", SessionID: uuid.New()}
+	_ = v.Refresh(ctx)
+	if l.Online() {
+		t.Fatal("a row naming this replica, with no session here, reads online")
+	}
+	delete(rows, runnerID) // the row aged out of the 30 s window
+	_ = v.Refresh(ctx)
+	if l.Online() {
+		t.Fatal("a row gone stale still reads online")
 	}
 }

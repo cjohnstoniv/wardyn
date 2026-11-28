@@ -104,6 +104,7 @@ type Substrate struct {
 
 	mu       sync.Mutex
 	caps     *runnerwire.Caps
+	peerCaps peerCapsRead // the holder's answer to caps, while another replica holds the session
 	outputs  map[uuid.UUID]*outputSink
 	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
 	// vmKinds is the machine kind of each VM sandbox this substrate created, so a desktop or a pause is
@@ -143,8 +144,15 @@ func (s *Substrate) Name() string { return placement.RunnerSubstrateName(s.id) }
 // RunnerID is the runner's id.
 func (s *Substrate) RunnerID() string { return s.id }
 
-// Caps is the runner's last advertised capabilities, if any.
+// Caps is the runner's last advertised capabilities, if any. While another replica holds the runner's session, by
+// the holder view, it is that replica's answer (door method caps), kept for peerCapsFor per session; a failed read
+// answers none, so capabilities are never guessed.
 func (s *Substrate) Caps() (runnerwire.Caps, bool) {
+	if l, ok := s.t.(*Link); ok && !l.HeldHere() {
+		if route, held := l.holder(); held && route.ReplicaID != l.peerTransport().Self() {
+			return s.holderCaps(l, route)
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.caps == nil {

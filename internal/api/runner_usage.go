@@ -35,8 +35,8 @@ func diskCapped(e types.StorageEnforcement) bool {
 	return e == types.StorageEnforcementFilesystem || e == types.StorageEnforcementEviction
 }
 
-// selfHostedUsage is a self-hosted runner's usage: online is the hub's live view, and what it reports
-// is its last caps event on this replica.
+// selfHostedUsage is a self-hosted runner's usage: online is the holder view, and what it reports is
+// its last caps event, read from the replica that holds its session.
 func (s *Server) selfHostedUsage(row types.Runner, used types.RunnerTally) types.RunnerUsage {
 	online := row.State == types.RunnerClaimed && s.runnerOnline(row.ID)
 	facts, _ := s.runnerFacts(row.ID)

@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -179,7 +180,10 @@ func (s *Server) leaseSendable(ctx context.Context, st store.PG, run types.Agent
 		return time.Time{}, errRunnerLeaseLapsed
 	case run.EndsAt != nil && !run.EndsAt.After(now.Add(leaseSkew)):
 		return time.Time{}, errRunnerLeaseEnded
-	case !s.runnerEndpoint(*run.RunnerID).link.Online():
+	}
+	if link := s.runnerEndpoint(*run.RunnerID).link; !link.HeldHere() && !link.Online() {
+		// Held nowhere. Held by another replica, sendRunnerLease asks the holder, which judges this again on its own
+		// clock before it sends.
 		return time.Time{}, errRunnerNotReady
 	}
 	return renewed, nil
@@ -188,6 +192,32 @@ func (s *Server) leaseSendable(ctx context.Context, st store.PG, run types.Agent
 // sendRunnerLease sends the run's lease: its token stamp, the one the organisation's lapsed-token sweep
 // reads, and its stored end (zero for none). A LEASE is processed before any later call on the session.
 func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, generation uuid.UUID, renewed time.Time) error {
+	if p := s.runnerPeering(); p != nil && !s.runnerHeldHere(*run.RunnerID) {
+		// Only the holder sends a lease: it reads the stamp and judges it on its own clock (peerLease).
+		ctx, cancel := context.WithTimeout(ctx, leaseSendTimeout)
+		defer cancel()
+		return holderLeaseErr(p.trans.CallHolder(ctx, *run.RunnerID, remote.PeerMethodLease, peerLeaseArgs{RunID: run.ID, Generation: generation}, nil))
+	}
+	return s.sendRunnerLeaseHere(ctx, run, generation, renewed)
+}
+
+// holderLeaseErr maps the holder's refusal of a lease back to this package's sentinel, which reaches the caller as
+// a reply message, so a caller here can tell a lapsed or contained run from a failed call.
+func holderLeaseErr(err error) error {
+	var we *runnerwire.Error
+	if !errors.As(err, &we) {
+		return err
+	}
+	for _, sentinel := range []error{errRunnerContained, errRunnerLeaseLapsed, errRunnerLeaseEnded, errRunnerNotReady} {
+		if we.Message == sentinel.Error() {
+			return sentinel
+		}
+	}
+	return err
+}
+
+// sendRunnerLeaseHere sends the run's lease on this replica's session for its runner, never through another.
+func (s *Server) sendRunnerLeaseHere(ctx context.Context, run types.AgentRun, generation uuid.UUID, renewed time.Time) error {
 	l := runnerwire.Lease{RunID: run.ID, ExecutionGeneration: generation, TokenRenewedAt: renewed}
 	if run.EndsAt != nil {
 		l.EndsAt = *run.EndsAt

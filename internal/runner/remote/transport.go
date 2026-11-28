@@ -42,9 +42,10 @@ type Link struct {
 	// stated: the attached session's final STATE page reached the org, or the session was resumed.
 	// Past judging that page the org refuses no session for a queued action (requireFresh).
 	stated bool
-	// runner and pt route a call to the replica that holds the runner's session while this one holds none
-	// (UsePeer). Nil pt keeps every call local.
+	// runner, view and pt route a call to the replica that holds the runner's session while this one holds none,
+	// and answer Online from the holder view (UsePeer). Nil keeps every call and answer local.
 	runner uuid.UUID
+	view   *HolderView
 	pt     *PeerTransport
 }
 
@@ -83,18 +84,38 @@ func (l *Link) current() *runnerwire.Peer {
 	return l.peer
 }
 
-func (l *Link) Online() bool {
+// HeldHere reports whether this replica holds the runner's session, ready.
+func (l *Link) HeldHere() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.ready && l.peer != nil && l.peer.Online()
 }
 
-// UsePeer routes this runner's calls through the replica that holds its session whenever this replica holds
-// none. Call it once, before the Link is used.
-func (l *Link) UsePeer(runnerID uuid.UUID, pt *PeerTransport) {
+// Online reports whether the runner's session is ready here or, by the holder view, on another replica.
+func (l *Link) Online() bool {
+	if l.HeldHere() {
+		return true
+	}
 	l.mu.Lock()
-	l.runner, l.pt = runnerID, pt
+	v, id := l.view, l.runner
 	l.mu.Unlock()
+	return v != nil && v.Online(id)
+}
+
+// UsePeer routes this runner's calls through the replica that holds its session whenever this replica holds
+// none, and answers Online from v as well. Call it once, before the Link is used.
+func (l *Link) UsePeer(runnerID uuid.UUID, v *HolderView, pt *PeerTransport) {
+	l.mu.Lock()
+	l.runner, l.view, l.pt = runnerID, v, pt
+	l.mu.Unlock()
+}
+
+// holder is the holder view's row for the runner, when UsePeer set a view.
+func (l *Link) holder() (PeerRoute, bool) {
+	l.mu.Lock()
+	v, id := l.view, l.runner
+	l.mu.Unlock()
+	return v.Holder(id)
 }
 
 func (l *Link) peerTransport() *PeerTransport {
@@ -107,7 +128,7 @@ func (l *Link) peerTransport() *PeerTransport {
 // runner's session, read at this call.
 func (l *Link) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
 	p := l.current()
-	if p == nil || !l.Online() {
+	if p == nil || !l.HeldHere() {
 		if pt := l.peerTransport(); pt != nil {
 			return pt.call(ctx, l.runner, method, args, result, opts...)
 		}
@@ -136,7 +157,7 @@ type session interface {
 // session here and UsePeer set, it reads the holder once and pins that replica's session (peerPinned).
 func (l *Link) pinSession(ctx context.Context) (session, error) {
 	p := l.current()
-	if p == nil || !l.Online() {
+	if p == nil || !l.HeldHere() {
 		if pt := l.peerTransport(); pt != nil {
 			if route, ok := pt.route(ctx, l.runner); ok {
 				return &peerPinned{pt: pt, runner: l.runner, route: route}, nil
@@ -154,7 +175,7 @@ type pinnedPeer struct {
 }
 
 func (s pinnedPeer) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
-	if s.l.current() != s.p || !s.l.Online() {
+	if s.l.current() != s.p || !s.l.HeldHere() {
 		return errOffline
 	}
 	return s.p.Call(ctx, method, args, result, opts...)

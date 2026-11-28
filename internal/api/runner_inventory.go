@@ -46,6 +46,19 @@ func (s *Server) runnerInventoryStore(w http.ResponseWriter) (store.RunnerInvent
 	return rs, ok
 }
 
+// runnerHeldHere reports whether this replica's hub holds the runner's live session, admitted to READY: the
+// answer for work only the holder does.
+func (s *Server) runnerHeldHere(id uuid.UUID) bool {
+	f := s.runnerStreams.heldHere
+	return f != nil && f(id)
+}
+
+// hubHeldHere is runnerHeldHere's answer: the hub's own.
+func (s *Server) hubHeldHere(id uuid.UUID) bool {
+	st, ok := s.cfg.Store.(store.RunnerStore)
+	return ok && s.runnerHub(st).Online(id)
+}
+
 // runnerOnline is the hub's live answer, false whenever it cannot be asked: a runner is never
 // shown online on a guess.
 func (s *Server) runnerOnline(id uuid.UUID) bool {

@@ -40,11 +40,13 @@ type PeerConfig struct {
 }
 
 // PeerLoop is the hub's way to the holder record: it claims a session's row after its inventory begins, touches
-// the rows of the sessions whose link is up, and drops a session's row when the session ends.
+// the rows of the sessions whose link is up, drops a session's row when the session ends, and refreshes the
+// holder view every runner's online answer reads.
 type PeerLoop interface {
 	Claim(ctx context.Context, runnerID, sessionID uuid.UUID) (bool, error)
 	Touch(ctx context.Context, sessions []uuid.UUID) ([]uuid.UUID, error)
 	Drop(ctx context.Context, runnerID, sessionID uuid.UUID) error
+	Refresh(ctx context.Context)
 }
 
 // PeerRoute is the replica that holds a runner's session, its internal address and the session it holds.
@@ -62,6 +64,10 @@ const PeerPath = "/api/v1/internal/runner-peer"
 const (
 	PeerMethodStream = "stream"
 	PeerMethodOutput = "output"
+	// PeerMethodCaps reads the runner's capabilities from the holder's memory; no frame reaches the runner.
+	PeerMethodCaps = "caps"
+	// PeerMethodLease asks the holder to send a run's lease on its session, judged on the holder's clock.
+	PeerMethodLease = "lease"
 )
 
 // PeerTokenTTL is the longest a peer token is valid for; the door refuses an exp further ahead.
@@ -325,6 +331,61 @@ func (pt *PeerTransport) call(ctx context.Context, runnerID uuid.UUID, method st
 	return peerSend(ctx, p, method, args, result, opts...)
 }
 
+// CallHolder is one call of a door method the holder answers from its own memory (PeerMethodCaps,
+// PeerMethodLease), through the holder row read at this call.
+func (pt *PeerTransport) CallHolder(ctx context.Context, runnerID uuid.UUID, method string, args, result any) error {
+	return pt.call(ctx, runnerID, method, args, result)
+}
+
+// ServeHolderMethod is the holder's end of one door method it answers itself, on runnerID's session sessionID:
+// errOffline unless this replica holds that session now. Each call must be the token's method, else refused is
+// told "wrong_method" and the WebSocket is closed; answer gets the caller's arguments. It never sends a frame to
+// the runner, and it closes the WebSocket once the session is replaced.
+func (h *Hub) ServeHolderMethod(ctx context.Context, conn runnerwire.Conn, runnerID, sessionID uuid.UUID, method string, answer func(ctx context.Context, args json.RawMessage) (any, error), refused func(class string)) error {
+	pin, ok := h.pinHeld(runnerID, sessionID)
+	if !ok {
+		return errOffline
+	}
+	var ws *runnerwire.Peer
+	serve := func(ctx context.Context, _ uint32, m string, raw json.RawMessage) (any, error) {
+		if m != method {
+			if refused != nil {
+				refused("wrong_method")
+			}
+			ws.Close()
+			return nil, errOffline
+		}
+		if pin.l.current() != pin.p || !pin.l.HeldHere() {
+			ws.Close()
+			return nil, errOffline
+		}
+		var env peerCall
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &env); err != nil {
+				return nil, err
+			}
+		}
+		res, err := answer(ctx, env.Args)
+		if err != nil {
+			return nil, err
+		}
+		out, err := json.Marshal(res)
+		if err != nil {
+			return nil, err
+		}
+		return peerReply{Result: out}, nil
+	}
+	ws = runnerwire.NewPeer(conn, runnerwire.PeerConfig{Org: false, OnCall: serve})
+	go func() {
+		select {
+		case <-pin.p.Done():
+		case <-ws.Done():
+		}
+		ws.Close()
+	}()
+	return ws.Run(ctx)
+}
+
 // peerErr answers a call whose peer link went down (the door closed it: the session moved, or the request was
 // refused) as the runner being offline here, never as another session's answer.
 func peerErr(p *runnerwire.Peer, err error) error {
@@ -341,7 +402,7 @@ type Session = session
 // peer door.
 func (l *Link) Pin(ctx context.Context) (Session, error) { return l.pinSession(ctx) }
 
-// TouchHolders runs one touch of the holder rows now, as the touch loop does every peerTouchEvery.
+// TouchHolders runs one touch of the holder rows now, as the touch loop does every second peerRefreshEvery.
 func (h *Hub) TouchHolders(ctx context.Context) {
 	if h.cfg.Peer != nil {
 		h.touchHolders(ctx)
@@ -505,7 +566,9 @@ func servePin(ctx context.Context, conn runnerwire.Conn, pin pinnedPeer, method 
 		}
 		ws.Close()
 	}()
-	return ws.Run(ctx)
+	err := ws.Run(ctx)
+	r.closeExecs(ctx)
+	return err
 }
 
 // HoldsSession reports whether this replica holds runnerID's session sessionID ready now.
@@ -546,7 +609,7 @@ func (s *hubSession) snapshot() (sessionSnap, bool) {
 		return sessionSnap{}, false
 	}
 	defer s.mu.Unlock()
-	if s.link == nil || s.peer == nil || !s.readyFor(s.id) || s.link.current() != s.peer || !s.link.Online() {
+	if s.link == nil || s.peer == nil || !s.readyFor(s.id) || s.link.current() != s.peer || !s.link.HeldHere() {
 		return sessionSnap{}, false
 	}
 	id, err := uuid.Parse(s.id)
@@ -568,6 +631,58 @@ type peerRelay struct {
 	mu       sync.Mutex
 	first    bool
 	toRunner map[uint32]uint32 // WebSocket stream id -> runner stream id
+	execs    map[uint32]bool   // runner exec stream ids an exec_stream on this socket opened, not yet closed
+}
+
+// peerExecCloseTimeout bounds each exec_close the holder sends for a socket that ended with execs still open.
+const peerExecCloseTimeout = 5 * time.Second
+
+// closeExecs sends exec_close on the pinned session for every exec this socket opened and did not close, so a
+// caller whose WebSocket dropped never leaves the runner holding its exec slots until it reconnects. A session
+// already replaced answers errOffline, and the runner frees them on its own then.
+func (r *peerRelay) closeExecs(ctx context.Context) {
+	r.mu.Lock()
+	open := make([]uint32, 0, len(r.execs))
+	for x := range r.execs {
+		open = append(open, x)
+	}
+	r.execs = nil
+	r.mu.Unlock()
+	for _, x := range open {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), peerExecCloseTimeout)
+		_ = r.pin.Call(cctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: x}, nil)
+		cancel()
+	}
+}
+
+// noteExec records an exec the runner opened for this socket, and forgets one whose exec_close returned.
+func (r *peerRelay) noteExec(method string, args, raw json.RawMessage) {
+	var x uint32
+	switch method {
+	case runnerwire.MethodExecStream:
+		var res runnerwire.ExecStreamResult
+		if json.Unmarshal(raw, &res) != nil || res.Exec == 0 {
+			return
+		}
+		x = res.Exec
+	case runnerwire.MethodExecClose:
+		var a runnerwire.ExecWaitArgs
+		if json.Unmarshal(args, &a) != nil {
+			return
+		}
+		r.mu.Lock()
+		delete(r.execs, a.Stream)
+		r.mu.Unlock()
+		return
+	default:
+		return
+	}
+	r.mu.Lock()
+	if r.execs == nil {
+		r.execs = map[uint32]bool{}
+	}
+	r.execs[x] = true
+	r.mu.Unlock()
 }
 
 // errPeerUnmappedStream refuses a peer call whose arguments name a stream the WebSocket did not open.
@@ -639,6 +754,7 @@ func (r *peerRelay) serveCall(ctx context.Context, id uint32, method string, arg
 	if err != nil {
 		return nil, err
 	}
+	r.noteExec(method, args, raw)
 	if len(raw) == 0 {
 		return peerReply{}, nil
 	}
@@ -744,67 +860,6 @@ func peerCopy(dst, src *runnerwire.Stream) {
 		return
 	}
 	_ = dst.CloseWrite()
-}
-
-// peerTouchEvery is how often the hub touches the holder rows of the sessions whose link is up.
-var peerTouchEvery = 10 * time.Second
-
-// claimHolder records this replica as the holder of the runner's new session. A failed claim is retried by the
-// next touch, which claims again for a session with no row.
-func (h *Hub) claimHolder(ctx context.Context, runnerID uuid.UUID, session string) {
-	sid, err := uuid.Parse(session)
-	if h.cfg.Peer == nil || err != nil {
-		return
-	}
-	_, _ = h.cfg.Peer.Claim(ctx, runnerID, sid)
-}
-
-// dropHolder deletes the ended session's row, only while it still names that session.
-func (h *Hub) dropHolder(runnerID uuid.UUID, session string) {
-	sid, err := uuid.Parse(session)
-	if h.cfg.Peer == nil || err != nil {
-		return
-	}
-	_ = h.cfg.Peer.Drop(h.ctx, runnerID, sid)
-}
-
-// peerLoop touches the holder rows of every session whose link is up, and claims again for one the touch did not
-// return (another replica's drop, or a restore deleted its row); the claim is still gated on the inventory session.
-// A session in its resume window with no link is not touched, so its row ages out of every route.
-func (h *Hub) peerLoop() {
-	t := time.NewTicker(peerTouchEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-h.ctx.Done():
-			return
-		case <-t.C:
-			h.touchHolders(h.ctx)
-		}
-	}
-}
-
-func (h *Hub) touchHolders(ctx context.Context) {
-	held := h.heldSessions()
-	if len(held) == 0 {
-		return
-	}
-	sessions := make([]uuid.UUID, 0, len(held))
-	for sid := range held {
-		sessions = append(sessions, sid)
-	}
-	tctx, cancel := context.WithTimeout(ctx, peerTouchEvery)
-	defer cancel()
-	touched, err := h.cfg.Peer.Touch(tctx, sessions)
-	if err != nil {
-		return
-	}
-	for _, sid := range touched {
-		delete(held, sid)
-	}
-	for sid, runnerID := range held {
-		_, _ = h.cfg.Peer.Claim(tctx, runnerID, sid)
-	}
 }
 
 // heldSessions is every session this hub holds with its link up, by session id, each read as one snapshot under

@@ -96,9 +96,18 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 		// replacing the session this call was made for, or an activity check, the resume timer or Close.
 		s.mu.Lock()
 	}
+	var revoked string // the session a REVOKED end drops the holder row of, once the slot is released
+	defer func() {
+		if revoked != "" {
+			h.dropHolder(id, revoked) // it never resumes: every new connection is checked against the stored row
+		}
+	}()
 	defer s.mu.Unlock()
 	if s.peer == nil || (only != nil && s.peer != only) || (session != "" && s.id != session) {
 		return nil
+	}
+	if kind == runnerwire.TypeRevoked {
+		revoked = s.id
 	}
 	s.readyID.Store(nil)
 	s.link.suspend(s.peer)

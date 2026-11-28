@@ -251,8 +251,9 @@ func (s *Server) produceRunnerRetirements(ctx context.Context) error {
 	}
 	var errs []error
 	for _, c := range candidates {
-		// An offline runner answers nothing; its runs wait for it to connect.
-		if !s.runnerEndpoint(c.RunnerID).link.Online() {
+		// Only the replica holding the runner's session steps its retirements (every replica runs this pass);
+		// an offline runner answers nothing, and its runs wait for it to connect.
+		if !s.runnerEndpoint(c.RunnerID).link.HeldHere() {
 			continue
 		}
 		if _, err := st.AdvanceRunnerRetirement(ctx, c.RunID, s.cfg.RunnerAuditPrepare); err != nil && !errors.Is(err, store.ErrNotFound) {

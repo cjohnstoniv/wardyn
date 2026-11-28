@@ -59,10 +59,8 @@ func (s *Server) folderRunner(ctx context.Context, owner string, id uuid.UUID) (
 	if err != nil || owner == "" || row.Owner != owner || row.OwnerKind == types.RunnerOwnerOrg || row.State != types.RunnerClaimed {
 		return nil, runError(http.StatusNotFound, reasonRunnerNotFound, "no runner of yours has that id")
 	}
-	s.runnerStreams.subsMu.Lock()
-	ep, live := s.runnerStreams.subs[id]
-	s.runnerStreams.subsMu.Unlock()
-	if !live || !s.runnerOnline(id) {
+	ep := s.runnerEndpoint(id) // the runner is claimed (above): its folder call goes through the Link, here or at its holder
+	if !s.runnerOnline(id) {
 		return nil, runError(http.StatusConflict, reasonComputerRunnerOffline,
 			fmt.Sprintf("%s is offline: start the runner on that computer, then try again", runnerLabel(row)))
 	}

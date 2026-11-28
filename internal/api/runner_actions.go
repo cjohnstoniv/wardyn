@@ -114,6 +114,9 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 		return ep
 	}
 	ep := runnerEndpoint{link: &remote.Link{}}
+	if p := s.runnerPeering(); p != nil {
+		ep.link.UsePeer(id, p.view, p.trans)
+	}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
@@ -138,7 +141,7 @@ func (s *Server) heldRunnerSessions() []uuid.UUID {
 	defer s.runnerStreams.subsMu.Unlock()
 	var held []uuid.UUID
 	for id, ep := range s.runnerStreams.subs {
-		if ep.link.Online() {
+		if ep.link.HeldHere() {
 			held = append(held, id)
 		}
 	}
@@ -180,6 +183,9 @@ func (s *Server) RegisterRunnerSubstrates(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return nil
+	}
+	if s.cfg.RunnerPeer != nil {
+		s.runnerHub(st) // its holder loop refreshes the view from boot, not from the first runner connection
 	}
 	runners, err := st.ListRunners(ctx)
 	if err != nil {

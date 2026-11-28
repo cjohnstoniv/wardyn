@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -17,15 +19,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // runnerPeering is the replica-to-replica routing of registered runners' calls under high availability: the
-// peer client and the hub's way to the holder record. One per Server, nil without RunnerPeer or a holder store.
+// peer client, the holder view every online answer reads, and the hub's way to the holder record. One per Server,
+// nil without RunnerPeer or a holder store.
 type runnerPeering struct {
 	cfg   remote.PeerConfig
 	self  string
 	st    store.RunnerHolderStore
 	trans *remote.PeerTransport
+	view  *remote.HolderView
+
+	mu   sync.Mutex
+	seen map[uuid.UUID]bool // the runners held here or in the view at routeHeldElsewhere's last call
 }
 
 func (s *Server) runnerPeering() *runnerPeering {
@@ -39,6 +47,18 @@ func (s *Server) runnerPeering() *runnerPeering {
 			r, ok, err := st.RunnerSessionHolder(ctx, runnerID)
 			return remote.PeerRoute{ReplicaID: r.ReplicaID, PeerURL: r.PeerURL, SessionID: r.SessionID}, ok, err
 		})
+		p.view = remote.NewHolderView(p.self, func(ctx context.Context) (map[uuid.UUID]remote.PeerRoute, error) {
+			rows, err := st.RunnerSessionHolders(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[uuid.UUID]remote.PeerRoute, len(rows))
+			for _, r := range rows {
+				out[r.RunnerID] = remote.PeerRoute{ReplicaID: r.ReplicaID, PeerURL: r.PeerURL, SessionID: r.SessionID}
+			}
+			return out, nil
+		})
+		p.view.OnRefresh = s.routeHeldElsewhere
 		s.peering.p = p
 	})
 	return s.peering.p
@@ -57,7 +77,109 @@ func (p *runnerPeering) Drop(ctx context.Context, runnerID, sessionID uuid.UUID)
 	return p.st.DropRunnerSessionHolder(ctx, runnerID, sessionID)
 }
 
+// Refresh reads the holder view again and, after a successful read, records this process's lease owner name
+// against this replica's id and address, so a run's watcher lease names a peer address.
+func (p *runnerPeering) Refresh(ctx context.Context) {
+	if p.view.Refresh(ctx) == nil {
+		_ = p.st.TouchRunnerPeerReplica(ctx, watcherOwner, p.self, p.cfg.URL)
+	}
+}
+
 var _ remote.PeerLoop = (*runnerPeering)(nil)
+
+// routeHeldElsewhere is the holder view's OnRefresh. It makes this replica's endpoint for each claimed runner whose
+// session another replica holds, so a runner claimed after this replica booted is routed here within one refresh
+// of its admission anywhere. It removes the endpoint of a runner that left both this replica's held sessions and
+// the view since the last call and is no longer claimed. No lock is held across a store read or an endpoint change.
+func (s *Server) routeHeldElsewhere(ctx context.Context, elsewhere []uuid.UUID) {
+	p := s.runnerPeering()
+	st, ok := s.cfg.Store.(store.RunnerStore)
+	if p == nil || !ok {
+		return
+	}
+	now := map[uuid.UUID]bool{}
+	for _, id := range s.heldRunnerSessions() {
+		now[id] = true
+	}
+	for _, id := range elsewhere {
+		now[id] = true
+		s.runnerStreams.subsMu.Lock()
+		_, routed := s.runnerStreams.subs[id]
+		s.runnerStreams.subsMu.Unlock()
+		if routed {
+			continue
+		}
+		if rn, err := st.GetRunner(ctx, id); err != nil || rn.State != types.RunnerClaimed {
+			continue
+		}
+		s.runnerEndpoint(id)
+		// A revoke that committed between the read and the endpoint has already unrouted the runner: undo it.
+		if rn, err := st.GetRunner(ctx, id); errors.Is(err, store.ErrNotFound) || (err == nil && rn.State != types.RunnerClaimed) {
+			s.unrouteRunner(id)
+		}
+	}
+	p.mu.Lock()
+	prev := p.seen
+	p.seen = now
+	p.mu.Unlock()
+	var retry []uuid.UUID
+	for id := range prev {
+		if now[id] {
+			continue
+		}
+		switch rn, err := st.GetRunner(ctx, id); {
+		case errors.Is(err, store.ErrNotFound) || (err == nil && rn.State != types.RunnerClaimed):
+			s.unrouteRunner(id)
+		case err != nil:
+			retry = append(retry, id) // read again at the next call
+		}
+	}
+	if len(retry) > 0 {
+		p.mu.Lock()
+		for _, id := range retry {
+			p.seen[id] = true
+		}
+		p.mu.Unlock()
+	}
+}
+
+// peerLeaseArgs is the door method lease's argument: the run and the execution generation its lease carries.
+type peerLeaseArgs struct {
+	RunID      uuid.UUID `json:"run_id"`
+	Generation uuid.UUID `json:"generation"`
+}
+
+// peerHolderAnswer answers a door method the holder serves from its own memory, for runnerID: caps from its own
+// Substrate, sending no frame to the runner, and lease by its own leaseSendable and send, on its own clock. The
+// lease send is this replica's only: it is never passed on to another replica.
+func (s *Server) peerHolderAnswer(runnerID uuid.UUID, method string) func(ctx context.Context, raw json.RawMessage) (any, error) {
+	return func(ctx context.Context, raw json.RawMessage) (any, error) {
+		if method == remote.PeerMethodCaps {
+			c, ok := s.runnerEndpoint(runnerID).sub.Caps()
+			return remote.PeerCaps{Caps: c, OK: ok}, nil
+		}
+		var a peerLeaseArgs
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		st, err := s.runnerExecutionStore()
+		if err != nil {
+			return nil, err
+		}
+		run, err := st.GetRun(ctx, a.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if run.RunnerID == nil || *run.RunnerID != runnerID {
+			return nil, errRunnerNotReady // a pin names one runner: a lease for another's run is never sent on it
+		}
+		renewed, err := s.leaseSendable(ctx, st, run)
+		if err != nil {
+			return nil, err
+		}
+		return nil, s.sendRunnerLeaseHere(ctx, run, a.Generation, renewed)
+	}
+}
 
 // peerState is the Server's peering value and the door's refusal counts.
 type peerState struct {
@@ -173,6 +295,12 @@ func (s *Server) handleRunnerPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow() //nolint:errcheck // the peer may already have closed it
+	if tok.Method == remote.PeerMethodCaps || tok.Method == remote.PeerMethodLease {
+		_ = hub.ServeHolderMethod(ctx, runnerwire.NewWebSocket(c), tok.Runner, tok.Session, tok.Method, s.peerHolderAnswer(tok.Runner, tok.Method), func(class string) {
+			s.notePeerRefusal(ctx, class)
+		})
+		return
+	}
 	_ = hub.ServePeer(ctx, runnerwire.NewWebSocket(c), tok.Runner, tok.Session, tok.Method, func(class string) {
 		s.notePeerRefusal(ctx, class)
 	})

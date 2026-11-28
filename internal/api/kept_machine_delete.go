@@ -93,15 +93,21 @@ func (s *Server) keptMachineRunner(ctx context.Context, id uuid.UUID) (types.Run
 // keptMachinesHeldHere reports whether this replica holds runnerID's session, online with caps that keep
 // machines, so kept_machine reaches the Mac from here. Another replica's sweep finishes the rest.
 func (s *Server) keptMachinesHeldHere(runnerID uuid.UUID) bool {
+	if !s.runnerHeldHere(runnerID) {
+		return false
+	}
 	caps, ok := s.runnerLastCaps(runnerID)
-	return ok && caps.MacOSVM != nil && caps.MacOSVM.KeptMachines && s.runnerOnline(runnerID)
+	return ok && caps.MacOSVM != nil && caps.MacOSVM.KeptMachines
 }
 
 // keptMachineInventory is the kept machines runnerID's last caps list, by id; ok only when this replica
 // holds the runner online and its caps carry an inventory.
 func (s *Server) keptMachineInventory(runnerID uuid.UUID) (map[string]runnerwire.MacVMKeptMachine, bool) {
+	if !s.runnerHeldHere(runnerID) {
+		return nil, false
+	}
 	caps, ok := s.runnerLastCaps(runnerID)
-	if !ok || !s.runnerOnline(runnerID) || caps.MacOSVM == nil || caps.MacOSVM.Kept == nil {
+	if !ok || caps.MacOSVM == nil || caps.MacOSVM.Kept == nil {
 		return nil, false
 	}
 	inv := map[string]runnerwire.MacVMKeptMachine{}

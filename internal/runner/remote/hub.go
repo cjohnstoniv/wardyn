@@ -92,7 +92,7 @@ type HubConfig struct {
 	// reaches it within one recheck. Nil, or an error, says false in AUTH_OK and ends no session.
 	DeviceCert func(context.Context) (bool, error)
 	// Peer, when set, records this replica as the holder of each session it admits, touches the rows of the
-	// sessions whose link is up every peerTouchEvery, and drops a session's row when the session ends.
+	// sessions whose link is up every second peerRefreshEvery, and drops a session's row when the session ends.
 	Peer PeerLoop
 }
 

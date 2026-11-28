@@ -282,7 +282,7 @@ func (f *peerFixture) otherReplica(t *testing.T) *remote.Link {
 		t.Fatal("the second replica has no peering")
 	}
 	l := &remote.Link{}
-	l.UsePeer(f.rn.ID, p.trans)
+	l.UsePeer(f.rn.ID, p.view, p.trans)
 	return l
 }
 
