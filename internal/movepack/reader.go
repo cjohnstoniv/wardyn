@@ -13,6 +13,7 @@ import (
 	"hash"
 	"io"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -163,6 +164,11 @@ func (r *Reader) wrap(err error, format string, args ...any) error {
 func (r *Reader) check(th *tar.Header) (Header, error) {
 	at := func(why string, args ...any) error {
 		return fmt.Errorf("%w: entry %d %q: %s", ErrArchiveRefused, r.index, th.Name, fmt.Sprintf(why, args...))
+	}
+	// checkPath below refuses the same names and more; this states the archive-path check in the
+	// standard form, before the name is used for anything.
+	if !filepath.IsLocal(th.Name) {
+		return Header{}, at("not a path inside the archive's root")
 	}
 	pax := 0
 	for k, v := range th.PAXRecords {
