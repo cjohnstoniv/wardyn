@@ -57,6 +57,14 @@ func TestMoveExec_RunnerBoundTables(t *testing.T) {
 		t.Run(c.table, func(t *testing.T) {
 			f := newMovePGFixture(t, nil)
 			rid := f.onSourceRunner(t)
+			if c.sql == "" {
+				// The runner action queue binds only a ref of the run's runner, as a laptop run's is.
+				if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET sandbox_ref = $2 WHERE id = $1`,
+					f.run.ID, "runner:"+rid.String()+"/ref-src"); err != nil {
+					t.Fatal(err)
+				}
+				f.run = f.current(t)
+			}
 			f.mr.onImport = func() {
 				var err error
 				if c.sql == "" {
