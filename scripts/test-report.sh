@@ -79,9 +79,14 @@ mkdir -p "$OUT"
 QUARANTINE_FILE="${WARDYN_GO_QUARANTINE:-$ROOT/test/go-quarantine.txt}"
 quarantine_validate "$QUARANTINE_FILE" "$(date -u +%F)" >&2 || exit 1
 QUARANTINED="$(awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { for (i = 1; i <= 5; i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1 " " $2 " " $3 " " $4 " until " $5 }' "$QUARANTINE_FILE")"
+# WARDYN_TEST_REPORT_SKIP: a space-separated list of test names the caller runs elsewhere (a job of its own);
+# each goes through the same escape-and-anchor as a quarantine entry and is skipped the same way, with a banner.
+SKIP_NAMES=()
+read -ra SKIP_NAMES <<<"${WARDYN_TEST_REPORT_SKIP:-}"
 SKIP_ARGS=()
-if [ -n "$QUARANTINED" ]; then
-  SKIP_RE="$(awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' "$QUARANTINE_FILE" \
+if [ -n "$QUARANTINED" ] || [ "${#SKIP_NAMES[@]}" -gt 0 ]; then
+  SKIP_RE="$({ awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' "$QUARANTINE_FILE"
+      [ "${#SKIP_NAMES[@]}" -eq 0 ] || printf '%s\n' "${SKIP_NAMES[@]}"; } \
     | while IFS= read -r name; do
         out=""
         IFS=/ read -ra parts <<<"$name"
@@ -91,8 +96,14 @@ if [ -n "$QUARANTINED" ]; then
         printf '%s|' "${out#/}"
       done)"
   SKIP_ARGS=(-skip "${SKIP_RE%|}")
+fi
+if [ -n "$QUARANTINED" ]; then
   echo ">> QUARANTINED, skipped by go test -skip (fix the test and delete the line, ${QUARANTINE_FILE#"$ROOT"/}):"
   printf '>>   %s\n' "$QUARANTINED"
+fi
+if [ "${#SKIP_NAMES[@]}" -gt 0 ]; then
+  echo ">> SKIPPED by WARDYN_TEST_REPORT_SKIP, run by another job:"
+  printf '>>   %s\n' "${SKIP_NAMES[@]}"
 fi
 
 echo ">> running suite '$SUITE': go test -json $(echo "${PKGS[*]}" | cut -c1-300)"
@@ -164,6 +175,10 @@ else
   done
   awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); if ($2 !~ /\//) print $2 }' \
     "$QUARANTINE_FILE" > "$OUT/split-skipped.list"
+  # A name skipped through WARDYN_TEST_REPORT_SKIP is absent on purpose, as a quarantined one is.
+  for name in ${SKIP_NAMES[@]+"${SKIP_NAMES[@]}"}; do
+    case "$name" in */*) ;; *) echo "$name" >> "$OUT/split-skipped.list" ;; esac
+  done
   split_pairs=()
   for i in $(seq 1 "$SPLIT_N"); do split_pairs+=("$OUT/split-$i.list,$OUT/split-$i.json"); done
   echo ">> $SPLIT_PKG as $SPLIT_N slices of $(basename "$SPLIT_BIN")"

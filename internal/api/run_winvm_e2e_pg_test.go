@@ -154,13 +154,17 @@ func TestPG_QueuedWindowsRunEndedByItsStart(t *testing.T) {
 	}
 	e.winvmSite(false)
 	e.free(occupant)
-	e.eventually("the queued Windows run to end", func() bool { return e.run(queued.ID).State == types.RunFailed })
+	startFailed := func(ev types.AuditEvent) bool {
+		return ev.RunID != nil && *ev.RunID == queued.ID && ev.Action == "run.queue.start" && ev.Outcome == "failure"
+	}
+	// The start ends the run before it writes its failure row, so wait for both.
+	e.eventually("the queued Windows run to end", func() bool {
+		return e.run(queued.ID).State == types.RunFailed && e.auditCount(startFailed) > 0
+	})
 	if n := windowsLeaseCount(t, e.pool, queued.ID); n != 0 {
 		t.Errorf("the ended run still holds %d seats", n)
 	}
-	if got := e.auditCount(func(ev types.AuditEvent) bool {
-		return ev.RunID != nil && *ev.RunID == queued.ID && ev.Action == "run.queue.start" && ev.Outcome == "failure"
-	}); got != 1 {
+	if got := e.auditCount(startFailed); got != 1 {
 		t.Errorf("run.queue.start failure rows = %d, want 1; audit: %s", got, auditDump(e.h.audit.snapshot(), queued.ID))
 	}
 }
