@@ -45,7 +45,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-type runnerLeaseFixture struct {
+// runnerProcess is one registered runner's process, composed as wardyn-runnerd composes it over a fake substrate, and
+// the replica it connects to.
+type runnerProcess struct {
 	ctx     context.Context
 	st      store.PG
 	srv     *Server
@@ -60,7 +62,6 @@ type runnerLeaseFixture struct {
 	oldRunner atomic.Bool
 	// disconnect ends the current session.
 	disconnect context.CancelFunc
-	h          *harness
 	// sub is the substrate the runner serves: the fake, with calls that can be made to hang.
 	sub *stallingSub
 	// leaseEnds is the end of the last LEASE the runner accepted for each run.
@@ -78,6 +79,11 @@ type runnerLeaseFixture struct {
 	// oldCaps makes the runner's caps event omit retire, as a runner older
 	// than 0.9.3 sends it.
 	oldCaps atomic.Bool
+}
+
+type runnerLeaseFixture struct {
+	*runnerProcess
+	h *harness
 	// execOutput, when set, is the org's sink for each create's output.
 	execOutput io.Writer
 	// skew is added to the server's clock; cancelBase ends the server's base context.
@@ -194,16 +200,7 @@ func newRunnerLeaseFixture(t *testing.T, shape ...func(*Config)) *runnerLeaseFix
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	t.Cleanup(cancel)
 	st := store.NewPG(throwawayPGPool(t))
-	pub, key, _ := ed25519.GenerateKey(rand.Reader)
-	id := uuid.New()
-	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "lease-owner", Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
-		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rn, err = st.ClaimRunner(ctx, rn.ID, rn.Owner, rn.KeyFingerprint, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	rn, key := claimedLeaseRunner(t, ctx, st)
 	if _, err := st.PutSiteConfig(ctx, types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +222,49 @@ func newRunnerLeaseFixture(t *testing.T, shape ...func(*Config)) *runnerLeaseFix
 	for _, sh := range shape {
 		sh(&cfg)
 	}
-	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h, leaseEnds: map[uuid.UUID]time.Time{},
-		skew: skew, cancelBase: cancelBase}
+	f := &runnerLeaseFixture{runnerProcess: runnerProcessFor(t, ctx, st, New(cfg), rn, key), h: h, skew: skew, cancelBase: cancelBase}
+	f.disconnect = f.connect(t)
+	return f
+}
+
+// registeredLeaseRunner registers a runner of the fixture's owner; it is not claimed.
+func registeredLeaseRunner(t *testing.T, ctx context.Context, st store.PG) (types.Runner, ed25519.PrivateKey) {
+	t.Helper()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	id := uuid.New()
+	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "lease-owner", Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rn, key
+}
+
+// claimedLeaseRunner registers a runner of the fixture's owner and claims it.
+func claimedLeaseRunner(t *testing.T, ctx context.Context, st store.PG) (types.Runner, ed25519.PrivateKey) {
+	t.Helper()
+	rn, key := registeredLeaseRunner(t, ctx, st)
+	var err error
+	if rn, err = st.ClaimRunner(ctx, rn.ID, rn.Owner, rn.KeyFingerprint, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return rn, key
+}
+
+// newRunnerSide is a second registered, claimed runner of the same owner, connected to srv and ready.
+func newRunnerSide(t *testing.T, ctx context.Context, st store.PG, srv *Server) *runnerProcess {
+	t.Helper()
+	rn, key := claimedLeaseRunner(t, ctx, st)
+	f := runnerProcessFor(t, ctx, st, srv, rn, key)
+	f.disconnect = f.connect(t)
+	return f
+}
+
+// runnerProcessFor is runner rn's process, signed with key, set to connect to srv; it is not connected yet.
+func runnerProcessFor(t *testing.T, ctx context.Context, st store.PG, srv *Server, rn types.Runner, key ed25519.PrivateKey) *runnerProcess {
+	t.Helper()
+	id := rn.ID
+	f := &runnerProcess{ctx: ctx, st: st, srv: srv, rn: rn, fake: runnertest.NewFake(), leaseEnds: map[uuid.UUID]time.Time{}}
 	f.sub = &stallingSub{Fake: f.fake, release: make(chan struct{})}
 	t.Cleanup(func() { close(f.sub.release) })
 
@@ -307,17 +345,22 @@ func newRunnerLeaseFixture(t *testing.T, shape ...func(*Config)) *runnerLeaseFix
 		Online:        func(peer *runnerwire.Peer, _ bool) { m.Online(peer); streams.Online(peer) },
 		StreamOffline: streams.Offline,
 	}
-	f.disconnect = f.connect(t)
 	return f
 }
 
 // connect opens a fresh session of the runner (a new runner process's first connection, with the same
 // state directory) and waits until it is READY. The returned func ends the session.
-func (f *runnerLeaseFixture) connect(t *testing.T) context.CancelFunc {
+func (f *runnerProcess) connect(t *testing.T) context.CancelFunc {
+	t.Helper()
+	return f.connectTo(t, f.srv)
+}
+
+// connectTo is connect to srv's hub, which then holds the session.
+func (f *runnerProcess) connectTo(t *testing.T, srv *Server) context.CancelFunc {
 	t.Helper()
 	ctx, cancel := context.WithCancel(f.ctx)
 	t.Cleanup(cancel)
-	hub := f.srv.runnerHub(f.st)
+	hub := srv.runnerHub(f.st)
 	done := make(chan struct{})
 	var serves sync.WaitGroup // the hub's Serve goroutines this session's dials started
 	id := f.rn.ID
@@ -351,7 +394,7 @@ func (f *runnerLeaseFixture) connect(t *testing.T) context.CancelFunc {
 			t.Errorf("the hub's side of the session had not ended 10s after its session was cancelled")
 		}
 	})
-	ep := f.srv.runnerEndpoint(id)
+	ep := srv.runnerEndpoint(id)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		if _, ok := ep.sub.Caps(); ok && ep.link.Online() {
 			return cancel
