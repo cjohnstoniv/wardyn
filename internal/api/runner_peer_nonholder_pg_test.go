@@ -234,11 +234,21 @@ func onlineFrom(srv *atomic.Pointer[Server]) func(*Config) {
 	}
 }
 
-// nonHolder is a second replica on f's database that does not hold the runner's session: its own orchestrator,
-// audit, watcher lease owner, peer config and door, with its holder loop running, so its view is read every 5 s.
-// With boot it makes an endpoint for each claimed runner as a booting replica does (RegisterRunnerSubstrates);
-// without, it has none until a view refresh routes the runner.
-func (f *peerFixture) nonHolder(t *testing.T, boot bool) *Server {
+// nonHolder is a second replica on f's database that does not hold the runner's session, booted as a replica
+// boots (RegisterRunnerSubstrates): an endpoint for each claimed runner, and its holder loop running, so its view
+// is read at once and then every 5 s.
+func (f *peerFixture) nonHolder(t *testing.T) *Server {
+	t.Helper()
+	b := f.replicaServer(t)
+	if err := b.RegisterRunnerSubstrates(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// replicaServer is a second server on f's database: its own orchestrator, audit, watcher lease owner, peer config
+// and door. Its holder loop is not started.
+func (f *peerFixture) replicaServer(t *testing.T) *Server {
 	t.Helper()
 	cfg := f.srv.cfg
 	cfg.Runner = orchestrator.New(runnertest.NewFake())
@@ -251,13 +261,6 @@ func (f *peerFixture) nonHolder(t *testing.T, boot bool) *Server {
 	b.owner = "replica-b/" + uuid.NewString()
 	self.Store(b)
 	serveDoor(t, b, pc)
-	if boot {
-		if err := b.RegisterRunnerSubstrates(f.ctx); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		b.runnerHub(f.st)
-	}
 	return b
 }
 
@@ -298,7 +301,7 @@ func TestOnlineSameOnEveryReplica_PG(t *testing.T) {
 	f := newPeerFixture(t, onlineFrom(&a))
 	a.Store(f.srv)
 	f.waitHolder(t, f.session(t))
-	b := f.nonHolder(t, true)
+	b := f.nonHolder(t)
 	all := [3]bool{true, true, true}
 	peerWithin(t, 6*time.Second, "the holder and the other replica both read the runner online", func() bool {
 		return f.onlineAnswers(t, f.srv) == all && f.onlineAnswers(t, b) == all
@@ -326,7 +329,7 @@ func TestExecFromNonHolderReplica_PG(t *testing.T) {
 	s := f.session(t)
 	f.waitHolder(t, s)
 	run := f.placedOnHolder(t)
-	b := f.nonHolder(t, true)
+	b := f.nonHolder(t)
 	peerWithin(t, 6*time.Second, "the other replica reads the runner online", func() bool { return b.RunnerOnline(f.rn.ID) })
 	ctx, cancel := context.WithTimeout(f.ctx, 20*time.Second)
 	defer cancel()
@@ -356,7 +359,7 @@ func TestAttachStreamFromNonHolderReplica_PG(t *testing.T) {
 	f := newPeerFixture(t)
 	f.waitHolder(t, f.session(t))
 	run := f.placedOnHolder(t)
-	b := f.nonHolder(t, true)
+	b := f.nonHolder(t)
 	peerWithin(t, 6*time.Second, "the other replica reads the runner online", func() bool { return b.RunnerOnline(f.rn.ID) })
 	ctx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
 	defer cancel()
@@ -407,10 +410,34 @@ func capsAnswers(ctx context.Context, srv *Server, id uuid.UUID) (string, bool) 
 func TestRunnerClaimedAfterBootRoutedOnNonHolderReplica_PG(t *testing.T) {
 	f := newPeerFixture(t)
 	f.waitHolder(t, f.session(t))
-	b := f.nonHolder(t, false)
-	if hasEndpoint(b, f.rn.ID) {
-		t.Fatal("the other replica made an endpoint for the runner before its view routed it")
+	// The runner leaves: no session, and no holder row, before the other replica starts.
+	f.disconnect()
+	peerWithin(t, 10*time.Second, "the holder's link to the runner is down", func() bool {
+		return !f.srv.runnerEndpoint(f.rn.ID).link.HeldHere()
+	})
+	if _, err := f.st.Pool.Exec(f.ctx, `DELETE FROM runner_session_holders WHERE runner_id=$1`, f.rn.ID); err != nil {
+		t.Fatal(err)
 	}
+
+	// The other replica starts with no endpoint for it, and its first refresh finds no holder row.
+	b := f.replicaServer(t)
+	var refreshes atomic.Int32
+	pb := b.runnerPeering()
+	route := pb.view.OnRefresh
+	pb.view.OnRefresh = func(ctx context.Context, elsewhere []uuid.UUID) {
+		route(ctx, elsewhere)
+		refreshes.Add(1)
+	}
+	b.runnerHub(f.st) // its holder loop: the first refresh at once, then every 5 s
+	peerWithin(t, 5*time.Second, "the other replica's first refresh", func() bool { return refreshes.Load() >= 1 })
+	if _, ok := pb.view.Holder(f.rn.ID); ok || hasEndpoint(b, f.rn.ID) {
+		t.Fatal("the other replica routed a runner with no holder row")
+	}
+	initial := refreshes.Load()
+
+	// The runner is admitted on the holder after the other replica's start.
+	f.disconnect = f.connect(t)
+	f.waitHolder(t, f.session(t))
 
 	// A second runner, revoked in the store, whose holder row names the holder.
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
@@ -434,7 +461,9 @@ func TestRunnerClaimedAfterBootRoutedOnNonHolderReplica_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	peerWithin(t, 6*time.Second, "the other replica routes the runner claimed after it booted", func() bool { return hasEndpoint(b, f.rn.ID) })
+	peerWithin(t, 6*time.Second, "a refresh after the admission routes the runner on the other replica", func() bool {
+		return hasEndpoint(b, f.rn.ID) && refreshes.Load() > initial
+	})
 	want, ok := capsAnswers(f.ctx, f.srv, f.rn.ID)
 	if !ok {
 		t.Fatal("the holder has no caps for its runner")
@@ -472,7 +501,7 @@ func TestRevokedRunnerUnroutedOnNonHolderReplica_PG(t *testing.T) {
 	t.Run("a session that only ended keeps its endpoints, a revoke on the holder removes them", func(t *testing.T) {
 		f := newPeerFixture(t)
 		f.waitHolder(t, f.session(t))
-		b := f.nonHolder(t, true)
+		b := f.nonHolder(t)
 		peerWithin(t, 6*time.Second, "the other replica routes the runner", func() bool { return hasEndpoint(b, f.rn.ID) && b.RunnerOnline(f.rn.ID) })
 		f.disconnect()
 		peerWithin(t, 6*time.Second, "the other replica reads the ended session offline", func() bool { return !b.RunnerOnline(f.rn.ID) })
@@ -488,7 +517,7 @@ func TestRevokedRunnerUnroutedOnNonHolderReplica_PG(t *testing.T) {
 	t.Run("a revoke through the other replica removes both", func(t *testing.T) {
 		f := newPeerFixture(t)
 		f.waitHolder(t, f.session(t))
-		b := f.nonHolder(t, true)
+		b := f.nonHolder(t)
 		peerWithin(t, 6*time.Second, "the other replica routes the runner", func() bool { return hasEndpoint(b, f.rn.ID) && b.RunnerOnline(f.rn.ID) })
 		revokeAndWait(t, f, b, 21*time.Second, f.srv, b)
 	})
@@ -499,7 +528,7 @@ func TestRevokedRunnerUnroutedOnNonHolderReplica_PG(t *testing.T) {
 func TestPeerOutputLeaseTwoStampers_PG(t *testing.T) {
 	f := newPeerFixture(t)
 	f.waitHolder(t, f.session(t))
-	b := f.nonHolder(t, true)
+	b := f.nonHolder(t)
 	pa, pb := f.srv.runnerPeering(), b.runnerPeering()
 	peerWithin(t, 6*time.Second, "the other replica's view names the holder", func() bool {
 		h, ok := pb.view.Holder(f.rn.ID)
