@@ -42,16 +42,22 @@ func TestDriverIsNoMoveStateSubstrate(t *testing.T) {
 }
 
 // An export refuses a carried root with no kept claim mounted at or under it: its files live only in the agent pod's
-// own filesystem, which the helper cannot read, so the stream would silently lack them.
+// own filesystem, which the helper cannot read, so the stream would silently lack them. The run is of a revived agent, as
+// dispatch labels every real run, so the export gets past keptSandbox to the roots.
 func TestMoveExport_RefusesRootWithoutClaim(t *testing.T) {
-	k, cs, _, ref := keptRun(t)
+	d, cs, _ := keepRig(t, Config{AgentSandboxKeep: true})
+	sb, err := d.CreateSandbox(context.Background(), claudeKeptSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	k, ref := &keepDriver{Driver: d}, sb.Ref
 	for _, name := range []string{proxyPodName(asRunID), agentPodName(asRunID)} {
 		if err := cs.Tracker().Delete(podsGVR, testNamespace, name); err != nil && !isNotFound(err) {
 			t.Fatal(err)
 		}
 	}
 	set := runner.CarriedSet{Roots: []string{runner.ScratchWorkPath, "/home/agent/elsewhere"}}
-	_, err := k.ExportState(context.Background(), ref, set)
+	_, err = k.ExportState(context.Background(), ref, set)
 	if err == nil || !strings.Contains(err.Error(), "the carried root /home/agent/elsewhere") {
 		t.Fatalf("ExportState = %v, want the refusal naming /home/agent/elsewhere", err)
 	}
