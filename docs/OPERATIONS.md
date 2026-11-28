@@ -430,10 +430,10 @@ vols=$(docker volume ls -q) &&
   { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.found" ||
   { echo "STOP: the drive volumes could not be listed"; exit 1; }
 #    A volume is copied when its wardyn.drive label is one of this
-#    installation's drive ids, read from its postgres, which still runs, or
-#    when you answer yes for it below.
+#    installation's drive ids, read from its postgres, which still runs, and
+#    no other installation shares them, or when you answer yes for it below.
 ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-  "SELECT id FROM user_drives") || { echo "STOP: this installation's drives could not be read"; exit 1; }
+  "SELECT id FROM user_drives" < /dev/null) || { echo "STOP: this installation's drives could not be read"; exit 1; }
 #    A volume is this installation's only when its label is, as a whole, one
 #    of those ids, and no other installation on the host shares them; every
 #    other one is HELD and settled, one by one, before anything is copied.
@@ -508,6 +508,8 @@ done 3< "$B/drives.list"
 #    label is not exactly one of this installation's drive ids (another
 #    installation's, a drive deleted here, one with no label or a malformed
 #    one) is HELD, and the script asks about each before anything is copied.
+#    A drive deleted here has nothing to restore into, and its volume stops
+#    the restore: answer no for it.
 #    When another installation runs from a copy of this database, or you
 #    cannot tell, every drive volume is held, its label included. Answer from
 #    the volume names this installation itself reports, noted before you run
