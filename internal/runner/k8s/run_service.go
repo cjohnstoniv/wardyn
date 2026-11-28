@@ -23,10 +23,10 @@ import (
 
 // runService makes the run's Service, with no selector, and its EndpointSlice, empty, in server mode: the agent pins
 // the Service's ClusterIP from its create, and the slice names the proxy pod once that pod has its IP
-// (pointRunService). Runner mode makes neither and returns nil: its agent pins the proxy pod's IP, after the relay
-// fence has passed it.
+// (pointRunService). Runner mode, and a server with WARDYN_K8S_RUN_SERVICE off, make neither and return nil: the agent
+// then pins the proxy pod's IP once that pod is Ready, after a runner's relay fence has passed it.
 func (d *Driver) runService(ctx context.Context, ns string, runID uuid.UUID, labels map[string]string) (*corev1.Service, error) {
-	if d.runnerMode() {
+	if d.runnerMode() || d.cfg.RunServiceOff {
 		return nil, nil
 	}
 	svc, err := d.createKeepService(ctx, ns, runID, labels)

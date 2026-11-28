@@ -426,13 +426,17 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 	// as gone, or cannot be read at all: a Role that lacks every per-run Service verb (k8s.rbac.create=false, not yet
 	// updated) made no Service either. A Service that is still there keeps the NetworkPolicies. What this leaves: a
 	// Role that may create Services but may neither delete nor get them leaves the Service unfound by the sweep, and an
-	// EndpointSlice whose delete is refused after its Service went is left behind, routing nothing.
-	if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
-		if d.keepOn() || !apierrors.IsForbidden(err) || d.runServiceRemains(ctx, ns, runID) {
-			return fmt.Errorf("k8s: teardown: %w", err)
+	// EndpointSlice whose delete is refused after its Service went is left behind, routing nothing. A server with
+	// WARDYN_K8S_RUN_SERVICE off made no Service and may hold none of these verbs, so it asks for nothing here; one
+	// switched off while runs still had a Service leaves those behind.
+	if d.runnerMode() || !d.cfg.RunServiceOff {
+		if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
+			if d.keepOn() || !apierrors.IsForbidden(err) || d.runServiceRemains(ctx, ns, runID) {
+				return fmt.Errorf("k8s: teardown: %w", err)
+			}
+			slog.Warn("wardynd: k8s substrate: teardown could not delete the run's Service or EndpointSlices: the runs Role lacks the per-run Service verbs",
+				slog.String("namespace", ns), slog.String("run_id", runID.String()), slog.String("error", err.Error()))
 		}
-		slog.Warn("wardynd: k8s substrate: teardown could not delete the run's Service or EndpointSlices: the runs Role lacks the per-run Service verbs",
-			slog.String("namespace", ns), slog.String("run_id", runID.String()), slog.String("error", err.Error()))
 	}
 	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)

@@ -38,10 +38,14 @@ var runAddressAccess = []authzv1.ResourceAttributes{
 	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "deletecollection"},
 }
 
-// checkAgentSandboxKeep refuses the keep switch without the agent-sandbox backend.
+// checkAgentSandboxKeep refuses the keep switch without the agent-sandbox backend, or without the run's own Service, which
+// a kept run reaches its proxy through.
 func checkAgentSandboxKeep(cfg Config) error {
 	if cfg.AgentSandboxKeep && !cfg.AgentSandbox {
 		return errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_AGENT_SANDBOX on")
+	}
+	if cfg.AgentSandboxKeep && cfg.RunServiceOff {
+		return errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_KEEP needs WARDYN_K8S_RUN_SERVICE on, since a kept run reaches its proxy through its own Service")
 	}
 	return nil
 }

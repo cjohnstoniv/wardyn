@@ -119,6 +119,10 @@ type Config struct {
 	// work folder is a kept drive is kept and can be revived, and such a run reaches its proxy through its own Service
 	// (agentsandbox_keep.go).
 	AgentSandboxKeep bool
+	// RunServiceOff is WARDYN_K8S_RUN_SERVICE=off (server mode; default on): no run gets its own Service or
+	// EndpointSlice, so the runs Role needs neither. The agent pod starts after its proxy pod is Ready and pins that
+	// pod's IP, as a runner's does. Keep needs the Service (checkAgentSandboxKeep). The zero value keeps the Service.
+	RunServiceOff bool
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
 	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
 	// production; an error refuses the run.
