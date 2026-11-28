@@ -320,7 +320,7 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 		}
 	}
 	if !recovered(run, "b", "b1", true) {
-		t.Fatal("the adopter's first append wrote nothing")
+		t.Fatal("the recovery's first append wrote nothing")
 	}
 	if ch := read(run); string(ch.Bytes) != "b1" || ch.Truncated || !ch.Recovered {
 		t.Fatalf("after the first recovered append: %q truncated=%v recovered=%v, want only b1, not truncated, recovered", ch.Bytes, ch.Truncated, ch.Recovered)
@@ -329,10 +329,10 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 		t.Fatal("the launcher's append wrote over a recovery's chunks")
 	}
 	if !recovered(run, "b", "b2", false) {
-		t.Fatal("the adopter's next append wrote nothing")
+		t.Fatal("the recovery's next append wrote nothing")
 	}
 	if ch, reps := read(run), chunkReplicas(t, pool, run); string(ch.Bytes) != "b1b2" || len(reps) != 2 || reps[0] != "recovered:b" || reps[1] != "recovered:b" {
-		t.Fatalf("the adopter's chunks: %q on %v, want b1b2 on recovered:b", ch.Bytes, reps)
+		t.Fatalf("the recovery's chunks: %q on %v, want b1b2 on recovered:b", ch.Bytes, reps)
 	}
 	if !other(run, "") || other(run, "b") {
 		t.Fatal("RecoveredRunOutputChunks: want true for any recovery and false for b's own")
@@ -348,7 +348,7 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 		t.Fatal("the later adoption's first append wrote nothing")
 	}
 	if recovered(run, "b", "b3", false) {
-		t.Fatal("the superseded adopter's append wrote")
+		t.Fatal("the superseded recovery's append wrote")
 	}
 	if ch := read(run); string(ch.Bytes) != "c1" {
 		t.Fatalf("after the superseded append: %q, want c1", ch.Bytes)
@@ -357,7 +357,7 @@ func TestPeerAdoptReplacesRunOutputChunks_PG(t *testing.T) {
 		t.Fatal("RecoveredRunOutputChunks after the supersession: want true for b and false for c")
 	}
 	if !recovered(run, "c", "c2", false) || string(read(run).Bytes) != "c1c2" {
-		t.Fatal("the later adopter's next append did not write")
+		t.Fatal("the later recovery's next append did not write")
 	}
 
 	// After the final row every append writes nothing.
@@ -398,7 +398,7 @@ func TestPeerLauncherAppendKeepsRecoveredChunks_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	if wrote, err := st.AppendRecoveredRunOutputChunk(ctx, r.ID, "b", []byte("r"), keep, true); err != nil || !wrote {
-		t.Fatalf("the adopter's short write: %v %v", wrote, err)
+		t.Fatalf("the recovery's short write: %v %v", wrote, err)
 	}
 	wrote, err := st.AppendRunOutputChunk(ctx, r.ID, "a", bytes.Repeat([]byte("x"), keep), keep)
 	if err != nil {

@@ -424,8 +424,8 @@ func TestPeerUncoveredGapSkipsRecoveredChunks(t *testing.T) {
 	})
 }
 
-// R23j: a dead adopter's recovered chunks serve another replica's live read only while the run runs, and never
-// become the row.
+// R23j: the recovered chunks of a replica that took the run over and died serve another replica's live read only
+// while the run runs, and never become the row.
 func TestPeerDeadAdopterChunksNeverTheRow(t *testing.T) {
 	f, ps, rr := peerOutputFixture(t)
 	b := New(f.srv.cfg) // replica B: same store, no tail for the run
@@ -450,7 +450,7 @@ func TestPeerDeadAdopterChunksNeverTheRow(t *testing.T) {
 	b.recoverRunOutput(t.Context(), ps, run, "stale_pending")
 	b.finishRunOutput(t.Context(), run.ID)
 	if c := ps.chunkedSaves(); c != 0 {
-		t.Fatalf("SaveChunkedRunOutput ran %d times on a dead adopter's chunks", c)
+		t.Fatalf("SaveChunkedRunOutput ran %d times on a dead replica's recovered chunks", c)
 	}
 	for _, d := range miscCovFinalizeData(t, f) {
 		if d["from_chunks"] == true {
