@@ -1174,11 +1174,14 @@ func TestPlacementLocalRunFromNonHolderReplicaAdopted_PG(t *testing.T) {
 			run.ID, "recovered:"+f.srv.replicaName(), []byte(part2)).Scan(&n)
 		return err == nil && n > 0
 	})
+	// Part 3 has its own 1 s from its write: the adoption deadline covers only the yield and parts 1 and 2, and A's
+	// waits above may run past it.
 	part3 := "part 3 " + uuid.NewString() + "\n"
+	part3By := time.Now().Add(time.Second)
 	if _, err := io.WriteString(heldOutput(t, f.fake, run.ID), part3); err != nil {
 		t.Fatal(err)
 	}
-	peerWithin(t, time.Second, "B reads part 1 to part 3 once each, in order", func() bool {
+	peerBy(t, part3By, "B reads part 1 to part 3 once each, in order", func() bool {
 		o := outputVia(t, b, run)
 		return o.Output == part1+part2+part3 && !o.CaptureGap && !o.Incomplete
 	})
