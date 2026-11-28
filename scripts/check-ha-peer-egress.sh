@@ -8,10 +8,13 @@
 # port internal: the runner peer door. Exit 1 otherwise. helm-lint runs it on the ha.enabled render (rc 0) and on the
 # render without it (rc 1). `check-ha-peer-egress.sh --self-test` runs it on fixed fixtures.
 set -euo pipefail
-die() { echo "check-ha-peer-egress: $*" >&2; exit 2; }
-for tool in yq jq; do
-  command -v "$tool" >/dev/null || die "$tool is required (yq must be Mike Farah v4)"
-done
+# A missing or wrong tool exits 1 with its name before any parse, never a parse error and never a pass.
+tool() { echo "check-ha-peer-egress: $*" >&2; exit 1; }
+command -v jq >/dev/null || tool "jq is missing"
+command -v yq >/dev/null || tool "yq is missing (want mikefarah yq version v4)"
+yqv=$(yq --version 2>&1) || tool "yq --version failed (want mikefarah yq version v4)"
+case $yqv in *mikefarah*) ;; *) tool "yq is not mikefarah yq: $yqv";; esac
+case $yqv in *"version v4"*) ;; *) tool "yq is not version v4: $yqv";; esac
 
 check() {
   yq eval-all -o=json '[select(.kind == "NetworkPolicy")]' - | jq -e '
