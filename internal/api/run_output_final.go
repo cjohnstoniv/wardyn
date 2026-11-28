@@ -513,8 +513,8 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 		lateSince := e.late && !wrote
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
-		if rep.Replaced {
-			s.auditOutputFinalize(ctx, row.RunID, map[string]any{"replaced_incomplete": true})
+		if as := s.repairAudits(); rep.Replaced && as != nil {
+			s.deliverRepairAudit(ctx, as, rep.Owed) // owed since the commit: a sweep sends what this does not
 		}
 		if lateSince {
 			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
@@ -701,7 +701,8 @@ func withFinalizeStep(data map[string]any) map[string]any {
 // SweepRunOutputs is one pass of the retention sweeper: it deletes final rows
 // older than the retention window and the live chunks of runs that ended
 // before it, gives chunks that have no row the pending row they were owed
-// (adoptOrphanChunks), then resolves the pending rows of terminal runs whose
+// (adoptOrphanChunks), sends the audit events replacements of incomplete rows
+// still owe (settleRepairAudits), then resolves the pending rows of terminal runs whose
 // claim went stale to capture-gap rows (when persistence is on, the only time
 // pending rows are written). A tail this process still holds is the
 // finisher's own, and is left alone.
@@ -735,6 +736,9 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 		return firstErr
 	}
 	if err := s.adoptOrphanChunks(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := s.settleRepairAudits(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if err := s.sweepStalePending(ctx, st); err != nil {

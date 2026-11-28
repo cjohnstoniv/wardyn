@@ -196,18 +196,56 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, o.RunID); err != nil {
 			return err
 		}
-		if rep, ok := ctx.Value(replacedIncompleteKey{}).(*ReplacedIncomplete); ok && partial {
-			rep.Replaced = true // only the complete-over-incomplete arm matches a final row that was incomplete
+		if !partial {
+			return nil
+		}
+		// Only the complete-over-incomplete arm matches a final row that was incomplete. Its audit event is owed in
+		// the same transaction, under a fixed id and time, so a stop after the commit cannot lose it.
+		owed := RunOutputRepairAudit{EventID: uuid.New(), RunID: o.RunID}
+		if err := tx.QueryRow(ctx, `INSERT INTO run_output_repair_audits (event_id, run_id, event_at) VALUES ($1, $2, now()) RETURNING event_at`,
+			owed.EventID, owed.RunID).Scan(&owed.EventAt); err != nil {
+			return err
+		}
+		if rep, ok := ctx.Value(replacedIncompleteKey{}).(*ReplacedIncomplete); ok {
+			rep.Replaced, rep.Owed = true, owed
 		}
 		return nil
 	})
 }
 
+// RunOutputRepairAudit is the run.output.finalize event a replacement of an incomplete row owes: its id and time
+// are fixed when the replacement commits, so every delivery of it is the same event.
+type RunOutputRepairAudit struct {
+	EventID uuid.UUID
+	RunID   uuid.UUID
+	EventAt time.Time
+}
+
+// OwedRunOutputRepairAudits returns up to limit owed repair events, oldest first.
+func (s PG) OwedRunOutputRepairAudits(ctx context.Context, limit int) ([]RunOutputRepairAudit, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT event_id, run_id, event_at FROM run_output_repair_audits ORDER BY event_at, event_id LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (RunOutputRepairAudit, error) {
+		var a RunOutputRepairAudit
+		err := r.Scan(&a.EventID, &a.RunID, &a.EventAt)
+		return a, err
+	})
+}
+
+// SettleRunOutputRepairAudit removes an owed repair event once its audit row is durably accepted.
+func (s PG) SettleRunOutputRepairAudit(ctx context.Context, eventID uuid.UUID) error {
+	_, err := s.Pool.Exec(ctx, `DELETE FROM run_output_repair_audits WHERE event_id = $1`, eventID)
+	return err
+}
+
 // ReplacedIncomplete is set by SaveFinalRunOutput when its write replaced an incomplete stdout row an earlier
-// finaliser of the run wrote. CapturedAt is the stamp of the row it wrote (zero when it wrote none): the revision a
-// later MarkRunOutputIncomplete for this capture names.
+// finaliser of the run wrote; Owed is the audit event that replacement owes. CapturedAt is the stamp of the row it
+// wrote (zero when it wrote none): the revision a later MarkRunOutputIncomplete for this capture names.
 type ReplacedIncomplete struct {
 	Replaced   bool
+	Owed       RunOutputRepairAudit
 	CapturedAt time.Time
 }
 

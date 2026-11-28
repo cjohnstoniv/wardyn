@@ -14,10 +14,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0429_runner_session_holders` grants `SELECT, INSERT, UPDATE, DELETE` on
-  `runner_session_holders` and `runner_peer_replicas` to every role that was granted `UPDATE` on `runner_inventories`,
-  other than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new
-  tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on both tables as soon as the
-  migration has run.
+  `runner_session_holders`, `runner_peer_replicas` and `run_output_repair_audits` to every role that was granted `UPDATE`
+  on `runner_inventories`, other than that table's owner. If the app role is not one of those roles or a member of one,
+  and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the
+  three tables as soon as the migration has run.
 
 ### Before you upgrade
 

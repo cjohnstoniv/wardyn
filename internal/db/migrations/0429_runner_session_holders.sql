@@ -6,9 +6,11 @@
 -- refreshes seen_at every 10 seconds while the link is up, and deletes the row when the session ends. A row older
 -- than 30 seconds is never routed to. runner_peer_replicas maps each server process's watcher lease owner to its
 -- replica and internal address, so a runner's output can reach the process that holds the run's watcher lease. Each
--- process upserts its own row; rows unseen for a day are deleted. Expand-only: two new tables, nothing changed.
+-- process upserts its own row; rows unseen for a day are deleted. run_output_repair_audits holds the audit event a
+-- complete output row owes when it replaced an incomplete one, written in the replacement's transaction under a
+-- fixed id and time and deleted once the event is accepted. Expand-only: three new tables, nothing changed.
 --
--- The app role is granted both tables here, found from the catalog and never by name: every role but the owner
+-- The app role is granted the tables here, found from the catalog and never by name: every role but the owner
 -- that holds UPDATE on runner_inventories, which the runner hub writes, gets SELECT, INSERT, UPDATE and DELETE.
 CREATE TABLE IF NOT EXISTS runner_session_holders (
     runner_id  uuid PRIMARY KEY REFERENCES runners(id) ON DELETE CASCADE,
@@ -25,6 +27,12 @@ CREATE TABLE IF NOT EXISTS runner_peer_replicas (
     seen_at     timestamptz NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS run_output_repair_audits (
+    event_id uuid PRIMARY KEY,
+    run_id   uuid NOT NULL,
+    event_at timestamptz NOT NULL
+);
+
 DO $mig$
 DECLARE
     r record;
@@ -37,7 +45,7 @@ BEGIN
          WHERE c.oid = 'runner_inventories'::regclass
            AND a.privilege_type = 'UPDATE' AND a.grantee <> c.relowner
     LOOP
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON runner_session_holders, runner_peer_replicas TO %I', r.rolname);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON runner_session_holders, runner_peer_replicas, run_output_repair_audits TO %I', r.rolname);
     END LOOP;
 END
 $mig$;
