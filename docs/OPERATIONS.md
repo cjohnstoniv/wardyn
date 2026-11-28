@@ -670,17 +670,22 @@ fi
 #    volume to anyone but its owner: put it back exactly as recorded, and never
 #    work out a value from whoever holds the drive and home now.
 [ -f "$B/drives.list" ] || { echo "STOP: $B has no drives.list: see below"; exit 1; }
+ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+  "SELECT id FROM user_drives" < /dev/null) || { echo "STOP: the restored database's drives could not be read"; exit 1; }
 h=
 while IFS= read -r v <&3; do
   f="$v.tar.gz"; l="$B/$v.labels"
   [ -f "$B/$f" ] || { echo "STOP: $f is missing"; exit 1; }
-  id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null || true)
-  [ ! -e "$B/$v.unresolved" ] && grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
-    printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
+  id=$(sed -n 's/^wardyn\.drive=//p' "$l" 2>/dev/null || true)
+  case "$id" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) id= ;;
+  esac
+  [ ! -e "$B/$v.unresolved" ] && [ -n "$id" ] && grep -qxF 'wardyn.managed=true' "$l" && grep -q '^wardyn\.home=.' "$l" ||
     { echo "HOLD: $f has no usable label record: see below"; h=1; continue; }
-  docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
-    psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
-    grep -qx 1 || { echo "STOP: the restored database has no drive $id"; exit 1; }
+  own=
+  for i in $ids; do [ "$i" != "$id" ] || own=1; done
+  [ -n "$own" ] || { echo "STOP: the restored database has no drive $id"; exit 1; }
   if docker volume inspect "$v" >/dev/null 2>&1; then
     echo "SKIP: $v already exists: see below"; h=1; continue
   fi
@@ -696,10 +701,11 @@ while IFS= read -r v <&3; do
     { echo "STOP: $v is not restored"; exit 1; }
 done 3< "$B/drives.list"
 [ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run step 5's loop and 5b-6 by hand"; exit 1; }
-#    A .labels record holds the labels its volume is made with again, one per
-#    line: --label wardyn.managed=true, --label wardyn.drive=<drive id>,
-#    --label wardyn.home=<home>, and --label wardyn.subject=<hash> where the
-#    volume had one, for every wardyn-drive-* and wardyn-portal-* volume.
+#    A .labels record holds one key=value line per label its volume had:
+#    wardyn.managed=true, wardyn.drive=<drive id>, wardyn.home=<home>, and
+#    wardyn.subject=<hash> where it had one. The loop passes each line back to
+#    docker volume create as a --label, for every wardyn-drive-* and
+#    wardyn-portal-* volume.
 #    Every file comes from the one directory step 3's dump came from: files
 #    from two backup attempts must never both go into a volume. The loop restores
 #    exactly the volumes drives.list names and stops on any missing

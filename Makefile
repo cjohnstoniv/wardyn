@@ -785,6 +785,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-multiarch-staged-refusal.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
+	./scripts/test-ops-drive-restore.sh
 	./scripts/test-overlay-proof.sh
 	./scripts/test-rekey-fingerprint-check.sh
 	./scripts/test-release-check.sh
