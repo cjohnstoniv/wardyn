@@ -1592,3 +1592,52 @@ func TestPeerOutputSinkCheckDeadlineAtAcquireFreesSlot(t *testing.T) {
 		t.Fatalf("after passes that each met their deadline: %d slots held, %d reads; want every slot free and no read", held, reads.Load())
 	}
 }
+
+// Two runners' Substrates on one process's slots hold sinkCheckReads lease reads in flight between them, not that
+// many each, and a sink of either is read again once the held reads return.
+func TestPeerOutputSinkCheckSlotsSharedAcrossRunners(t *testing.T) {
+	ctx := t.Context()
+	const every = 100 * time.Millisecond
+	release := make(chan struct{})
+	var inFlight, peak atomic.Int32
+	lease := func(_ context.Context, _ uuid.UUID) (bool, bool, error) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		<-release // ignores its context
+		return false, false, nil
+	}
+	slots := NewSinkCheckReads()
+	var ya, yb yieldLog
+	a, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: ya.yielded, OutputSinkCheck: every, SinkCheckReads: slots}, nil)
+	b, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: yb.yielded, OutputSinkCheck: every, SinkCheckReads: slots}, nil)
+	var runs []uuid.UUID
+	for i := range sinkCheckReads {
+		ra, rb := uuid.New(), uuid.New()
+		runs = append(runs, ra, rb)
+		addSink(t, a, ra, "runner:a/"+strconv.Itoa(i), newEndBuf(), "")
+		addSink(t, b, rb, "runner:b/"+strconv.Itoa(i), newEndBuf(), "")
+	}
+	waitUntil(t, "every slot is held", func() bool { return len(slots) == sinkCheckReads })
+	time.Sleep(every*2 + every/2) // two more passes of each runner find every slot held
+	if p := peak.Load(); p > sinkCheckReads {
+		t.Fatalf("%d lease reads in flight across two runners, want at most %d", p, sinkCheckReads)
+	}
+	close(release)
+	waitUntil(t, "every sink of both runners yields", func() bool {
+		for i, run := range runs {
+			y := &yb
+			if i%2 == 0 {
+				y = &ya
+			}
+			if !y.has(run) {
+				return false
+			}
+		}
+		return true
+	})
+	if p := peak.Load(); p > sinkCheckReads {
+		t.Fatalf("%d lease reads in flight across two runners, want at most %d", p, sinkCheckReads)
+	}
+}

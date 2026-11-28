@@ -103,6 +103,10 @@ type Options struct {
 	OutputYielded func(run uuid.UUID)
 	// OutputSinkCheck is the sink check's period; zero is outputSinkCheck.
 	OutputSinkCheck time.Duration
+	// SinkCheckReads is the sink checks' lease read slots, made by NewSinkCheckReads and shared by every Substrate
+	// of the process, so N runners hold at most sinkCheckReads store connections, not N times that. Nil gives this
+	// Substrate slots of its own.
+	SinkCheckReads chan struct{}
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)

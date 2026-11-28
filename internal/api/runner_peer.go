@@ -32,6 +32,7 @@ type runnerPeering struct {
 	st    store.RunnerHolderStore
 	trans *remote.PeerTransport
 	view  *remote.HolderView
+	reads chan struct{} // the sink checks' lease read slots, shared by every runner's Substrate
 
 	mu   sync.Mutex
 	seen map[uuid.UUID]bool // the runners held here or in the view at routeHeldElsewhere's last call
@@ -43,7 +44,7 @@ func (s *Server) runnerPeering() *runnerPeering {
 		if s.cfg.RunnerPeer == nil || !ok {
 			return
 		}
-		p := &runnerPeering{cfg: *s.cfg.RunnerPeer, self: s.replicaName(), owner: s.leaseOwner, st: st}
+		p := &runnerPeering{cfg: *s.cfg.RunnerPeer, self: s.replicaName(), owner: s.leaseOwner, st: st, reads: remote.NewSinkCheckReads()}
 		p.trans = remote.NewPeerTransport(p.cfg, p.self, func(ctx context.Context, runnerID uuid.UUID) (remote.PeerRoute, bool, error) {
 			r, ok, err := st.RunnerSessionHolder(ctx, runnerID)
 			return remote.PeerRoute{ReplicaID: r.ReplicaID, PeerURL: r.PeerURL, SessionID: r.SessionID}, ok, err

@@ -644,9 +644,14 @@ func (s *Substrate) checkedSinksLocked() []checkedSink {
 	return out
 }
 
-// sinkCheckReads bounds the sink checks' lease reads in flight on one Substrate, stragglers of earlier passes
-// included: a slow read delays no other sink, and the checks hold at most this many store connections.
+// sinkCheckReads bounds the sink checks' lease reads in flight, stragglers of earlier passes included: a slow read
+// delays no other sink, and the checks hold at most this many store connections. There is one remote Substrate
+// per runner (the api's runnerEndpoint), so the slots are the process's (Options.SinkCheckReads), shared by every
+// runner: 8 of the pool's connections, whose default is db.DefaultPoolMaxConns (10) or the CPU count if larger.
 const sinkCheckReads = 8
+
+// NewSinkCheckReads is the process's sink check read slots, for Options.SinkCheckReads.
+func NewSinkCheckReads() chan struct{} { return make(chan struct{}, sinkCheckReads) }
 
 // checkSinks applies the lease rule to every sink under the check: one the rule does not keep yields. For a sink
 // it keeps on a runner whose session this replica does not hold, it counts the time with nothing attached while the
@@ -654,7 +659,7 @@ const sinkCheckReads = 8
 // holds the run's lease fresh. A failed read keeps the sink and starts no recovery. It answers how many sinks it
 // found under the check.
 //
-// The reads run concurrently on the Substrate's sinkCheckReads slots, under one deadline of one check interval for
+// The reads run concurrently on the process's sinkCheckReads slots, under one deadline of one check interval for
 // the whole pass, and each sink is handled as soon as its own read answers; the pass returns at its deadline. A
 // read not answered by then is cancelled and its sink kept as it was, with no yield, no recovery and no change to
 // its stall count. A read that has not returned keeps its slot, and its sink is not read again until it does, so
@@ -666,7 +671,10 @@ func (s *Substrate) checkSinks(ctx context.Context) int {
 	sinks := s.checkedSinksLocked()
 	from := s.sinkNext
 	if s.readSlot == nil {
-		s.readSlot = make(chan struct{}, sinkCheckReads)
+		s.readSlot = s.opts.SinkCheckReads
+	}
+	if s.readSlot == nil {
+		s.readSlot = NewSinkCheckReads()
 	}
 	slots := s.readSlot
 	s.mu.Unlock()

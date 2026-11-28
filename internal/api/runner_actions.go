@@ -126,7 +126,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 		// A runner's output open with no sink here goes to the run's launcher, and a launcher's sink yields to
 		// the holder's adoption: the yield frees this process's tail first.
 		opts.RunOutputLauncher, opts.OutputLease = p.outputLauncher, p.outputLease(id, ep.link)
-		opts.OutputYielded, opts.OutputSinkCheck = s.fenceRunOutput, s.cfg.RunnerOutputSinkCheck
+		opts.OutputYielded, opts.OutputSinkCheck, opts.SinkCheckReads = s.fenceRunOutput, s.cfg.RunnerOutputSinkCheck, p.reads
 	}
 	ep.sub = remote.New(id.String(), ep.link, opts)
 	if s.runnerStreams.subs == nil {
