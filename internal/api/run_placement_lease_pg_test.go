@@ -79,6 +79,28 @@ type runnerProcess struct {
 	// oldCaps makes the runner's caps event omit retire, as a runner older
 	// than 0.9.3 sends it.
 	oldCaps atomic.Bool
+	// observe, when set before a connect, sees every frame of that session at the runner: in from the org,
+	// or out to it.
+	observe func(in bool, fr runnerwire.Frame)
+}
+
+// observedConn is the runner's end of a session, showing each frame to see.
+type observedConn struct {
+	runnerwire.Conn
+	see func(in bool, fr runnerwire.Frame)
+}
+
+func (c observedConn) ReadFrame(ctx context.Context) (runnerwire.Frame, error) {
+	fr, err := c.Conn.ReadFrame(ctx)
+	if err == nil {
+		c.see(true, fr)
+	}
+	return fr, err
+}
+
+func (c observedConn) WriteFrame(ctx context.Context, fr runnerwire.Frame) error {
+	c.see(false, fr)
+	return c.Conn.WriteFrame(ctx, fr)
 }
 
 type runnerLeaseFixture struct {
@@ -364,6 +386,7 @@ func (f *runnerProcess) connectTo(t *testing.T, srv *Server) context.CancelFunc 
 	done := make(chan struct{})
 	var serves sync.WaitGroup // the hub's Serve goroutines this session's dials started
 	id := f.rn.ID
+	observe := f.observe
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: admissionOrgURL, RunnerID: id.String(), PrivateKey: f.key, Hooks: f.hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {
 			org, run := runnerwire.Loopback()
@@ -372,6 +395,9 @@ func (f *runnerProcess) connectTo(t *testing.T, srv *Server) context.CancelFunc 
 				defer serves.Done()
 				_ = hub.Serve(ctx, org, id)
 			}()
+			if observe != nil {
+				return observedConn{Conn: run, see: observe}, nil
+			}
 			return run, nil
 		}})
 	if err != nil {

@@ -1055,3 +1055,111 @@ func TestThreeReplicasOutputFollowsRunnerMove_PG(t *testing.T) {
 		t.Fatalf("launch to last assertion took %v, want under 90s", d)
 	}
 }
+
+// outputStreams records, at the runner, the output streams it opens for each run and the ones the org reset as
+// refused.
+type outputStreams struct {
+	mu      sync.Mutex
+	opened  map[string][]uint32 // by Open target, in order
+	refused map[uint32]bool
+}
+
+func (o *outputStreams) see(in bool, fr runnerwire.Frame) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	switch {
+	case !in && fr.Type == runnerwire.TypeOpen:
+		var op runnerwire.Open
+		if runnerwire.Unmarshal(fr.Payload, &op) == nil && op.Kind == runnerwire.KindOutput {
+			o.opened[op.Target] = append(o.opened[op.Target], fr.Stream)
+		}
+	case in && fr.Type == runnerwire.TypeReset:
+		if code, err := runnerwire.DecodeReset(fr.Payload); err == nil && code == runnerwire.ResetRefused {
+			o.refused[fr.Stream] = true
+		}
+	}
+}
+
+// firstRefused reports whether the first output stream the runner opened for target was reset as refused.
+func (o *outputStreams) firstRefused(target string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ids := o.opened[target]
+	return len(ids) > 0 && o.refused[ids[0]]
+}
+
+// R16c: a Placement-local task run launched on B, which has no completion watcher, is adopted by the holder once its
+// lease ages out: B's sink yields within one sink check, the runner sees its old stream refused, A holds the live
+// capture, and B reads the stored chunks with each part once.
+func TestPlacementLocalRunFromNonHolderReplicaAdopted_PG(t *testing.T) {
+	f := newPeerFixture(t)
+	f.waitHolder(t, f.session(t))
+	streams := &outputStreams{opened: map[string][]uint32{}, refused: map[uint32]bool{}}
+	f.disconnect()
+	f.observe = streams.see
+	f.disconnect = f.connect(t)
+	f.waitHolder(t, f.session(t))
+	b := f.replicaServer(t, func(c *Config) { c.RunnerOutputSinkCheck = 50 * time.Millisecond })
+	if err := b.RegisterRunnerSubstrates(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	holdOutput(t, f.fake)
+	peerWithin(t, 6*time.Second, "B reads the runner online", func() bool { return b.RunnerOnline(f.rn.ID) })
+
+	run, stop := launchVia(t, b, f.runnerProcess)
+	stop() // B's dispatch hold ends when the launch returns
+	part1 := "agent output of " + run.SandboxRef + "\n"
+	peerWithin(t, 10*time.Second, "part 1 is read through B", func() bool { return outputVia(t, b, run).Output == part1 })
+
+	// The lease ages out and A's sweep claims and adopts the run.
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET watcher_heartbeat = now() - interval '91 seconds' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.sweepRunWatchers(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	peerWithin(t, 10*time.Second, "A holds the run's lease", func() bool {
+		var owner *string
+		err := f.st.Pool.QueryRow(f.ctx, `SELECT watcher_owner FROM agent_runs WHERE id = $1`, run.ID).Scan(&owner)
+		return err == nil && owner != nil && *owner == f.srv.leaseOwner()
+	})
+	part2 := "part 2 after the adoption " + uuid.NewString() + "\n"
+	if _, err := io.WriteString(heldOutput(t, f.fake, run.ID), part2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Within one sink check B yields: no sink, no tail; the runner's old stream was refused; A's live capture holds
+	// the post-adoption part, and A stored it as its recovery's chunk.
+	peerWithin(t, time.Second, "B's sink and tail are gone and the runner saw its old stream refused", func() bool {
+		_, tail := tailText(b, run.ID)
+		return !tail && !servable(f.ctx, b, f.rn.ID, run.ID) && streams.firstRefused(run.ID.String())
+	})
+	yielded := time.Now()
+	peerWithin(t, 5*time.Second, "A's tail holds the part written after the adoption", func() bool {
+		text, ok := tailText(f.srv, run.ID)
+		return ok && strings.Contains(text, part2)
+	})
+	peerWithin(t, 5*time.Second, "A stored the post-adoption part as its recovery's chunk", func() bool {
+		var n int
+		err := f.st.Pool.QueryRow(f.ctx, `SELECT count(*) FROM run_output_chunks WHERE run_id = $1 AND replica = $2 AND position($3::bytea in bytes_masked) > 0`,
+			run.ID, "recovered:"+f.srv.replicaName(), []byte(part2)).Scan(&n)
+		return err == nil && n > 0
+	})
+
+	// B, with no tail, answers from the chunks.
+	peerWithin(t, time.Second-time.Since(yielded), "B reads part 1 then part 2 from the chunks", func() bool {
+		return outputVia(t, b, run).Output == part1+part2
+	})
+	part3 := "part 3 " + uuid.NewString() + "\n"
+	if _, err := io.WriteString(heldOutput(t, f.fake, run.ID), part3); err != nil {
+		t.Fatal(err)
+	}
+	peerWithin(t, time.Second, "B reads part 1 to part 3 once each, in order", func() bool {
+		o := outputVia(t, b, run)
+		return o.Output == part1+part2+part3 && !o.CaptureGap && !o.Incomplete
+	})
+	ch, err := f.st.ReadRunOutputChunks(f.ctx, run.ID, 1<<20)
+	if err != nil || string(ch.Bytes) != part1+part2+part3 {
+		t.Fatalf("stored chunks %q (%v), want part 1 to part 3 byte for byte", ch.Bytes, err)
+	}
+}
