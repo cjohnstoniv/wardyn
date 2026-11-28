@@ -781,6 +781,11 @@ jobs:
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
+          # The 70-minute outage walk cannot fit this suite's 40-minute go timeout or this job's 45 minutes, so the
+          # job outage-recover-docker-weekly runs it. It is never started here, so it never reaches its
+          # testfloor.Mark("outage-recover-docker"), and the "docker" floor is unchanged. Skipping a test marked
+          # "docker" this way would correctly turn that floor red.
+          WARDYN_TEST_REPORT_SKIP: TestOutageRecover_ServerDocker_Docker
           # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
           # its starting-heap boost. It cannot hold a compile below its live heap.
           GOMEMLIMIT: "10GiB"
@@ -3468,6 +3473,97 @@ jobs:
           path: |
             test/reports/e2e/cp-outage-weekly.log
             local/evidence/cp-outage-walk-weekly/**
+          if-no-files-found: error
+
+  # TestOutageRecover_ServerDocker_Docker (internal/api, -tags docker): a real control-plane outage of 70 minutes on the
+  # Docker driver. docker-tagged-live skips it (WARDYN_TEST_REPORT_SKIP) because its go timeout and job limit are shorter.
+  # Same schedule and exemption as cp-outage-weekly: not a candidate gate until a scheduled green.
+  outage-recover-docker-weekly:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    # Not yet measured: 130m go timeout plus about 25m api -tags docker compile, image builds, swap and disk.
+    timeout-minutes: 180
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - name: Run on Sundays (UTC), or on any dispatch
+        id: day
+        env:
+          EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$(date -u +%u)" = 7 ]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not Sunday (UTC): the weekly docker outage walk does not run today."
+          fi
+      - name: Free disk for the images
+        if: steps.day.outputs.run == '1'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.day.outputs.run == '1'
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
+        if: steps.day.outputs.run == '1'
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(busybox:1\.38|postgres:17)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: steps.day.outputs.run == '1'
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        if: steps.day.outputs.run == '1'
+        with:
+          suite: docker
+      # The api -tags docker compile peaks near 13 GB; the same swap as docker-tagged-live.
+      - name: Add swap for the api compile
+        if: steps.day.outputs.run == '1'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      - name: Build conformance agent image (busybox, wardyn-rec and an idle agent-run, the runs' agent)
+        if: steps.day.outputs.run == '1'
+        run: make build-conformance-agent-image
+      - name: Docker outage-recovery walk (70-minute outage, two runs)
+        if: steps.day.outputs.run == '1'
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p test/reports/e2e
+          go test -tags docker -count=1 -timeout 130m -run '^TestOutageRecover_ServerDocker_Docker$' -v ./internal/api/ 2>&1 | tee test/reports/e2e/outage-recover-docker.log
+          codes=("${PIPESTATUS[@]}")
+          echo "WALK_EXIT=${codes[0]}" >> "$GITHUB_ENV"
+          if [ "${codes[1]}" != "0" ]; then
+            echo "::error::tee failed (exit ${codes[1]}): the log is incomplete"
+            exit 1
+          fi
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        if: steps.day.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/outage-recover-docker.log
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::the docker outage walk exited ${WALK_EXIT:-<unset>}: see the uploaded log"
+            exit 1
+          fi
+          grep -q '^--- PASS: TestOutageRecover_ServerDocker_Docker ' "$log" || { echo "::error::the top-level test never reported PASS (a skip, or no run)"; exit 1; }
+      - name: Upload walk evidence
+        if: always() && steps.day.outputs.run == '1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: outage-recover-docker-results
+          path: test/reports/e2e/outage-recover-docker.log
           if-no-files-found: error
 
   notify-new-lanes:

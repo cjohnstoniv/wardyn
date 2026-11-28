@@ -69,15 +69,22 @@ const (
 // Everything it uses it owns and removes: its own Postgres container (wardyn-outage-pg-<tag>), its own networks,
 // its allowed-host httpd, and the proxy, agent and per-run network of each run, found by the deployment label
 // the driver stamps (the name of the test's control-plane network). It never touches the resident compose stack.
-// Needs busybox:latest and postgres:17 (pulled when absent); the proxy and the agent are busybox, the proxy with
-// the binary built here. It runs for about WARDYN_OUTAGE_STOP_MIN plus up to 25 minutes for each run's first
-// renew, so give it -timeout 120m.
+// Needs busybox:latest and postgres:17 (pulled when absent), and wardyn/conformance-agent:local, which `make
+// build-conformance-agent-image` builds: both runs are interactive, so the container starts `agent-run --idle`, which
+// that image (busybox with an idle agent-run) has and plain busybox lacks. The proxy is busybox with the binary built
+// here. It runs for about WARDYN_OUTAGE_STOP_MIN plus up to 25 minutes for each run's first renew, so give it
+// -timeout 130m. The nightly's outage-recover-docker-weekly job runs it; the docker-tagged-live suite skips it.
 func TestOutageRecover_ServerDocker_Docker(t *testing.T) {
 	testfloor.Mark(t, "outage-recover-docker")
 	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
 		t.Skip("WARDYN_TEST_DOCKER=1 not set; skipping the live outage recovery walk")
 	}
 	stopMin := ordStopMinutes(t)
+	// Never a skip: a missing image would hide the walk this test exists for.
+	const agentImage = "wardyn/conformance-agent:local"
+	if out, err := exec.Command("docker", "image", "inspect", agentImage).CombinedOutput(); err != nil {
+		t.Fatalf("the agent image %s is absent (run `make build-conformance-agent-image`): %v\n%s", agentImage, err, out)
+	}
 	tag := uuid.NewString()[:8]
 	ctx := context.Background()
 
@@ -157,7 +164,7 @@ func TestOutageRecover_ServerDocker_Docker(t *testing.T) {
 	cfg.Secrets = sec
 	cfg.Audit = store.Recorder{Pool: pool}
 	cfg.Runner = orchestrator.New(sub).WithRefStore(pg)
-	cfg.AgentImages = map[string]string{"claude-code": "busybox:latest"}
+	cfg.AgentImages = map[string]string{"claude-code": agentImage}
 	cfg.StoreHealth = health
 	cfg.ControlPlaneURL = "https://" + ordControlHost + ":" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
 	cfg.ControlPlaneCAPEM = string(ca.CertPEM)

@@ -80,6 +80,24 @@ grep -q '"Action":"pass","Package":"fixture","Test":"TestSub/good"' "${json}" ||
 grep -q '"Test":"TestSub/bad"' "${json}" && fail "TestSub/bad ran although quarantined"
 ok "a valid entry skips exactly the named test (and subtest), the rest run, the summary names them"
 
+# WARDYN_TEST_REPORT_SKIP: test names a caller runs in a job of its own, skipped like a quarantined name.
+log="$(WARDYN_TEST_REPORT_SKIP="TestFlaky TestSub/bad" run_report "${tmp}/none.txt")" || fail "SKIP alone: the named failing tests are skipped, so the suite should pass, got: ${log}"
+grep -q "SKIPPED by WARDYN_TEST_REPORT_SKIP" <<<"${log}" && grep -q ">>   TestFlaky" <<<"${log}" && grep -q ">>   TestSub/bad" <<<"${log}" || fail "SKIP alone: the banner does not name both tests: ${log}"
+grep -q "QUARANTINED" <<<"${log}" && fail "SKIP alone: a quarantine banner was printed: ${log}"
+grep -q '"Test":"TestFlaky"' "${json}" && fail "SKIP alone: TestFlaky ran although skipped"
+grep -q '"Test":"TestSub/bad"' "${json}" && fail "SKIP alone: TestSub/bad ran although skipped"
+grep -q '"Action":"pass","Package":"fixture","Test":"TestKeep"' "${json}" || fail "SKIP alone: TestKeep did not run"
+grep -q '"Action":"pass","Package":"fixture","Test":"TestSub/good"' "${json}" || fail "SKIP alone: TestSub/good did not run"
+ok "WARDYN_TEST_REPORT_SKIP alone: skips exactly the named tests and subtests, prints its banner, the rest run"
+
+log="$(WARDYN_TEST_REPORT_SKIP="TestKeep" run_report "${tmp}/valid.txt")" || fail "SKIP with a quarantine: the suite should pass, got: ${log}"
+grep -q "fixture TestFlaky #12" <<<"${log}" && grep -q ">>   TestKeep" <<<"${log}" || fail "SKIP with a quarantine: a banner is missing: ${log}"
+for t in TestFlaky TestKeep TestSub/bad; do
+  grep -q "\"Test\":\"${t}\"" "${json}" && fail "SKIP with a quarantine: ${t} ran although skipped"
+done
+grep -q '"Action":"pass","Package":"fixture","Test":"TestSub/good"' "${json}" || fail "SKIP with a quarantine: TestSub/good did not run"
+ok "WARDYN_TEST_REPORT_SKIP composed with a quarantine: both lists are skipped, both banners print"
+
 # ── PG test selection ────────────────────────────────────────────────────────
 mkdir "${tmp}/s"
 cat > "${tmp}/s/go.mod" <<'MOD'
@@ -385,6 +403,15 @@ want_names="$(printf '%s\n' TestAaOne TestAbTwo TestBaThree TestBbFour TestCaFiv
 [ "$(cat "${sp_out}"/split-[123].list | sort)" = "${want_names}" ] || fail "split: the slices' lists are not the 8 names: $(cat "${sp_out}"/split-[123].list | sort | tr '\n' ' ')"
 ls "${sp_out}"/split-*.json >/dev/null 2>&1 && fail "split: a split-*.json is left in the report directory"
 ok "split: every test runs once in one slice"
+
+log="$(WARDYN_TEST_REPORT_SKIP=TestBbFour sp_run "${tmp}/split.test" 0 "${tmp}/spq.txt" ./...)" || fail "split: a name skipped through WARDYN_TEST_REPORT_SKIP must count as absent on purpose, got: ${log}"
+grep -qF ">> split: 3 slices, 8 names listed, 6 ran once, 2 quarantined" <<<"${log}" || fail "split: SKIP: no summary line with 6 ran once in: ${log}"
+grep -q ">>   TestBbFour" <<<"${log}" || fail "split: SKIP: the banner does not name TestBbFour: ${log}"
+for t in TestBbFour TestDaQuarantined; do
+  grep -q "\"Test\":\"${t}\"" "${sp_out}/test-output.json" && fail "split: SKIP: ${t} ran although skipped"
+done
+[ "$(sp_count pass TestAaOne)" = 1 ] && [ "$(sp_count pass TestCaFive)" = 1 ] || fail "split: SKIP: the other tests did not run once"
+ok "split: WARDYN_TEST_REPORT_SKIP composed with a quarantine skips the name and the slice check counts it absent on purpose"
 
 mk_wrapper drop <<'EOF2'
 args=("$@")
