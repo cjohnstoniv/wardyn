@@ -701,11 +701,12 @@ func withFinalizeStep(data map[string]any) map[string]any {
 // SweepRunOutputs is one pass of the retention sweeper: it deletes final rows
 // older than the retention window and the live chunks of runs that ended
 // before it, gives chunks that have no row the pending row they were owed
-// (adoptOrphanChunks), sends the audit events replacements of incomplete rows
-// still owe (settleRepairAudits), then resolves the pending rows of terminal runs whose
+// (adoptOrphanChunks), then resolves the pending rows of terminal runs whose
 // claim went stale to capture-gap rows (when persistence is on, the only time
 // pending rows are written). A tail this process still holds is the
 // finisher's own, and is left alone.
+// Every pass, persistence on or off, sends the audit events replacements of
+// incomplete rows still owe (settleRepairAudits).
 func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	st, _ := s.cfg.Store.(store.RunOutputStore)
 	if st == nil {
@@ -732,13 +733,14 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	// Owed before a restart that turned persistence off, an event is still owed.
+	if err := s.settleRepairAudits(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	if s.cfg.RunOutputPersistOff {
 		return firstErr
 	}
 	if err := s.adoptOrphanChunks(ctx, st); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := s.settleRepairAudits(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if err := s.sweepStalePending(ctx, st); err != nil {

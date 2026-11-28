@@ -116,3 +116,25 @@ func TestRepairAuditStaysOwedWhileRefused_PG(t *testing.T) {
 		t.Fatalf("owed after the accepted append: %v %v, want none", left, err)
 	}
 }
+
+// A repair committed by one server whose audit append never ran is sent by the next server's sweeps even with
+// capture persistence off: two passes of SweepRunOutputs record exactly one event, with the id the repair fixed.
+func TestRepairAuditSentAfterARestartWithPersistenceOff_PG(t *testing.T) {
+	l := newMaskLab(t)
+	run := l.run()
+	st := store.NewPG(l.pool)
+	owed := replacedOwing(t, st, run.ID) // the first server committed the repair and stopped before the append
+	next := l.replica()
+	next.srv.cfg.RunOutputPersistOff = true
+	for range 2 {
+		if err := next.srv.SweepRunOutputs(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := eventsWithID(l, owed.EventID); n != 1 {
+		t.Fatalf("%d events with the owed id after two sweeps with persistence off, want 1", n)
+	}
+	if left, err := st.OwedRunOutputRepairAudits(t.Context(), 10); err != nil || len(left) != 0 {
+		t.Fatalf("owed after the sweeps: %v %v, want none", left, err)
+	}
+}
