@@ -162,7 +162,9 @@ func (s *Server) leaseRunnerExecution(ctx context.Context, run types.AgentRun, p
 // The stamp and the end are judged on this server's clock, not the database's, though the database stamps
 // both: the runner counts them from the time this server sent in the session's hello
 // (runnerwire.AuthenticateRunner, srvclock.Clock), and only the server holding that session sends its lease,
-// so this clock is the one that predicts the runner's answer.
+// so this clock is the one that predicts the runner's answer. A replica whose runner's session another replica
+// holds judges neither: its clock may differ from the holder's by more than leaseSkew, so it checks only the
+// stored state here and the holder judges the stamp and the end on its own clock (peerHolderAnswer).
 func (s *Server) leaseSendable(ctx context.Context, st store.PG, run types.AgentRun) (time.Time, error) {
 	switch held, err := st.RunHeldContainedOnRunner(ctx, run.ID); {
 	case err != nil:
@@ -174,19 +176,30 @@ func (s *Server) leaseSendable(ctx context.Context, st store.PG, run types.Agent
 	if err != nil {
 		return time.Time{}, err
 	}
+	link := s.runnerEndpoint(*run.RunnerID).link
+	if s.runnerPeering() != nil && !link.HeldHere() && link.Online() {
+		return renewed, nil // held by another replica: sendRunnerLease asks it
+	}
+	if err := s.leaseInTime(run, renewed); err != nil {
+		return time.Time{}, err
+	}
+	if !link.HeldHere() && !link.Online() {
+		return time.Time{}, errRunnerNotReady // held nowhere
+	}
+	return renewed, nil
+}
+
+// leaseInTime is nil when the runner would accept a lease with the stamp renewed and the run's end now, on this
+// server's clock, else why not. Only the replica that sends the lease, the session's holder, asks.
+func (s *Server) leaseInTime(run types.AgentRun, renewed time.Time) error {
 	now := s.cfg.Now()
 	switch {
 	case now.Sub(renewed) >= identity.RunTokenLapseAfter-leaseSkew:
-		return time.Time{}, errRunnerLeaseLapsed
+		return errRunnerLeaseLapsed
 	case run.EndsAt != nil && !run.EndsAt.After(now.Add(leaseSkew)):
-		return time.Time{}, errRunnerLeaseEnded
+		return errRunnerLeaseEnded
 	}
-	if link := s.runnerEndpoint(*run.RunnerID).link; !link.HeldHere() && !link.Online() {
-		// Held nowhere. Held by another replica, sendRunnerLease asks the holder, which judges this again on its own
-		// clock before it sends.
-		return time.Time{}, errRunnerNotReady
-	}
-	return renewed, nil
+	return nil
 }
 
 // sendRunnerLease sends the run's lease: its token stamp, the one the organisation's lapsed-token sweep
@@ -197,6 +210,12 @@ func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, genera
 		ctx, cancel := context.WithTimeout(ctx, leaseSendTimeout)
 		defer cancel()
 		return holderLeaseErr(p.trans.CallHolder(ctx, *run.RunnerID, remote.PeerMethodLease, peerLeaseArgs{RunID: run.ID, Generation: generation}, nil))
+	}
+	if s.runnerPeering() != nil {
+		// The session may have come here after leaseSendable left the judging to another replica.
+		if err := s.leaseInTime(run, renewed); err != nil {
+			return err
+		}
 	}
 	return s.sendRunnerLeaseHere(ctx, run, generation, renewed)
 }

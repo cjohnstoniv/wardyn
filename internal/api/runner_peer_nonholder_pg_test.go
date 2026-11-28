@@ -5,10 +5,13 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -72,4 +75,73 @@ func replacedAudits(t *testing.T, l *maskLab, runID uuid.UUID) int {
 		n++
 	}
 	return n
+}
+
+// skewedReplica is a second server on f's database whose clock runs skew ahead of the holder's, with its holder view
+// read once, so its Link for f's runner routes through f.
+func (f *peerFixture) skewedReplica(t *testing.T, skew time.Duration) *Server {
+	t.Helper()
+	cfg := baseTestConfig(newHarness(t), f.st)
+	cfg.BaseCtx = f.ctx
+	cfg.Now = func() time.Time { return time.Now().Add(skew) }
+	peerShape(newPeerConfig())(&cfg)
+	b := New(cfg)
+	p := b.runnerPeering()
+	if p == nil {
+		t.Fatal("the second replica has no peering")
+	}
+	if err := p.view.Refresh(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !b.runnerEndpoint(f.rn.ID).link.Online() {
+		t.Fatal("the second replica does not see the runner held elsewhere")
+	}
+	return b
+}
+
+// leaseFramesFor is how many LEASE frames the runner has received for run.
+func (f *peerFixture) leaseFramesFor(run uuid.UUID) int { return f.leasesStamped(run, time.Time{}) }
+
+// A replica that does not hold the runner's session refuses no lease on its own clock: with the two clocks on
+// opposite sides of the lapse margin, the holder's clock decides both ways, and a deferred lease on the replica
+// whose own clock reads the stamp as lapsed is still sent through the holder.
+func TestPeerLeaseFollowsTheHolderClock_PG(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newPeerFixture(t)
+	f.waitHolder(t, f.session(t))
+	// The stamp is 30 s inside the lapse on the holder's clock; a minute ahead, it is past it.
+	age := identity.RunTokenLapseAfter - 30*time.Second
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET token_renewed_at = now() - $2::interval WHERE id = $1`, run.ID, age.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	ahead := f.skewedReplica(t, time.Minute)
+	before := f.leaseFramesFor(run.ID)
+	if err := ahead.renewRunnerLease(f.ctx, run, 0); err != nil {
+		t.Fatalf("a lease the holder's clock accepts, asked by a replica whose clock reads it lapsed = %v, want sent", err)
+	}
+	if n := f.leaseFramesFor(run.ID); n != before+1 {
+		t.Fatalf("the runner got %d new LEASE frame(s), want 1", n-before)
+	}
+
+	before = f.leaseFramesFor(run.ID)
+	ahead.deferRenewedLease(run.ID)
+	for deadline := time.Now().Add(10 * time.Second); (deferredLeases(ahead) != 0 || f.leaseFramesFor(run.ID) == before) && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if n := deferredLeases(ahead); n != 0 || f.leaseFramesFor(run.ID) == before {
+		t.Fatalf("the deferred lease: %d pending, %d new frame(s); want it sent through the holder", n, f.leaseFramesFor(run.ID)-before)
+	}
+
+	inTime := f.skewedReplica(t, 0)
+	f.skew.Store(int64(time.Minute)) // now the holder's clock reads the stamp as lapsed
+	before = f.leaseFramesFor(run.ID)
+	if err := inTime.renewRunnerLease(f.ctx, run, 0); !errors.Is(err, errRunnerLeaseLapsed) {
+		t.Fatalf("a lease the holder's clock reads lapsed, asked by a replica whose clock accepts it = %v, want errRunnerLeaseLapsed", err)
+	}
+	if n := f.leaseFramesFor(run.ID); n != before {
+		t.Fatalf("the runner got %d LEASE frame(s) the holder refused", n-before)
+	}
 }
