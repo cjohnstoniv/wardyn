@@ -122,11 +122,22 @@ func (l *Link) suspend(peer *runnerwire.Peer) {
 	l.mu.Unlock()
 }
 
-// Send carries LEASE and administrative control on the active session.
+// Send carries LEASE and administrative control on the active session. Under a holder door method (ctx from
+// ServeHolderMethod) it sends only on the session that method was authorised for: a session replaced since is
+// errOffline, and the frame never reaches its replacement.
 func (l *Link) Send(ctx context.Context, frame runnerwire.Frame) error {
+	if pin, ok := ctx.Value(pinnedSendKey{}).(pinnedPeer); ok {
+		if pin.l != l || l.current() != pin.p || !l.HeldHere() {
+			return errOffline
+		}
+		return pin.p.Send(ctx, frame)
+	}
 	p := l.current()
 	if p == nil || !l.HeldHere() {
 		return errOffline
 	}
 	return p.Send(ctx, frame)
 }
+
+// pinnedSendKey carries, in a holder door method's context, the session the method was authorised for.
+type pinnedSendKey struct{}

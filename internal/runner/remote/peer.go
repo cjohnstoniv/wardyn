@@ -365,7 +365,7 @@ func (h *Hub) ServeHolderMethod(ctx context.Context, conn runnerwire.Conn, runne
 				return nil, err
 			}
 		}
-		res, err := answer(ctx, env.Args)
+		res, err := answer(context.WithValue(ctx, pinnedSendKey{}, pin), env.Args) // a Send under it goes to pin only
 		if err != nil {
 			return nil, err
 		}
