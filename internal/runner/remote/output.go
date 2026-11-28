@@ -39,6 +39,7 @@ type outputSink struct {
 	ref             string
 	idleSince       time.Time
 	stallRecovering bool
+	leaseRead       bool // a sink check's lease read for it has not returned yet
 	dropped         bool
 }
 
@@ -643,25 +644,31 @@ func (s *Substrate) checkedSinksLocked() []checkedSink {
 	return out
 }
 
-// sinkCheckReads bounds the lease reads one sink check has in flight: a slow read delays no other sink, and a
-// pass over many sinks holds at most this many store connections.
+// sinkCheckReads bounds the sink checks' lease reads in flight on one Substrate, stragglers of earlier passes
+// included: a slow read delays no other sink, and the checks hold at most this many store connections.
 const sinkCheckReads = 8
 
 // checkSinks applies the lease rule to every sink under the check: one the rule does not keep yields. For a sink
 // it keeps on a runner whose session this replica does not hold, it counts the time with nothing attached while the
 // runner reads online, and recovers the output into the same sink past outputStallAfter, when no other process
 // holds the run's lease fresh. A failed read keeps the sink and starts no recovery. It answers how many sinks it
-// read.
+// found under the check.
 //
-// The reads run concurrently, at most sinkCheckReads at once, under one deadline of one check interval for the
-// whole pass, and each sink is handled as soon as its own read answers. So with any number of sinks a pass ends
-// within one interval. A read not answered by then is cancelled and its sink kept as it was, with no yield, no
-// recovery and no change to its stall count, and is read again at a later pass. A pass takes the sinks in run id
-// order from the first one the last pass did not start, so a sink in a stable set of N gets an inspection within
-// ceil(N / sinkCheckReads) passes, even with every slot held by a slow read.
+// The reads run concurrently on the Substrate's sinkCheckReads slots, under one deadline of one check interval for
+// the whole pass, and each sink is handled as soon as its own read answers; the pass returns at its deadline. A
+// read not answered by then is cancelled and its sink kept as it was, with no yield, no recovery and no change to
+// its stall count. A read that has not returned keeps its slot, and its sink is not read again until it does, so
+// with every slot held a pass starts nothing and returns. A pass takes the sinks in run id order from the first
+// one the last pass did not start. So while reads answer, a sink in a stable set of N gets an inspection within
+// ceil(N / sinkCheckReads) passes. No deadline makes a read succeed while the store does not answer.
 func (s *Substrate) checkSinks(ctx context.Context) int {
 	s.mu.Lock()
 	sinks := s.checkedSinksLocked()
+	from := s.sinkNext
+	if s.readSlot == nil {
+		s.readSlot = make(chan struct{}, sinkCheckReads)
+	}
+	slots := s.readSlot
 	s.mu.Unlock()
 	// HeldHere, not Online, for the stall rule's scope: a sink whose session this replica holds is never stalled.
 	// Online for its count: the runner reads online on any replica.
@@ -670,18 +677,21 @@ func (s *Substrate) checkSinks(ctx context.Context) int {
 		held = l.HeldHere()
 	}
 	slices.SortFunc(sinks, func(a, b checkedSink) int { return bytes.Compare(a.id[:], b.id[:]) })
-	s.mu.Lock()
-	from := s.sinkNext
-	s.mu.Unlock()
 	if i := slices.IndexFunc(sinks, func(c checkedSink) bool { return bytes.Compare(c.id[:], from[:]) >= 0 }); i > 0 {
 		sinks = append(sinks[i:], sinks[:i]...)
 	}
 	pctx, cancel := context.WithTimeout(ctx, s.sinkCheckEvery())
 	defer cancel()
-	slots := make(chan struct{}, sinkCheckReads)
-	var wg sync.WaitGroup
+	answered := make(chan struct{}, len(sinks)) // buffered: a straggler never blocks on a pass that returned
+	started := 0
 	next := uuid.Nil
 	for _, c := range sinks {
+		c.sink.mu.Lock()
+		outstanding := c.sink.leaseRead
+		c.sink.mu.Unlock()
+		if outstanding {
+			continue // its last read has not returned: never two at once
+		}
 		select {
 		case slots <- struct{}{}:
 		case <-pctx.Done():
@@ -690,9 +700,18 @@ func (s *Substrate) checkSinks(ctx context.Context) int {
 			next = c.id // the pass's deadline: the sinks not yet started are kept, and the next pass starts here
 			break
 		}
-		wg.Add(1)
+		c.sink.mu.Lock()
+		c.sink.leaseRead = true
+		c.sink.mu.Unlock()
+		started++
 		go func() {
-			defer func() { <-slots; wg.Done() }()
+			defer func() {
+				c.sink.mu.Lock()
+				c.sink.leaseRead = false
+				c.sink.mu.Unlock()
+				<-slots // only once the read returned
+				answered <- struct{}{}
+			}()
 			keep, sole, err := s.opts.OutputLease(pctx, c.id)
 			if err != nil || pctx.Err() != nil {
 				return // failed, or answered past the deadline: kept as it was
@@ -706,11 +725,13 @@ func (s *Substrate) checkSinks(ctx context.Context) int {
 			}
 		}()
 	}
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-pctx.Done(): // a read that ignores its context does not hold the pass past its deadline
+wait:
+	for ; started > 0; started-- {
+		select {
+		case <-answered:
+		case <-pctx.Done(): // a read that ignores its context does not hold the pass past its deadline
+			break wait
+		}
 	}
 	s.mu.Lock()
 	s.sinkNext = next

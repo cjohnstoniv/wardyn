@@ -1512,3 +1512,53 @@ func TestPeerOutputSinkCheckReachesEverySinkPastSlowSlots(t *testing.T) {
 		t.Fatalf("the healthy sink was read after %d slow reads, want within two passes (at most %d)", n, 2*sinkCheckReads)
 	}
 }
+
+// A read that ignores its context keeps its slot until it returns: the next passes start no ninth read and never
+// read its sink again. Once the held reads return, the sinks they kept from a slot are read.
+func TestPeerOutputSinkCheckHoldsEightReadsAtMost(t *testing.T) {
+	ctx := t.Context()
+	const every = 100 * time.Millisecond
+	runs := make([]uuid.UUID, sinkCheckReads+2)
+	for i := range runs {
+		runs[i] = uuid.New()
+	}
+	slices.SortFunc(runs, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	held := runs[:sinkCheckReads]
+	release := make(chan struct{})
+	var inFlight, peak, entered atomic.Int32
+	lease := func(_ context.Context, run uuid.UUID) (bool, bool, error) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		if slices.Contains(held, run) {
+			entered.Add(1)
+			<-release // ignores its context
+			return true, true, nil
+		}
+		return false, false, nil
+	}
+	var y yieldLog
+	s, _ := newLauncher(ctx, Options{OutputLease: lease, OutputYielded: y.yielded, OutputSinkCheck: every}, nil)
+	for i, run := range runs {
+		addSink(t, s, run, "runner:x/"+strconv.Itoa(i), newEndBuf(), "")
+	}
+	waitUntil(t, "the eight held reads start", func() bool { return entered.Load() == sinkCheckReads })
+	time.Sleep(every*2 + every/2) // two more passes find every slot held
+	if p := peak.Load(); p > sinkCheckReads {
+		t.Fatalf("%d lease reads in flight at once, want at most %d", p, sinkCheckReads)
+	}
+	if n := entered.Load(); n != sinkCheckReads {
+		t.Fatalf("the held sinks were read %d times, want once each while their reads are out", n)
+	}
+	if y.has(runs[sinkCheckReads]) || y.has(runs[sinkCheckReads+1]) {
+		t.Fatal("a sink was read while every slot was held")
+	}
+	close(release)
+	waitUntil(t, "the sinks past the held slots yield", func() bool {
+		return y.has(runs[sinkCheckReads]) && y.has(runs[sinkCheckReads+1])
+	})
+	if p := peak.Load(); p > sinkCheckReads {
+		t.Fatalf("%d lease reads in flight at once, want at most %d", p, sinkCheckReads)
+	}
+}
