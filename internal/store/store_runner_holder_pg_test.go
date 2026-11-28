@@ -194,3 +194,59 @@ func TestPeerRouteIgnoresStaleHolder_PG(t *testing.T) {
 		t.Fatal("a 31 s old row is listed")
 	}
 }
+
+// R23 (store): a run's launcher is LauncherFresh only for a lease within 90 s whose process has a replica row within
+// 30 s, LauncherWait for a stale lease or a stale or missing replica row, and LauncherNone for a missing, terminal or
+// lost run.
+func TestPeerLauncherFromFreshLeaseOnly_PG(t *testing.T) {
+	pool, st, _ := holderFixture(t)
+	ctx := context.Background()
+	read := func(id uuid.UUID) store.RunOutputLauncherRow {
+		t.Helper()
+		r, err := st.RunOutputLauncher(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	set := func(q string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := read(uuid.New()); r.State != store.LauncherNone {
+		t.Fatalf("a missing run: %+v, want LauncherNone", r)
+	}
+	run, err := st.CreateRun(ctx, newRun(types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(`UPDATE agent_runs SET watcher_owner='host/p1', watcher_heartbeat=now() WHERE id=$1`, run.ID)
+	if r := read(run.ID); r.State != store.LauncherWait || r.WatcherOwner != "host/p1" || !r.LeaseFresh {
+		t.Fatalf("a fresh lease with no replica row: %+v, want LauncherWait with the owner", r)
+	}
+	if err := st.TouchRunnerPeerReplica(ctx, "host/p1", "replica-1", "https://10.0.0.1:8443"); err != nil {
+		t.Fatal(err)
+	}
+	if r := read(run.ID); r.State != store.LauncherFresh || r.ReplicaID != "replica-1" || r.PeerURL != "https://10.0.0.1:8443" || r.WatcherOwner != "host/p1" {
+		t.Fatalf("a fresh pair: %+v, want LauncherFresh at replica-1", r)
+	}
+	set(`UPDATE runner_peer_replicas SET seen_at = now() - interval '31 seconds' WHERE lease_owner='host/p1'`)
+	if r := read(run.ID); r.State != store.LauncherWait || r.ReplicaID != "" {
+		t.Fatalf("a replica row older than 30 s: %+v, want LauncherWait", r)
+	}
+	set(`UPDATE runner_peer_replicas SET seen_at = now() WHERE lease_owner='host/p1'`)
+	set(`UPDATE agent_runs SET watcher_heartbeat = now() - interval '91 seconds' WHERE id=$1`, run.ID)
+	if r := read(run.ID); r.State != store.LauncherWait || r.LeaseFresh {
+		t.Fatalf("a lease older than 90 s: %+v, want LauncherWait and a stale lease", r)
+	}
+	set(`UPDATE agent_runs SET watcher_heartbeat = now(), lost_at = now() WHERE id=$1`, run.ID)
+	if r := read(run.ID); r.State != store.LauncherNone {
+		t.Fatalf("a lost run: %+v, want LauncherNone", r)
+	}
+	set(`UPDATE agent_runs SET lost_at = NULL, state = $2, ended_at = now() WHERE id=$1`, run.ID, string(types.RunCompleted))
+	if r := read(run.ID); r.State != store.LauncherNone {
+		t.Fatalf("a terminal run: %+v, want LauncherNone", r)
+	}
+}
