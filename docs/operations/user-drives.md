@@ -80,15 +80,15 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 
 ### The two backends
 
-- **`docker_volume` — Wardyn allocates.** A per-person named volume (`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local` driver and mounted at the reserved target.
+- **`docker_volume` — Wardyn allocates.** A per-person named volume (`wardyn-drive-<drive-id-hex>-<home>`, or `wardyn-drive-<drive-slug>-<home>` on an older `slug` drive), created on first use with the `local` driver and mounted at the reserved target.
   - Nothing to configure.
   - It carries four labels:
     - `wardyn.managed=true`;
-    - `wardyn.drive` = the **drive row's id** (the name folds the drive's SLUG, which a rename changes, and the id never does);
+    - `wardyn.drive` = the **drive row's id** (an older `slug` drive folds its slug into the name, which a rename changes; the id never changes);
       - So the label is the only key that still finds a drive's volumes across one, which is what the reclaim recipes below select on;
     - `wardyn.home` = that person's directory name; and `wardyn.subject` = a **digest** of the person themselves (never their claim — see the restore note below).
   - Reclaim is a command, never a button — either `wardyn drive reclaim` ("[Reclaiming a departed person's storage](#reclaiming-a-departed-persons-storage)" above) or, by hand:
-    - one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview` prints the object name for a principal —
+    - one person: `docker volume rm <the volume>` — `POST /drives/preview` prints the object name for a principal —
       - paste the sign-in subject FIRST: on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it);
     - one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>` lists every volume that drive allocated.
 
@@ -106,17 +106,18 @@ docker volume create \
   --label wardyn.managed=true \
   --label wardyn.drive=<drive id> \
   --label wardyn.home=<home> \
-  wardyn-drive-<drive-slug>-<home>
+  --label wardyn.subject=<recorded digest> \
+  <the volume's original name>
 ```
 
-- then copy the data in.
+- with every label value taken from the record the backup kept beside the volume (backup step 4 in [Operations](../OPERATIONS.md)), then check the volume is new and empty, then copy the data in.
 - `wardyn.drive` carries the **drive row's id** (the `id` on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit row), not the volume's name — the id is what groups every person's object under the drive that allocated them.
 - Get it wrong and Wardyn **refuses** the volume rather than adopting it: a label naming a *different* drive is how two drives whose home names collided would otherwise hand one member the other's storage.
 - A volume restored with **no** `wardyn.drive` label at all still mounts (that is the fall-back this path is for, and every volume created before the label carried an id has none).
 - It just no longer answers `docker volume ls --filter label=wardyn.drive=<drive id>`.
 
 - Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was allocated to — never their sign-in claim, because `docker volume inspect` echoes labels to anyone who can reach the daemon.
-- It is the discriminator `wardyn.drive` cannot be: a volume name carries the drive and the *home* and no person at all (`DriveObjectName` mints `wardyn-drive-<drive-slug>-<home>`).
+- It is the discriminator `wardyn.drive` cannot be: a volume name carries the drive and the *home* and no person at all (`DriveObjectName` mints `wardyn-drive-<drive-id-hex>-<home>`).
 - So one drive whose home template folded two people onto one directory would produce one volume that *both* their allocations agree belongs to this drive.
 - Wardyn refuses to mount a volume stamped for a different person.
 
@@ -125,7 +126,8 @@ docker volume create \
 - And it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc` backend — `sub` as well as `email_local` — at **both** enforcement points: the write boundary, and the run-time resolver that derives the home.
 - Rows written before that rule, or by hand, can still fold homes. That is why the label is checked rather than assumed away.
 
-- You need not compute the digest for a restore (it is a truncated sha256 of the sign-in subject): **leave `wardyn.subject` off** the `docker volume create` above and the volume mounts, exactly as a label-less `wardyn.drive` does.
+- **Put `wardyn.subject` back exactly as the backup recorded it**, and never work out a value from whoever holds the drive and home now: a volume without it mounts for anyone who resolves to that drive and home.
+- A record with no `wardyn.subject` line comes from a volume that had none. With no record at all, nothing says whose files these are: never create the volume by hand, and follow the missing-record path of the restore in [Operations](../OPERATIONS.md) (step 5) instead.
 
 ### The share recipe
 
@@ -164,7 +166,7 @@ docker volume create \
    - As of 0.7 the refusal covers **every** non-`hash` template on a `docker_volume` or `k8s_pvc` backend — `sub` as well as `email_local`.
    - Registering either answers a `400` beginning `invalid drive: home_template "<template>" is not allowed on a managed backend`, and the message names `hash` as the single remedy.
    - Two reasons, and `sub` fails the second one:
-     - Wardyn names a managed object after the drive and the home and nothing about the person (`wardyn-drive-<drive-slug>-<home>`),
+     - Wardyn names a managed object after the drive and the home and nothing about the person (`wardyn-drive-<drive-id-hex>-<home>`),
        - so within one drive `email_local` allocates two colliding people one volume with write access to each other's files whenever the drive is writable
      - and an object *name* is what `docker volume ls` and `kubectl get pvc` print with no inspect or describe,
        - so a verbatim `sub` publishes the sign-in subject to anyone who can list the daemon or the namespace, in the more exposed of the two places the label vocabulary already refuses to put it.
@@ -328,7 +330,7 @@ so a submount under the share's home could be writable inside the sandbox
    - and resolve the XFS mount point rather than assuming it is the data root itself (a bind-mounted or LVM-backed data root is not always its own filesystem root):
 
    ```
-   VOL=wardyn-drive-<drive-slug>-<home>                    # from the reclaim recipe above
+   VOL=<the volume>                                         # from the reclaim recipe above
    DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
    MOUNT=$(findmnt -T "$DIR" -no TARGET)                    # the XFS filesystem's own mount point
    PROJID=$(( 0x$(echo -n "$VOL" | sha256sum | cut -c1-7) )) # any stable project id, unique per volume
