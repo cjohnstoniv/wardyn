@@ -16,6 +16,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn run --wait` and `wardyn run get` now show a failed run's reason even when more than a page of refused output reads come before it in the audit trail. The CLI reads up to 100 pages of failure rows (100,000 rows) and then stops.
 - Saving a policy with two copies of an approval-gated api_key grant is refused when only one copy was already stored; each stored grant now covers one submitted copy.
 - Correction to the 0.10.0 notes: on Docker Engine 28 or later, Wardyn requests an isolated run network with IPv6 off, then checks the network after creation and again on restart or proxy replacement. By default an incompatible network is refused. With `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` on, Wardyn warns and can use it, so the setting is not without effect on those engines. It is off by default.
+- On an Azure DevOps organisation engine, a Git request waiting behind another request for the same credential now counts that wait, and its own mint, against its nine-minute hold budget instead of the approval timeout alone.
 
 ## [0.11.0-rc.5] — 2026-11-27
 

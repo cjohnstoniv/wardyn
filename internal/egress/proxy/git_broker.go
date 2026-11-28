@@ -368,9 +368,10 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // keeps the cache: checked at the top, again after the wait for the grant's turn, and again after a mint, whose
 // token is cached first so the next renewal serves it without a second mint.
 //
-// The acquisition budget (gitApprovalBudget) is armed before the wait for the turn, so a caller queued behind
-// another's acquisition spends its own budget waiting, leaves when its ctx ends, and takes only what is left into
-// its own mint.
+// The acquisition budget (gitApprovalBudget, or the request's remaining hold time under a via_org engine when that
+// is less) is armed before the wait for the turn, so a caller queued behind another's acquisition spends its own
+// budget waiting, leaves when its ctx ends, and takes only what is left into its own mint. With no budget left a
+// cached token is still served, and a caller that would have to wait or mint is refused at once.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
 	if err := p.brokerOfflineErr(); err != nil {
 		return "", "", err
@@ -383,12 +384,23 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	}
 	p.gitTokMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, gitApprovalBudget())
+	// Under a via_org engine the request's remaining hold time bounds the acquisition too: the wait for the
+	// turn, the mint and the approval wait all spend it. A sidecar request carries none.
+	budget := holdFor(ctx, gitApprovalBudget())
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+	// A free turn is taken before the ctx is consulted, so a spent budget still reads the cache below.
 	select {
 	case e.turn <- struct{}{}:
-	case <-ctx.Done():
-		return "", "", fmt.Errorf("waiting for another request's Git credential: %w", ctx.Err())
+	default:
+		if budget <= 0 {
+			return "", "", fmt.Errorf("waiting for another request's Git credential: %w", context.DeadlineExceeded)
+		}
+		select {
+		case e.turn <- struct{}{}:
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("waiting for another request's Git credential: %w", ctx.Err())
+		}
 	}
 	defer func() { <-e.turn }()
 	// The wait may have crossed the bound.
@@ -398,6 +410,10 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	if e.token != "" && (e.expiresAt == 0 ||
 		time.Now().Before(time.UnixMilli(e.expiresAt).Add(-brokerRefreshMargin))) {
 		return e.token, e.username, nil
+	}
+	// The mint gets only what the wait left of the budget; none left refuses before asking.
+	if err := ctx.Err(); err != nil {
+		return "", "", fmt.Errorf("getting the Git credential: %w", err)
 	}
 	// Auto-mintable grants re-mint past TTL fine; approval-gated grants are
 	// single-use, so a run outliving the ~1h token TTL fails here (a pre-existing ceiling).
