@@ -732,6 +732,36 @@ func shorten(t *testing.T, v *time.Duration, d time.Duration) {
 	t.Cleanup(func() { *v = old })
 }
 
+// stopSinkChecks, called after shorten, takes every sink off s's sink check when the test ends and waits until the
+// check's loop and every lease read it started have returned. Cleanups run last first, so this runs before
+// shorten's restore, and no check reads a duration the restore writes.
+func stopSinkChecks(t *testing.T, s *Substrate) {
+	t.Helper()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		sinks := slices.Collect(maps.Values(s.outputs))
+		clear(s.outputs)
+		s.mu.Unlock()
+		waitUntil(t, "the sink check stops", func() bool {
+			s.mu.Lock()
+			checking := s.checking
+			s.mu.Unlock()
+			if checking {
+				return false
+			}
+			for _, sink := range sinks {
+				sink.mu.Lock()
+				reading := sink.leaseRead
+				sink.mu.Unlock()
+				if reading {
+					return false
+				}
+			}
+			return true
+		})
+	})
+}
+
 // waitUntil polls cond every 10 ms until it holds or 5 s pass.
 func waitUntil(t *testing.T, what string, cond func() bool) {
 	t.Helper()
@@ -1193,6 +1223,7 @@ func TestPeerOutputResumesStalledSink(t *testing.T) {
 
 	// The runner stopped sending: the recovery from 0 fills the same sink, each byte once.
 	s, ls := newLauncher(ctx, opts, recoverWith(0, "hello world"))
+	stopSinkChecks(t, s)
 	run, w := uuid.New(), newEndBuf()
 	addSink(t, s, run, "runner:x/a", w, "hello")
 	select {
@@ -1206,6 +1237,7 @@ func TestPeerOutputResumesStalledSink(t *testing.T) {
 
 	// A recovery start past the sink's offset ends it unrecoverable.
 	s, _ = newLauncher(ctx, opts, recoverWith(9, "ld"))
+	stopSinkChecks(t, s)
 	run, w = uuid.New(), newEndBuf()
 	addSink(t, s, run, "runner:x/b", w, "hello")
 	select {
@@ -1219,6 +1251,7 @@ func TestPeerOutputResumesStalledSink(t *testing.T) {
 
 	// A sink whose session the launcher holds is never checked for a stall.
 	s, ls = newLauncher(ctx, opts, recoverWith(0, "hello"))
+	stopSinkChecks(t, s)
 	ls.held.Store(true)
 	addSink(t, s, uuid.New(), "runner:x/c", newEndBuf(), "hello")
 	time.Sleep(3 * outputStallAfter)
@@ -1228,6 +1261,7 @@ func TestPeerOutputResumesStalledSink(t *testing.T) {
 
 	// The count does not run while the runner reads offline: a return starts no recovery for the stall time.
 	s, ls = newLauncher(ctx, opts, recoverWith(0, "hello"))
+	stopSinkChecks(t, s)
 	ls.online.Store(false)
 	addSink(t, s, uuid.New(), "runner:x/d", newEndBuf(), "hello")
 	time.Sleep(2 * outputStallAfter)
@@ -1248,6 +1282,7 @@ func TestPeerOutputResumesStalledSink(t *testing.T) {
 		}
 		return nil, errors.New("hung")
 	})
+	stopSinkChecks(t, s)
 	sink := addSink(t, s, uuid.New(), "runner:x/e", newEndBuf(), "hello")
 	waitUntil(t, "the recovery starts", func() bool { return ls.recovers.Load() == 1 })
 	time.Sleep(10 * opts.OutputSinkCheck)
@@ -1281,6 +1316,7 @@ func TestPeerOutputSinkYieldsToFreshLease(t *testing.T) {
 		}
 	}}
 	s, ls := newLauncher(ctx, opts, nil)
+	stopSinkChecks(t, s)
 	run := uuid.New()
 	w = newEndBuf()
 	addSink(t, s, run, "runner:x/a", w, "")
@@ -1327,6 +1363,7 @@ func TestPeerOutputSinkYieldsToFreshLease(t *testing.T) {
 	// sole reads true, it recovers. A stale lease (keep and sole true) keeps the sink and its recovery.
 	setLease(true, false, nil)
 	s, ls = newLauncher(ctx, opts, recoverWith(0, "x"))
+	stopSinkChecks(t, s)
 	run = uuid.New()
 	w = newEndBuf()
 	addSink(t, s, run, "runner:x/b", w, "")
