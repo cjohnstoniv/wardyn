@@ -135,6 +135,9 @@ type Config struct {
 	// reaching a registered runner whose session another replica holds (WARDYN_PEER_URL). Nil serves only the
 	// runners whose sessions this replica holds.
 	RunnerPeer *remote.PeerConfig
+	// RunnerOutputSinkCheck is the period of a runner output sink's lease and stall check under high
+	// availability (remote.Options.OutputSinkCheck). Zero is the package's 10 s; tests shorten it.
+	RunnerOutputSinkCheck time.Duration
 	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
 	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
 	//

@@ -114,16 +114,21 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 		return ep
 	}
 	ep := runnerEndpoint{link: &remote.Link{}}
-	if p := s.runnerPeering(); p != nil {
-		ep.link.UsePeer(id, p.view, p.trans)
-	}
-	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
+	opts := remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
 		MacOSVMDisks: func(ctx context.Context, reports []runner.MacOSVMDisk) { s.runnerMacOSVMDisks(ctx, id, reports) },
 		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
 			return s.dispatchedGeneration(ctx, id, method, ref)
-		}})
+		}}
+	if p := s.runnerPeering(); p != nil {
+		ep.link.UsePeer(id, p.view, p.trans)
+		// A runner's output open with no sink here goes to the run's launcher, and a launcher's sink yields to
+		// the holder's adoption: the yield frees this process's tail first.
+		opts.RunOutputLauncher, opts.OutputLease = p.outputLauncher, p.outputLease(id, ep.link)
+		opts.OutputYielded, opts.OutputSinkCheck = s.fenceRunOutput, s.cfg.RunnerOutputSinkCheck
+	}
+	ep.sub = remote.New(id.String(), ep.link, opts)
 	if s.runnerStreams.subs == nil {
 		s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
 	}

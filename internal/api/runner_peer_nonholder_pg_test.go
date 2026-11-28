@@ -4,14 +4,18 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -169,5 +173,41 @@ func TestPeerLeaseFollowsTheHolderClock_PG(t *testing.T) {
 	}
 	if n := f.leaseFramesFor(run.ID); n != before {
 		t.Fatalf("the runner got %d LEASE frame(s) the holder refused", n-before)
+	}
+}
+
+// R23 (api, the door's case): an output request is refused not_live_session unless the runner's fresh holder row
+// names the sender and the token's session, and no_sink for a run with no sink on this replica, each with its class;
+// a bad mac carries no class. The first-frame and lease cases are pinned at the door's Substrate end
+// (TestPeerOutputOpenForwardedToLauncher, TestPeerOutputSinkYieldsToFreshLease).
+func TestPeerDoorOutputRefusals_PG(t *testing.T) {
+	f := newPeerFixture(t)
+	s := f.session(t)
+	f.waitHolder(t, s)
+	self := f.srv.replicaName()
+	good := remote.PeerToken{From: self, To: self, Runner: f.rn.ID, Session: s, Method: remote.PeerMethodOutput,
+		Exp: time.Now().Add(10 * time.Second).Unix(), Target: uuid.New()}
+	cases := []struct {
+		name  string
+		edit  func(*remote.PeerToken)
+		key   []byte
+		class string
+	}{
+		{name: "sender is not the holder", edit: func(t *remote.PeerToken) { t.From = "another" }, key: peerTestKey, class: peerRefusedNotLiveSession},
+		{name: "not the holder's session", edit: func(t *remote.PeerToken) { t.Session = uuid.New() }, key: peerTestKey, class: peerRefusedNotLiveSession},
+		{name: "a runner with no holder row", edit: func(t *remote.PeerToken) { t.Runner = uuid.New() }, key: peerTestKey, class: peerRefusedNotLiveSession},
+		{name: "no sink for the run here", key: peerTestKey, class: peerRefusedNoSink},
+		{name: "bad mac", key: bytes.Repeat([]byte{3}, 32)},
+	}
+	for _, c := range cases {
+		tok := good
+		if c.edit != nil {
+			c.edit(&tok)
+		}
+		w := httptest.NewRecorder()
+		f.srv.InternalHandler().ServeHTTP(w, peerRequest(tok, c.key))
+		if w.Code != http.StatusForbidden || w.Header().Get(remote.HeaderPeerRefused) != c.class {
+			t.Errorf("%s: %d, class %q; want 403, class %q", c.name, w.Code, w.Header().Get(remote.HeaderPeerRefused), c.class)
+		}
 	}
 }

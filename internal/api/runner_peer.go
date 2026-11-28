@@ -87,6 +87,47 @@ func (p *runnerPeering) Refresh(ctx context.Context) {
 
 var _ remote.PeerLoop = (*runnerPeering)(nil)
 
+// outputLauncher reads where a run's output is kept, the replica whose process holds the run's watcher lease
+// (remote.Options.RunOutputLauncher).
+func (p *runnerPeering) outputLauncher(ctx context.Context, runID uuid.UUID) (remote.OutputLauncher, error) {
+	r, err := p.st.RunOutputLauncher(ctx, runID)
+	if err != nil {
+		return remote.OutputLauncher{}, err
+	}
+	out := remote.OutputLauncher{State: remote.LauncherWait, ReplicaID: r.ReplicaID, PeerURL: r.PeerURL}
+	switch r.State {
+	case store.LauncherNone:
+		out.State = remote.LauncherNone
+	case store.LauncherFresh:
+		out.State = remote.LauncherFresh
+	}
+	return out, nil
+}
+
+// outputLease is the rule this process keeps a sink of one of runnerID's runs by (remote.Options.OutputLease).
+// sole: this process owns the run's watcher lease, or the lease is stale. keep: sole, or the process holding the
+// lease fresh is not on the replica that holds the runner's session (link held here, else the holder view's row).
+// Only the holder's sweep adopts a runner's run, so of two processes that both stamp, only the one off the holder
+// yields. An owner with no fresh replica row, or a runner with no fresh holder row, keeps the sink.
+func (p *runnerPeering) outputLease(runnerID uuid.UUID, link *remote.Link) func(ctx context.Context, runID uuid.UUID) (bool, bool, error) {
+	return func(ctx context.Context, runID uuid.UUID) (bool, bool, error) {
+		r, err := p.st.RunOutputLauncher(ctx, runID)
+		if err != nil {
+			return false, false, err
+		}
+		if r.WatcherOwner == watcherOwner || !r.LeaseFresh {
+			return true, true, nil
+		}
+		holder := ""
+		if link.HeldHere() {
+			holder = p.self
+		} else if h, ok := p.view.Holder(runnerID); ok {
+			holder = h.ReplicaID
+		}
+		return r.ReplicaID == "" || holder == "" || r.ReplicaID != holder, false, nil
+	}
+}
+
 // routeHeldElsewhere is the holder view's OnRefresh. It makes this replica's endpoint for each claimed runner whose
 // session another replica holds, so a runner claimed after this replica booted is routed here within one refresh
 // of its admission anywhere. It removes the endpoint of a runner that left both this replica's held sessions and
@@ -277,7 +318,7 @@ func (s *Server) handleRunnerPeer(w http.ResponseWriter, r *http.Request) {
 		refuse(peerRefusedWrongMethod)
 		return
 	case tok.Method == remote.PeerMethodOutput:
-		refuse(peerRefusedNoSink) // this replica serves no forwarded output
+		s.serveOutputDoor(w, r, p, tok, refuse)
 		return
 	}
 	st, ok := s.cfg.Store.(store.RunnerStore)
@@ -302,6 +343,34 @@ func (s *Server) handleRunnerPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = hub.ServePeer(ctx, runnerwire.NewWebSocket(c), tok.Runner, tok.Session, tok.Method, func(class string) {
+		s.notePeerRefusal(ctx, class)
+	})
+}
+
+// serveOutputDoor is the launcher's end of a runner's output open that the replica holding the runner's session
+// forwarded here, for the token's target run. It refuses not_live_session unless the runner's fresh holder row
+// names the sender and the token's session, and no_sink unless this replica has the run's sink on that runner's
+// substrate and the lease rule lets this process serve it alone; then it answers the forwarded OPEN against that
+// sink only, never forwarding it again. It makes no endpoint: a runner with none here has no sink here.
+func (s *Server) serveOutputDoor(w http.ResponseWriter, r *http.Request, p *runnerPeering, tok remote.PeerToken, refuse func(class string)) {
+	ctx := r.Context()
+	if route, ok, err := p.st.RunnerSessionHolder(ctx, tok.Runner); err != nil || !ok || route.ReplicaID != tok.From || route.SessionID != tok.Session {
+		refuse(peerRefusedNotLiveSession)
+		return
+	}
+	s.runnerStreams.subsMu.Lock()
+	ep, routed := s.runnerStreams.subs[tok.Runner]
+	s.runnerStreams.subsMu.Unlock()
+	if !routed || !ep.sub.ServableOutput(ctx, tok.Target) {
+		refuse(peerRefusedNoSink)
+		return
+	}
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
+	if err != nil {
+		return
+	}
+	defer c.CloseNow() //nolint:errcheck // the peer may already have closed it
+	_ = ep.sub.ServeOutputDoor(ctx, runnerwire.NewWebSocket(c), tok.Target, func(class string) {
 		s.notePeerRefusal(ctx, class)
 	})
 }
