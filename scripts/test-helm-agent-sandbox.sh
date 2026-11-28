@@ -345,6 +345,17 @@ for args in "--set k8s.runService.enabled=true" "--set k8s.runService=null" "--s
 done
 ok "run Service defaults: both policies and bindings, the Service rules, WARDYN_K8S_RUN_SERVICE=on; explicit defaults and null render the same bytes"
 
+# An upgrade with --reuse-values from a release whose chart had no runService key keeps that chart's defaults, so a
+# null enabled survives coalescing: a chart copy without the key stands in for them. It must still mean on.
+mkdir -p "$TMP/nokey"
+cp -r "$CHART" "$TMP/nokey/"
+yq -i 'del(.k8s.runService)' "$TMP/nokey/wardyn/values.yaml"
+helm template r "$TMP/nokey/wardyn" -f "$ALLON" --set k8s.rbac.create=false --set k8s.admissionPolicies.create=true \
+  --set k8s.runService.enabled=null >"$TMP/nokey.out"
+[[ "$(runsvcenv "$TMP/nokey.out")" == "on" ]] || die "null enabled with no chart default: WARDYN_K8S_RUN_SERVICE is not on"
+[[ "$(keepvaps "$TMP/nokey.out")" == "$bothvaps" ]] || die "null enabled with no chart default: not both run Service policies and both bindings"
+ok "null runService.enabled with no chart default (rc.4 --reuse-values): Service on, both policies and bindings"
+
 render -f "$ALLON" --set k8s.rbac.create=false >"$TMP/norbac.out"
 [[ -z "$(keepvaps "$TMP/norbac.out")" ]] || die "rbac.create=false: a run Service policy rendered"
 grep -q 'kind: ValidatingAdmissionPolicy' "$TMP/norbac.out" && die "rbac.create=false: a ValidatingAdmissionPolicy rendered"

@@ -649,8 +649,8 @@ k8s:
   # IP: the runner Role then has no services or endpointslices rule, and the chart renders no run Service admission
   # policy. k8s.agentSandbox.keep needs it on. Before turning it off on an install whose runs have a Service, let
   # those runs end and their cleanup finish while the Role still grants the Service verbs. The chart always writes
-  # WARDYN_K8S_RUN_SERVICE from this value, over an env or extraEnv entry of that name; a value that is not true or
-  # false stops the render.
+  # WARDYN_K8S_RUN_SERVICE from this value, over an env or extraEnv entry of that name. Null keeps the default, on;
+  # any other value that is not true or false stops the render.
   runService:
     enabled: true
   # The two cluster-scoped ValidatingAdmissionPolicies and their bindings (<fullname>-keep-service and

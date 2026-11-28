@@ -275,7 +275,7 @@ default true; a release whose values predate the key keeps it on).
 {{- if and (hasKey $rs "enabled") (not (kindIs "invalid" $rs.enabled)) (not (kindIs "bool" $rs.enabled)) -}}
 {{- fail (printf "wardyn: k8s.runService.enabled must be true or false, got %v (%s). Write it unquoted, and use --set, not --set-string." $rs.enabled (kindOf $rs.enabled)) -}}
 {{- end -}}
-{{- if or (not (hasKey $rs "enabled")) $rs.enabled }}true{{ end -}}
+{{- if or (not (hasKey $rs "enabled")) (kindIs "invalid" $rs.enabled) $rs.enabled }}true{{ end -}}
 {{- end -}}
 
 {{/*
