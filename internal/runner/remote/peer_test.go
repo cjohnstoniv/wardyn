@@ -12,6 +12,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,11 +99,14 @@ type peerRig struct {
 	dials          atomic.Int32
 	doors          chan error // one per WebSocket the holder served, when it ended
 	serve          runnerwire.CallHandler
+
+	mu    sync.Mutex
+	execs map[uint32]int // the runner's exec table: its exec stream id -> exit status, kept until exec_close
 }
 
 func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 	t.Helper()
-	r := &peerRig{holder: &Link{}, caller: &Link{}, doors: make(chan error, 16)}
+	r := &peerRig{holder: &Link{}, caller: &Link{}, doors: make(chan error, 16), execs: map[uint32]int{}}
 	r.serve = func(ctx context.Context, id uint32, method string, args json.RawMessage) (any, error) {
 		r.calls.Add(1)
 		switch method {
@@ -114,6 +119,40 @@ func newPeerRig(t *testing.T, ctx context.Context) *peerRig {
 			return runnerwire.StreamResult{Stream: st.ID()}, nil
 		case runnerwire.MethodResize, runnerwire.MethodStatus:
 			return nil, nil
+		case runnerwire.MethodExecStream: // the exec exits at once with its ref as the status
+			var a runnerwire.ExecStreamArgs
+			_ = json.Unmarshal(args, &a)
+			code, err := strconv.Atoi(a.Ref)
+			if err != nil {
+				return nil, err
+			}
+			ex, err := r.runner.Open(ctx, runnerwire.Open{Kind: runnerwire.KindExec, Call: id})
+			if err != nil {
+				return nil, err
+			}
+			se, err := r.runner.Open(ctx, runnerwire.Open{Kind: runnerwire.KindExecStderr, Call: id})
+			if err != nil {
+				return nil, err
+			}
+			r.mu.Lock()
+			r.execs[ex.ID()] = code
+			r.mu.Unlock()
+			go func() { _, _ = ex.Write([]byte("out " + a.Ref)); _ = ex.CloseWrite(); _ = se.CloseWrite() }()
+			return runnerwire.ExecStreamResult{Exec: ex.ID(), Stderr: se.ID()}, nil
+		case runnerwire.MethodExecWait, runnerwire.MethodExecClose:
+			var a runnerwire.ExecWaitArgs
+			_ = json.Unmarshal(args, &a)
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			code, ok := r.execs[a.Stream]
+			if !ok {
+				return nil, errors.New("no such exec")
+			}
+			if method == runnerwire.MethodExecClose {
+				delete(r.execs, a.Stream)
+				return nil, nil
+			}
+			return runnerwire.WaitResult{ExitCode: code}, nil
 		}
 		return nil, errors.New("unexpected method")
 	}
@@ -353,5 +392,102 @@ func TestPeerLookupHonoursCancel(t *testing.T) {
 	}
 	if dials.Load() != 0 {
 		t.Fatal("a peer connection was opened")
+	}
+}
+
+// peerExec is one exec started through a pin, with both of its byte streams ended.
+type peerExec struct {
+	sess session
+	ex   *runnerwire.Stream
+}
+
+// startPeerExec starts an exec that exits with code on a pin of its own, as Substrate.ExecStream does, and ends
+// both byte directions of its exec and stderr streams.
+func startPeerExec(t *testing.T, ctx context.Context, r *peerRig, code int) peerExec {
+	t.Helper()
+	sess, err := r.caller.pinSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res runnerwire.ExecStreamResult
+	if err := sess.Call(ctx, runnerwire.MethodExecStream, runnerwire.ExecStreamArgs{Ref: strconv.Itoa(code)}, &res); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := sess.TakeStream(res.Exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	se, err := sess.TakeStream(res.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []*runnerwire.Stream{ex, se} {
+		_ = st.CloseWrite()
+		_, _ = io.ReadAll(st)
+		select {
+		case <-st.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatalf("exec %d: stream %d did not end", code, st.ID())
+		}
+	}
+	return peerExec{sess: sess, ex: ex}
+}
+
+func (e peerExec) wait(t *testing.T, ctx context.Context, want int) {
+	t.Helper()
+	var w runnerwire.WaitResult
+	if err := e.sess.Call(ctx, runnerwire.MethodExecWait, runnerwire.ExecWaitArgs{Stream: e.ex.ID()}, &w); err != nil || w.ExitCode != want {
+		t.Fatalf("wait on exec stream %d = %d, %v; want %d", e.ex.ID(), w.ExitCode, err, want)
+	}
+}
+
+// An exec through a pin keeps its WebSocket after both of its byte streams end, so Wait reaches its own exec and
+// Close disposes only it; the WebSocket ends at the Close. Two execs overlap on one runner, each on its own pin,
+// so their WebSocket stream ids repeat while the runner's differ. A call naming a stream its WebSocket did not
+// open is refused at the holder and reaches no runner session.
+func TestPeerExecControlOutlivesItsStreams(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	r := newPeerRig(t, ctx)
+	a := startPeerExec(t, ctx, r, 3)
+	b := startPeerExec(t, ctx, r, 5)
+	for _, e := range []peerExec{a, b} {
+		if p := e.sess.(*peerPinned); func() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.p == nil }() {
+			t.Fatalf("exec stream %d: the pin released its WebSocket before the exec was closed", e.ex.ID())
+		}
+	}
+	b.wait(t, ctx, 5)
+	a.wait(t, ctx, 3)
+	if err := a.sess.Call(ctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: a.ex.ID()}, nil); err != nil {
+		t.Fatalf("close the first exec: %v", err)
+	}
+	r.doorEnded(t)
+	b.wait(t, ctx, 5)
+	r.mu.Lock()
+	left := len(r.execs)
+	r.mu.Unlock()
+	if left != 1 {
+		t.Fatalf("the runner holds %d execs after the first was closed, want 1", left)
+	}
+
+	stray, err := r.caller.pinSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := r.calls.Load()
+	if err := stray.Call(ctx, runnerwire.MethodExecWait, runnerwire.ExecWaitArgs{Stream: b.ex.ID()}, nil); err == nil {
+		t.Fatal("a wait naming a stream its WebSocket never opened succeeded")
+	}
+	if got := r.calls.Load(); got != before {
+		t.Fatalf("a call naming an unopened stream reached a runner session (%d calls, want %d)", got, before)
+	}
+	r.doorEnded(t)
+
+	if err := b.sess.Call(ctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: b.ex.ID()}, nil); err != nil {
+		t.Fatalf("close the second exec: %v", err)
+	}
+	r.doorEnded(t)
+	if !r.runner.Online() {
+		t.Fatal("closing the execs ended the runner's session")
 	}
 }

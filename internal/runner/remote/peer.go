@@ -337,9 +337,11 @@ func (h *Hub) TouchHolders(ctx context.Context) {
 // peerPinned is a pin on another replica's session for the runner: every call and stream claim goes to the
 // replica and session captured when the pin was made. It never re-reads the holder row, never falls back to a
 // local session that appears later, and never follows a new holder. Its WebSocket is opened at the first operation
-// and released once nothing uses it: no call in flight, no stream a reply named still to be taken, and no taken
-// stream still open. A later operation opens another WebSocket to the same replica and session, which the holder
-// refuses once that session is replaced.
+// and released once nothing uses it: no call in flight, no stream a reply named still to be taken, no taken
+// stream still open, and no exec whose Close has not returned. An exec's Wait, Resize and Close name its stream by
+// this WebSocket's id, which only this WebSocket's holder end can translate, so the WebSocket outlives the exec's
+// byte streams until its Close. A later operation opens another WebSocket to the same replica and session, which
+// the holder refuses once that session is replaced.
 type peerPinned struct {
 	pt     *PeerTransport
 	runner uuid.UUID
@@ -350,6 +352,7 @@ type peerPinned struct {
 	calls int             // calls in flight on p
 	owed  map[uint32]bool // stream ids a reply named, not yet taken
 	live  int             // taken streams not yet ended
+	execs map[uint32]bool // exec streams an exec_stream reply named whose exec_close has not returned
 }
 
 // acquire is p for one call, opened for method when the pin has none.
@@ -357,7 +360,7 @@ func (s *peerPinned) acquire(ctx context.Context, method string) (*runnerwire.Pe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.p != nil && !s.p.Online() {
-		s.p, s.owed, s.live = nil, nil, 0
+		s.p, s.owed, s.live, s.execs = nil, nil, 0, nil
 	}
 	if s.p == nil {
 		p, err := s.pt.open(ctx, s.runner, s.route, method, uuid.Nil)
@@ -372,7 +375,7 @@ func (s *peerPinned) acquire(ctx context.Context, method string) (*runnerwire.Pe
 
 // releaseLocked closes the WebSocket once nothing uses it. Callers hold s.mu.
 func (s *peerPinned) releaseLocked() {
-	if s.p != nil && s.calls == 0 && s.live == 0 && len(s.owed) == 0 {
+	if s.p != nil && s.calls == 0 && s.live == 0 && len(s.owed) == 0 && len(s.execs) == 0 {
 		s.p.Close()
 		s.p = nil
 	}
@@ -394,6 +397,18 @@ func (s *peerPinned) Call(ctx context.Context, method string, args, result any, 
 			}
 			s.owed[id] = true
 		}
+		if method == runnerwire.MethodExecStream {
+			var res runnerwire.ExecStreamResult
+			if json.Unmarshal(raw, &res) == nil && res.Exec != 0 {
+				if s.execs == nil {
+					s.execs = map[uint32]bool{}
+				}
+				s.execs[res.Exec] = true
+			}
+		}
+	}
+	if a, ok := args.(runnerwire.ExecWaitArgs); ok && method == runnerwire.MethodExecClose && s.p == p {
+		delete(s.execs, a.Stream) // the exec's control ends with its Close, whatever the answer
 	}
 	s.releaseLocked()
 	s.mu.Unlock()
@@ -414,6 +429,7 @@ func (s *peerPinned) TakeStream(id uint32) (*runnerwire.Stream, error) {
 	}
 	st, err := p.TakeStream(id)
 	if err != nil {
+		delete(s.execs, id) // an exec whose stream was never taken is never waited on or closed
 		s.releaseLocked()
 		s.mu.Unlock()
 		if !p.Online() {
@@ -541,6 +557,9 @@ type peerRelay struct {
 	toRunner map[uint32]uint32 // WebSocket stream id -> runner stream id
 }
 
+// errPeerUnmappedStream refuses a peer call whose arguments name a stream the WebSocket did not open.
+var errPeerUnmappedStream = errors.New("remote: the peer call names a stream this connection did not open")
+
 // peerReplayHook, when set by a test, runs at the holder after a call is admitted and before it is sent on.
 var peerReplayHook func()
 
@@ -571,12 +590,19 @@ func (r *peerRelay) serveCall(ctx context.Context, id uint32, method string, arg
 			return nil, err
 		}
 	}
+	unmapped := false
 	args = r.rewrite(env.Args, func(ws uint32) (uint32, bool) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		x, ok := r.toRunner[ws]
+		unmapped = unmapped || !ok
 		return x, ok
 	})
+	if unmapped {
+		// A stream id this WebSocket never opened would be read in the runner's own numbering, where it can
+		// name another caller's stream or exec.
+		return nil, errPeerUnmappedStream
+	}
 	var in any // no arguments stay none
 	if len(args) > 0 {
 		in = args
