@@ -52,7 +52,7 @@ func TestPG_RestoreRunbookKeepsACutAfterTwoRestoresOfOneDump(t *testing.T) {
 		if _, err := pool.Exec(ctx, `SELECT setval('oidc_revocation_seq', $1)`, dump); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, strings.ReplaceAll(step3b, "$(cat revocation-hwm.txt)", strconv.FormatInt(mark, 10))); err != nil {
+		if _, err := pool.Exec(ctx, strings.ReplaceAll(step3b, "$hwm", strconv.FormatInt(mark, 10))); err != nil {
 			t.Fatalf("step 3b %q: %v", step3b, err)
 		}
 	}

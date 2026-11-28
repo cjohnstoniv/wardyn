@@ -68,7 +68,8 @@ copy is permanent.
 > [!IMPORTANT]
 > **A user-drive volume is not part of the compose project.**
 
-- `wardyn-drive-*` volumes are created by the runner through the Docker API, not declared in
+- `wardyn-drive-*` volumes, and `wardyn-portal-*` ones (a portal's folder on a team drive), are created by the runner
+  through the Docker API, not declared in
   [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), so `docker compose down -v` — and `make
   reset`, which runs it — leaves every one of them in place.
 - That is deliberate: a stack teardown must not delete a person's files.
@@ -386,36 +387,88 @@ Compose recipe.
 # that installation's containers and volumes only.
 export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
+# Run steps 0-7 as one script (save them as backup.sh, then bash backup.sh pg, or
+# fs if deploy/compose/.env sets WARDYN_RECORDING_STORE=fs), not line by line: set -e stops it at the first failed command, so nothing after a
+# failure runs. If it stops after step 0, start wardynd again once you know why.
+set -eu
+REC="${1:-}"
+case "$REC" in pg|fs) ;; *) echo "STOP: give the recording store, pg or fs"; exit 1 ;; esac
+# A step the script cannot do for you stops it until you type yes.
+ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
+# Each attempt writes into a new directory of its own: mktemp -d creates it, or
+# fails. A retry is a new run of the script, so a new directory, never an old
+# one. The restore reads one such directory, and only once it is COMPLETE.
+B=$(mktemp -d "$PWD/$NS-backup-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+echo "$REC" > "$B/recording-store"
 
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 
 # 1. Postgres, through this project's postgres service
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql"
+(cd "$B" && docker compose -f "$OLDPWD/deploy/compose/docker-compose.yaml" exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql")
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
 #    (`recordings` is the ONE explicitly-named volume, $NS-recordings, so no
 #     project prefix — see docker-compose.yaml; the inspect stops on a name
 #     this host does not have)
-docker volume inspect "$NS-recordings" >/dev/null &&
-docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
-  tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
+if [ "$REC" = fs ]; then
+  docker volume inspect "$NS-recordings" >/dev/null
+  docker run --rm -v "$NS-recordings":/from -v "$B":/to alpine \
+    tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
+fi
 
 # 3. The age key — copy WARDYN_AGE_KEY out of deploy/compose/.env into your
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
+ask "WARDYN_AGE_KEY from deploy/compose/.env is in your secret manager"
 
 # 4. User drives — one object per person, and step 1's dump does NOT contain
 #    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
 #    per person:
-#      for v in $(docker volume ls -q --filter label=wardyn.managed=true); do
-#        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
-#          tar czf "/to/$v-$(date +%F).tar.gz" -C /from .
-#      done
+vols=$(docker volume ls -q) &&
+  { printf '%s\n' "$vols" | grep -E '^wardyn-(drive|portal)-' || [ "$?" = 1 ]; } > "$B/drives.list.tmp" &&
+  mv "$B/drives.list.tmp" "$B/drives.list" ||
+  { echo "STOP: the drive volumes could not be listed"; exit 1; }
+ask "$B/drives.list names only this installation's drive volumes (note below)"
+while IFS= read -r v <&3; do
+  docker run --rm -v "$v":/from -v "$B":/to alpine \
+    tar czf "/to/$v.tar.gz" -C /from . &&
+  docker volume inspect --format \
+    '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' \
+    "$v" > "$B/$v.labels.tmp" ||
+  { echo "STOP: $v is not backed up with its labels"; exit 1; }
+  n=$(docker volume inspect --format '{{len .Labels}}' "$v")
+  if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] &&
+    grep -q '^wardyn.drive=.' "$B/$v.labels.tmp" &&
+    grep -q '^wardyn.home=.' "$B/$v.labels.tmp"; then
+    mv "$B/$v.labels.tmp" "$B/$v.labels"
+  else
+    mv "$B/$v.labels.tmp" "$B/$v.unresolved"
+    echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
+  fi
+done 3< "$B/drives.list"
+#    A STOP line ends the script, and the attempt stays incomplete: fix the
+#    cause and run the script again, which makes a new directory. drives.list names every drive volume the backup must
+#    hold, and the restore works from it. Keep each .labels file with its
+#    tarball. It is the volume's
+#    ownership record and lists every label it had, one per line, so a record
+#    with no wardyn.subject line comes from a volume that had none. A volume
+#    whose label values span lines cannot be recorded that way and prints
+#    UNRESOLVED too.
+#    The list is every volume named wardyn-drive-* or wardyn-portal-* (a
+#    portal's folder on a team drive), so a home created before
+#    the drive label existed, or restored by hand without it, is backed up
+#    too. Such a volume prints UNRESOLVED: its archive is kept, but nothing
+#    in it says whose it is. The backup is not complete until you have
+#    worked out each one's drive and owner from the drive list and the
+#    allocations, and written that down beside it. The owner is a person, or,
+#    for a t- (group) or p- (portal) home, the allocation sharing that folder.
 #    Drive volumes carry no installation label: on a host with two
 #    installations, keep only the volumes whose wardyn.drive id this
-#    installation's GET /api/v1/drives lists.
+#    installation's GET /api/v1/drives lists: remove the others from
+#    drives.list before the loop. An UNRESOLVED volume on such a host
+#    stays in the list until you know which installation it belongs to.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
@@ -423,9 +476,15 @@ docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
 # 5. Snapshot/copy the audit-fallback directory, including its .consumed and
 #    .quarantine sidecars (see "Audit fallback recovery"). On stock Compose
 #    it is /data/audit on <project>_audit, not the unprefixed volume "audit".
+ask "the audit-fallback directory and its sidecars are copied into $B"
 
 # 6. Once both the database and fallback copies are complete:
 docker compose -f deploy/compose/docker-compose.yaml start wardynd
+
+# 7. Reaching this line means every step above succeeded. Mark the attempt
+#    COMPLETE, the only kind the restore accepts, yourself, and only once step
+#    5's copy is in "$B" and every UNRESOLVED volume is written up beside it.
+echo "Steps 0-6 succeeded. When that is done: touch $B/COMPLETE"
 ```
 
 ### Restore them
@@ -442,18 +501,72 @@ dump loads.
 # that installation's containers and volumes only.
 export COMPOSE_PROJECT_NAME WARDYN_NS
 NS="${WARDYN_NS:-wardyn}"
+# Run steps 0-6 as one script too (bash restore.sh <backup directory>): set -e
+# stops it at the first failed command. The backup is ONE directory marked
+# COMPLETE, and every file below comes from it. Its marker, dump and recordings
+# archive are checked before anything runs; the drive archives, in step 5.
+set -eu
+# A step the script cannot do for you stops it until you type yes.
+ask() { printf '%s? Type yes: ' "$1"; read -r a; [ "$a" = yes ] || { echo "STOP: not confirmed: $1"; exit 1; }; }
+B=$(cd "${1:?give the backup directory}" && pwd)
+[ -f "$B/COMPLETE" ] || { echo "STOP: $B is not a complete backup"; exit 1; }
+# The recording store is the one the backup recorded, never this shell's.
+REC=$(cat "$B/recording-store")
+case "$REC" in pg|fs) ;; *) echo "STOP: $B records no recording store"; exit 1 ;; esac
+set -- "$B/$NS-"*.sql
+[ "$#" = 1 ] && [ -f "$1" ] || { echo "STOP: $B does not hold exactly one dump"; exit 1; }
+dump=$1
+if [ "$REC" = fs ]; then
+  set -- "$B/$NS-recordings-"*.tar.gz
+  [ "$#" = 1 ] && [ -f "$1" ] || { echo "STOP: $B does not hold one recordings archive"; exit 1; }
+  rec=${1##*/}
+fi
 
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
-#    high-water mark: every session it issued sits at or below it. (That
-#    database is gone? See "Revocation order" below the block.)
+#    high-water mark: every session it issued sits at or below it. The mark is
+#    written to a file named for this installation before anything changes, and
+#    stays there until step 3b has used it. A restore that stopped part-way
+#    reuses it, or the database's current mark if that is higher (a restore given up
+#    before step 3 left the database running on), never a lower value in its place.
+#    It reuses a saved mark only after reading the database's own: if that read
+#    fails, it stops, since nothing then shows the mark is still the highest.
+#    Giving up before step 3 loads the dump? Remove the mark file it printed.
+#    After step 3, apply the saved mark (step 3b) or rotate the session key (see
+#    "Revocation order") before you remove it and start wardynd.
+#    Run every attempt from this directory; only one runs per installation at a
+#    time. (That database is gone, with no mark file? The script stops here:
+#    see "Revocation order".)
+id="project=${COMPOSE_PROJECT_NAME:-} ns=$NS"
+M="$PWD/.wardyn-restore-mark-$(printf '%s' "$id" | cksum | cut -d' ' -f1)"
+mkdir "$M.lock" || { echo "STOP: another restore of this installation holds $M.lock (remove it only if none runs)"; exit 1; }
+trap 'rmdir "$M.lock"' EXIT
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
-  "SELECT last_value FROM oidc_revocation_seq" > revocation-hwm.txt
+if [ -f "$M" ]; then
+  { IFS= read -r stored && IFS= read -r hwm; } < "$M" || { echo "STOP: $M cannot be read: see \"Revocation order\""; exit 1; }
+  [ "$stored" = "$id" ] || { echo "STOP: $M belongs to another installation"; exit 1; }
+  case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
+  if ! now=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+    "SELECT last_value FROM oidc_revocation_seq"); then now=; fi
+  case "$now" in
+    ''|*[!0-9]*) echo "STOP: $M holds a mark, but the database's cannot be read to check it: start postgres alone (step 2) and run again, or see \"Revocation order\""; exit 1 ;;
+  esac
+  [ "$now" -le "$hwm" ] || hwm=$now
+  { printf '%s\n%s\n' "$id" "$hwm" > "$M.new" && mv "$M.new" "$M"; } || { echo "STOP: mark $hwm not saved in $M: free space and run again"; exit 1; }
+  echo "An unfinished restore of this installation left a mark: using $hwm"
+else
+  hwm=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
+    "SELECT last_value FROM oidc_revocation_seq") || hwm=
+  case "$hwm" in ''|*[!0-9]*) echo "STOP: no revocation mark read: see \"Revocation order\""; exit 1 ;; esac
+  (set -C; printf '%s\n%s\n' "$id" "$hwm" > "$M") || { echo "STOP: mark $hwm not saved in $M: free space and run again"; exit 1; }
+  echo "Saved mark $hwm in $M: giving up before step 3, remove it; after step 3, apply it (step 3b) or see \"Revocation order\" first"
+fi
+case "$hwm" in ''|*[!0-9]*) echo "STOP: $M holds no mark"; exit 1 ;; esac
 
 # 1. Age key FIRST, before anything boots against the restored data — copy
 #    it back into deploy/compose/.env (wherever you stashed it in backup
 #    step 3 above).
+ask "WARDYN_AGE_KEY is back in deploy/compose/.env"
 
 # 2. Start Postgres ALONE, not the full stack, so nothing else touches the
 #    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
@@ -466,7 +579,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
 #    abort the whole load with a nonzero exit, instead of silently skipping
 #    it and leaving a partial database with no error.
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < "$NS-<date>.sql"
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < "$dump"
 
 # 3b. A restore rewinds the sequence that orders revocations against sessions. Before any
 #     wardynd starts, set it strictly above step 0's mark. A fixed increment cannot prove
@@ -474,51 +587,101 @@ docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wa
 #     after the first restore. A dump from a release that predates the sequence has none:
 #     run `wardynd -migrate-only` first, then this step.
 docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c \
-  "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $(cat revocation-hwm.txt)) + 1)"
+  "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $hwm) + 1)"
+rm "$M"
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
-docker run --rm -v "$NS-recordings":/to -v "$PWD":/from alpine \
-  tar xzf "/from/$NS-recordings-<date>.tar.gz" -C /to
+if [ "$REC" = fs ]; then
+  docker run --rm -v "$NS-recordings":/to -v "$B":/from alpine \
+    tar xzf "/from/$rec" -C /to
+fi
 
-# 5. User drives — backup step 4's tarballs. The dump in step 3 brought back
-#    the drive ROWS; it holds none of the BYTES. Skip this and the runner
-#    creates a fresh EMPTY volume on the drive's first use, silently.
-#    Re-create each volume WITH ITS LABELS and with NO --opt (see "User drives
-#    on Docker": Wardyn refuses to mount a volume that is not local-driver and
-#    option-free), then untar into it. Leave wardyn.subject OFF — you need not
-#    compute the digest, and a volume without it still mounts.
-#      for f in wardyn-drive-*; do          # backup step 4's tarballs
-#        v="${f%-????-??-??.tar.gz}"        # the volume each came from
-#        docker volume create \
-#          --label wardyn.managed=true \
-#          --label wardyn.drive=<drive id> \
-#          --label wardyn.home=<home> "$v"
-#        docker run --rm -v "$v":/to -v "$PWD":/from alpine \
-#          tar xzf "/from/$f" -C /to
-#      done
-#    <drive id> is the `id` on GET /api/v1/drives (the drive row's id, not the
-#    volume name); a WRONG id makes Wardyn refuse the volume rather than adopt
-#    it. host_path drives need nothing here — you restore that share yourself.
+# 5. User drives — backup step 4's tarballs and .labels files. The dump in
+#    step 3 brought back the drive ROWS; it holds none of the BYTES. Skip this
+#    and the runner creates a fresh EMPTY volume on the drive's first use,
+#    silently.
+#    Re-create each volume under its original name, WITH THE LABELS RECORDED
+#    BESIDE IT and with NO --opt (see "User drives on Docker": Wardyn refuses
+#    to mount a volume that is not local-driver and option-free), then untar
+#    into it. The recorded wardyn.subject is what lets the runner refuse the
+#    volume to anyone but its owner: put it back exactly as recorded, and never
+#    work out a value from whoever holds the drive and home now.
+[ -f "$B/drives.list" ] || { echo "STOP: $B has no drives.list: see below"; exit 1; }
+h=
+while IFS= read -r v <&3; do
+  f="$v.tar.gz"; l="$B/$v.labels"
+  [ -f "$B/$f" ] || { echo "STOP: $f is missing"; exit 1; }
+  id=$(sed -n 's/^wardyn.drive=//p' "$l" 2>/dev/null || true)
+  [ ! -e "$B/$v.unresolved" ] && grep -qx 'wardyn.managed=true' "$l" && grep -q '^wardyn.home=.' "$l" &&
+    printf '%s' "$id" | grep -Eqx '[0-9a-f-]{36}' ||
+    { echo "HOLD: $f has no usable label record: see below"; h=1; continue; }
+  docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+    psql -U wardyn -d wardyn -tAc "SELECT 1 FROM user_drives WHERE id = '$id'" |
+    grep -qx 1 || { echo "STOP: the restored database has no drive $id"; exit 1; }
+  if docker volume inspect "$v" >/dev/null 2>&1; then
+    echo "SKIP: $v already exists: see below"; h=1; continue
+  fi
+  set --
+  while IFS= read -r x; do [ -n "$x" ] && set -- "$@" --label "$x"; done < "$l"
+  docker volume create "$@" "$v" >/dev/null &&
+  [ "$(docker volume inspect --format '{{.Driver}} {{len .Options}}' "$v")" = "local 0" ] &&
+  docker volume inspect --format \
+    '{{range $k, $val := .Labels}}{{$k}}={{$val}}{{println}}{{end}}' "$v" |
+    cmp -s - "$l" &&
+  docker run --rm -v "$v":/to -v "$B":/from alpine \
+    sh -c '[ -z "$(ls -A /to)" ] && tar xzf "/from/$1" -C /to' sh "$f" ||
+    { echo "STOP: $v is not restored"; exit 1; }
+done 3< "$B/drives.list"
+[ -z "$h" ] || { echo "STOP before step 6: settle each SKIP and HOLD line, then run step 5's loop and 5b-6 by hand"; exit 1; }
+#    Every file comes from the one directory step 3's dump came from: files
+#    from two backup attempts must never both go into a volume. The loop restores
+#    exactly the volumes drives.list names and stops on any missing
+#    tarball; a backup with no list predates it and is restored by hand, as
+#    for a missing label record below. The loop checks each
+#    recorded drive against the restored database, not the API, because
+#    wardynd is not running yet. It creates each volume new, checks that the
+#    volume is local, option-free and carries exactly the recorded labels, and
+#    checks that the volume is empty before writing any file. Any STOP, SKIP
+#    or HOLD line stops the script before step 6.
+#    SKIP: a volume of that name already exists. Creating it again would
+#    not change its labels, and it may hold someone's files. If this loop
+#    restored it on an earlier pass, that is expected. Otherwise inspect it,
+#    and back it up, before you decide whose it is. Remove it
+#    (`docker volume rm`) only once you know, then run step 5's loop again by hand.
+#    HOLD on a missing or unusable label record (an UNRESOLVED volume, or a
+#    backup taken before step 4 recorded labels): nothing says whether the
+#    volume had a wardyn.subject, or whose it was. Never create a managed volume for it by hand: one
+#    without its wardyn.subject would mount for anyone who later resolves to
+#    that drive and home. Untar it into a plain directory instead, and settle
+#    with an admin and the person whose files it holds before the files go
+#    anywhere. Then let that person's next run create the volume (the runner
+#    stamps their wardyn.subject), and while no run uses it, untar into it.
+#    That route is for a person's own home only. A t- (group) or p- (portal)
+#    home is a shared folder with no wardyn.subject: keep its files in staging,
+#    confirm the drive and the allocation it belongs to, let a run through that
+#    allocation create the folder, and while no run uses it, untar into it.
+#    host_path drives need nothing here — you restore that share yourself.
 
 # 5b. Restore the matching audit-fallback directory and sidecars before
 #     wardynd starts, preserving ownership/modes ("Audit fallback recovery").
+ask "the matching audit-fallback directory and sidecars are restored"
 
 # 6. Now bring up the rest of the stack.
 make setup
 
-# 7. Verify — row count first:
-docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
+# 7. Verify, by hand once the script ends — row count first:
+#      docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
 #    Startup already decrypts the persisted signing key and fails closed if
 #    the age key does not match. Also verify an application secret, which a
 #    row count cannot prove: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts without a
 #    decrypt error (see docs/operations/secrets-and-keys.md "Rotating the age key"):
-wardyn run --agent claude-code --workspace <workspace-id>
+#      wardyn run --agent claude-code --workspace <workspace-id>
 #    and, if this deployment allocates user drives, that a drive came back with
 #    its bytes rather than as a fresh empty volume — step 5 is the only thing
 #    that puts them there:
-docker volume ls --filter label=wardyn.drive=<drive id>
+#      docker volume ls --filter label=wardyn.drive=<drive id>
 #    then launch one run WITH a drive (the console's new-run form, or POST /runs
 #    with a `drive` selection — there is no CLI flag for it) and confirm
 #    /home/agent/drive holds that person's data rather than an empty directory.
@@ -5211,9 +5374,10 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
   the same 422, and `GET /me` no allocation.
 - So the console never offers a claim this deployment will not bind (see "Turning drives OFF deployment-wide").
 - **Two backends, two lifecycles.**
-  - A **managed** drive (`k8s_pvc`) is one claim per person, named `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the
-    drive's name lowercased, every run of characters outside `a-z0-9` folded to one
-    `-`, at most 40 characters).
+  - A **managed** drive (`k8s_pvc`) is one claim per person. A drive registered from migration `0067` onward
+    (`object_scheme: id`) names it `wardyn-drive-<drive-id-hex>-<home>`. An older `slug` drive names it
+    `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the drive's name lowercased, every run of characters outside
+    `a-z0-9` folded to one `-`, at most 40 characters). See "Legacy rows keep their old object name, permanently" below.
   - It is created by wardynd on the first run that mounts
     it:
     - `accessModes: [ReadWriteOnce]`, the allocation as
@@ -5275,36 +5439,69 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
     been handed the runs namespace or the runner's ServiceAccount name.
 
 > [!WARNING]
-> **Renaming a drive orphans its claims, and Wardyn will not clean that up.**
+> **Renaming a `slug` drive leaves its old claims behind, and Wardyn will not clean that up. Renaming an `id` drive
+> does not.**
 
-- A
-  claim's name folds the drive's NAME into a slug
-  (`wardyn-drive-<drive-slug>-<home>`), so renaming a drive in the console changes
-  the name every FUTURE claim is
-  created under.
-- The claims already provisioned keep their old names, keep the
-  member data in them, and are never looked up again.
-- The next run for each
-  person provisions a fresh, empty claim under the new name.
-- Nothing deletes the
-  old ones, on purpose.
+- Check the drive's scheme first: `GET /api/v1/drives` returns each drive's `object_scheme`.
+- An `id` drive (every drive registered from migration `0067` onward) names its claims by the drive's id,
+  `wardyn-drive-<drive-id-hex>-<home>`.
+  - A rename changes nothing about them. The claims in use before the rename are the claims in use after it.
+  - No claim of an `id` drive becomes an orphan through a rename. Never reclaim one because of a rename.
+- A `slug` drive folds its NAME into its claim names, `wardyn-drive-<drive-slug>-<home>`.
+  - A rename that folds to a different slug (the API asks for `?confirm=rehome`, below) changes the name every
+    FUTURE claim is created under.
+  - The claims already provisioned keep their old names, keep the member data in them, and are never looked up again.
+  - The next run for each person provisions a fresh, empty claim under the new name.
+- Nothing deletes the old ones, on purpose.
 - No run path, teardown or sweep can reach a claim — the
   only delete in the product is the operator's explicit reclaim — and a rename
   must never be able to destroy storage.
 - The `wardyn.drive` label carries the drive's row **id**
-  rather than its name precisely so the orphans stay findable:
+  rather than its name, so every claim of the drive stays findable:
 
 ```sh
 kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
 ```
 
-- Everything that comes back under a name that is not
-  `wardyn-drive-<new drive-slug>-*` predates the rename.
-- Move the data (`kubectl
-  cp`, or a snapshot restore into the new claim) and reclaim the old claim with
-  the `delete pvc` above.
-- The cheap
-  alternative is not renaming a drive that has claims.
+- Before you treat any claim in that list as left behind, work out the claim each current home resolves to: the
+  drive's `object_scheme`, its current slug for a `slug` drive, and each allocation's home.
+- Only a claim that no current home resolves to can be left behind: after a `slug` drive's rename, a backend or home
+  template change, or a lost `slug` drive re-created as `id`. A pod started before the change can still be writing to
+  it, so an allocation lookup alone never settles it.
+- To move its data and reclaim it:
+  1. Stop the person's runs on that drive and wait for them to end.
+  2. Record the old claim, and check that no pod refers to it. This prints `CLEAR` only when the claim was read
+     with `wardyn.managed=true`, this drive's id and the person's `<home>`, its UID and version were written to
+     `claim.precondition`, the pod list was read, and no pod names the claim:
+
+     ```sh
+     set -- $(kubectl -n <runsNamespace> get pvc <old claim> -o jsonpath='{.metadata.uid} {.metadata.resourceVersion} {.metadata.labels.wardyn\.managed} {.metadata.labels.wardyn\.drive} {.metadata.labels.wardyn\.home}') &&
+       [ "$#" = 5 ] && [ "$3" = true ] && [ "$4" = '<drive-id>' ] && [ "$5" = '<home>' ] &&
+       printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s","resourceVersion":"%s"}}\n' "$1" "$2" > claim.precondition &&
+       pods=$(kubectl -n <runsNamespace> get pods -o jsonpath='{range .items[*]}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}{end}') &&
+       ! printf '%s\n' "$pods" | grep -Fxq '<old claim>' && echo CLEAR
+     ```
+
+     - If it does not print `CLEAR`, stop and keep the claim. A finished pod that still names the claim counts too.
+     - If the old claim carries `wardyn.subject` (`kubectl -n <runsNamespace> get pvc <old claim> -o
+       jsonpath='{.metadata.labels.wardyn\.subject}'`), it must equal the current claim's. A different value means
+       it is another person's claim: stop.
+  3. If the current claim already holds files from a run since the rename, settle with the person which files win
+     before you copy. Never copy over it blind.
+  4. Copy the old claim's data into the current claim (`kubectl cp`, or a snapshot restore), and check the copy
+     against the old claim while both are still quiet.
+  5. Rerun the pod check, then delete the claim on the condition that it is still the object step 2 recorded:
+
+     ```sh
+     pods=$(kubectl -n <runsNamespace> get pods -o jsonpath='{range .items[*]}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}{end}') &&
+       ! printf '%s\n' "$pods" | grep -Fxq '<old claim>' &&
+       kubectl delete --raw /api/v1/namespaces/<runsNamespace>/persistentvolumeclaims/<old claim> -f claim.precondition
+     ```
+
+     - The delete carries the recorded UID and resource version as preconditions. A claim that was replaced or
+       changed since step 2 is refused with a conflict and nothing is deleted. Stop and keep it then.
+- Reclaim the old claim only when every step holds. If anything is uncertain, keep it.
+- The cheap alternative is not renaming a `slug` drive that has claims.
 
 > [!WARNING]
 > **The API refuses the edit; the console has no way to confirm it.**
@@ -5466,8 +5663,13 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
 - A claim you create
   yourself under a member's name — from a snapshot, or to move data after a
   rename — needs `wardyn.managed=true`, `wardyn.drive=<drive-id>` and
-  `wardyn.home=<home>` (leave `wardyn.subject` off),
-- Or every run on it fails as
+  `wardyn.home=<home>`.
+- It also needs `wardyn.subject` when the claim it replaces had one. Copy the value from the backup's label record,
+  or from the old claim when you move data after a rename. Never work out a value from whoever holds the
+  allocation now: that label is what lets the runner refuse the claim to anyone but its owner.
+- Leave `wardyn.subject` off only when the source never had it, and before any run mounts that claim, confirm with
+  the allocation list and with the person that the drive and home belong to the person whose files it holds.
+- Without the three labels every run on it fails as
   *"drive: your drive's volume is not the one allocated to you — ask an admin"*.
 
 > [!NOTE]
@@ -5527,6 +5729,9 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
 - Back the volumes up the way the cluster already
   backs up claims: a `VolumeSnapshotClass` snapshot per claim, or
   `kubectl -n <ns> cp <pod>:/home/agent/drive <dest>` from a pod that mounts one.
+- Record each claim's name and labels with its backup, `wardyn.subject` included:
+  `kubectl -n <ns> get pvc <claim> -o jsonpath='{.metadata.labels}' > <claim>.labels.json`.
+  A restore puts back the same name and the same labels.
 - A
   share is backed up by whoever owns the export, not by Wardyn.
 
@@ -5538,8 +5743,21 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
   deliberate command, by hand:
 
 ```sh
-kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
+kubectl delete --raw /api/v1/namespaces/<runsNamespace>/persistentvolumeclaims/<the claim> -f claim.precondition
 ```
+
+- `<the claim>` is the one the departed person's home resolves to: `wardyn-drive-<drive-id-hex>-<home>` on an `id`
+  drive, `wardyn-drive-<drive-slug>-<home>` on a `slug` drive (see the rename caveat above).
+- Prefer the product's own verb below: it checks the claim against the departed person's own subject. By hand, two
+  people can resolve to one home, so a matching drive and home do not prove the claim is theirs.
+- Before you run it by hand, check that the person's runs have ended. Then run step 2 of the rename caveat above for
+  `<the claim>` and the departed person's home: it writes `claim.precondition` and prints `CLEAR`.
+- Then check the claim's `wardyn.subject` is the departed person's digest. The digest is the first 20 hex characters
+  of the sha256 of their home subject in lower case (`home_subject` on `POST /drives/preview`, else their sign-in
+  subject): `printf %s '<subject in lower case>' | sha256sum | cut -c1-20`. A different value is another person's
+  claim. A claim with no `wardyn.subject` is deleted only when no remaining allocation resolves to its home.
+- Rerun the pod check just before the delete. A conflict means the claim changed: keep it. If any of that cannot be
+  shown, keep the claim.
 
 - or, when `drives.reclaim.enabled` is set, through the product's own verb
   (`wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes`, super-admin
@@ -5557,8 +5775,8 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   `home_subject` says which claim it used (the console does not yet show it).
 - The
   claim carries `wardyn.managed`, `wardyn.drive` (the drive's
-  row **id**, not its name, so the claims a rename orphans stay findable with the
-  `get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels.
+  row **id**, not its name, so every claim of the drive, including any a `slug` rename left behind, stays findable
+  with the `get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels.
 - That is the same
   pair the Docker driver stamps on a managed volume.
 - And it carries, deliberately, **no
