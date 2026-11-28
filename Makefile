@@ -1363,10 +1363,9 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	$$HA --set env.WARDYN_RECORDING_STORE=pg 2>&1 | grep -q 'ha.enabled needs the Kubernetes runner' || { echo 'chart no longer refuses ha.enabled without k8s.enabled: wardynd exits at boot on WARDYN_HA with the docker runner'; exit 1; }; \
 	out=$$($$HA $$K8S --set env.WARDYN_RECORDING_STORE=pg) || { echo 'ha.enabled with k8s.enabled, replicas=2 and the pg recording store no longer renders'; exit 1; }; \
 	echo "$$out" | grep -q 'replicas: 2$$' || { echo 'ha.enabled did not render replicas: 2'; exit 1; }; \
-	np='/^---/{n=0;e=0} /^kind: NetworkPolicy/{n=1} n && /^  egress:/{e=1} e && /port: internal$$/{f=1} END{exit !f}'; \
-	echo "$$out" | awk "$$np" || { echo 'ha.enabled rendered no NetworkPolicy egress to the other replicas on the internal port: every runner peer dial is dropped'; exit 1; }; \
+	echo "$$out" | awk -f scripts/check-ha-peer-egress.awk || { echo 'ha.enabled rendered no control-plane NetworkPolicy egress rule to this release'"'"'s control-plane pods on TCP port internal: every runner peer dial is dropped'; exit 1; }; \
 	solo=$$($$H $$K8S) || { echo 'the k8s.enabled render without ha.enabled no longer renders'; exit 1; }; \
-	echo "$$solo" | awk "$$np" && { echo 'the NetworkPolicy allows egress to the internal port without ha.enabled'; exit 1; }; \
+	echo "$$solo" | awk -f scripts/check-ha-peer-egress.awk && { echo 'the control-plane NetworkPolicy allows egress to the internal port without ha.enabled'; exit 1; }; \
 	echo "$$out" | grep -q 'kind: PodDisruptionBudget' || { echo 'ha.enabled rendered no PodDisruptionBudget'; exit 1; }; \
 	echo "$$out" | grep -q 'minAvailable: 1$$' || { echo 'the PodDisruptionBudget is not minAvailable: 1'; exit 1; }; \
 	echo "$$out" | grep -q 'podAntiAffinity:' || { echo 'ha.enabled rendered no pod anti-affinity'; exit 1; }; \
