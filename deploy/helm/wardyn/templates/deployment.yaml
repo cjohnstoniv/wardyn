@@ -647,14 +647,14 @@ spec:
             {{- end }}
             # This replica's internal address, where another replica reaches a registered runner whose session this
             # one holds. The internal listener's certificate names the control-plane URL's host, which the peer
-            # client verifies while it dials the pod IP.
+            # client verifies while it dials the pod IP. wardynd brackets an IPv6 pod IP.
             {{- if not (hasKey $eff "WARDYN_PEER_URL") }}
             - name: POD_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
             - name: WARDYN_PEER_URL
-              value: "https://$(POD_IP):8443"
+              value: "https://$(POD_IP):{{ $internalPort }}"
             {{- end }}
             {{- end }}
             {{- if not (hasKey $eff "WARDYN_RECORDING_STORE") }}

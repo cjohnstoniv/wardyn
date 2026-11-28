@@ -252,6 +252,20 @@ spec:
         - protocol: TCP
           port: {{ $tp }}
     {{- end }}
+    {{- if .Values.ha.enabled }}
+    # Under high availability a replica calls another replica's internal listener for a registered runner whose
+    # session that replica holds (the runner peer door): the control-plane pods of this release only, on that
+    # port only. The ingress side is the internal listener's rule above, which ha.enabled always renders, since
+    # it needs k8s.enabled.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "wardyn.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: control-plane
+      ports:
+        - protocol: TCP
+          port: internal
+    {{- end }}
     {{- with .Values.networkPolicy.egress.extra }}
     # Operator-supplied additional egress rules (OIDC issuer, SIEM sinks, etc.).
     {{- toYaml . | nindent 4 }}

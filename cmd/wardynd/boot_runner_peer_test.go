@@ -132,3 +132,19 @@ func TestPeerClientVerifiesControlPlaneSAN(t *testing.T) {
 		t.Fatal("a certificate from another CA was accepted")
 	}
 }
+
+// TestPeerURLBracketsIPv6PodIP: the chart's https://$(POD_IP):<port> is bracketed for an IPv6 pod IP and kept for an
+// IPv4 one or any other form.
+func TestPeerURLBracketsIPv6PodIP(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://10.1.2.3:8443":          "https://10.1.2.3:8443",
+		"https://fd00:10:244::5:8443":    "https://[fd00:10:244::5]:8443",
+		"https://[fd00:10:244::5]:8443":  "https://[fd00:10:244::5]:8443",
+		"https://wardyn-0.internal:8443": "https://wardyn-0.internal:8443",
+		"https://10.1.2.3:8443/":         "https://10.1.2.3:8443/",
+	} {
+		if got := peerURLOf(in); got != want {
+			t.Errorf("peerURLOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

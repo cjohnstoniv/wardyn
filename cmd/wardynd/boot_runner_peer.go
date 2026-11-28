@@ -9,7 +9,9 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 )
@@ -43,7 +45,25 @@ func loadRunnerPeer(ctx context.Context, f *bootFlags, secrets bootKeyStore, hop
 	if err != nil {
 		return nil, err
 	}
-	return &remote.PeerConfig{URL: *f.peerURL, Key: key, Roots: hopRoots, ServerName: u.Hostname()}, nil
+	return &remote.PeerConfig{URL: peerURLOf(*f.peerURL), Key: key, Roots: hopRoots, ServerName: u.Hostname()}, nil
+}
+
+// peerURLOf brackets an IPv6 pod address in https://<ip>:<port>, the form the chart builds from status.podIP,
+// which cannot tell an IPv4 address from an IPv6 one. Any other value is kept as given.
+func peerURLOf(raw string) string {
+	rest, ok := strings.CutPrefix(raw, "https://")
+	if !ok || strings.HasPrefix(rest, "[") || strings.Contains(rest, "/") {
+		return raw
+	}
+	i := strings.LastIndex(rest, ":")
+	if i < 0 {
+		return raw
+	}
+	host, port := rest[:i], rest[i+1:]
+	if ip := net.ParseIP(host); ip == nil || ip.To4() != nil {
+		return raw
+	}
+	return "https://" + net.JoinHostPort(host, port)
 }
 
 // hopRootsOf is the pool of this replica's internal CA, the one root a peer's serving certificate is verified by.
