@@ -135,6 +135,34 @@ sed 's/-eq "$((n + 1))"/-eq "$n"/' "$T/backup.sh" >"$T/backup-n.sh"
 backup mutant "$T/backup-n.sh" "$good" || true
 [ ! -f "$T/b-mutant/wardyn-drive-a.labels" ] || fail "the backup counting n lines still recorded the volume: this test checks nothing"
 
+# A volume another process made between the existence check and create: the
+# create succeeds on the existing volume, its labels differ, and the STOP must
+# leave it in place, with no removal by the loop or in its words.
+sed 's#^    "volume inspect --format "\*).*#    "volume inspect --format "*) printf "owner=other\\n\\n" ;;#' "$T/stub.sh" >"$T/stub-raced.sh"
+! cmp -s "$T/stub.sh" "$T/stub-raced.sh" || fail "the label stub was not found to change"
+rm -rf "$T/raced"
+out="$(cd "$T" && mkdir -p raced && printf '%s\n\n' "$good" >raced/wardyn-drive-a.labels && : >raced/wardyn-drive-a.tar.gz &&
+  echo wardyn-drive-a >raced/drives.list && B="$T/raced" DB_IDS="$ID" \
+  bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub-raced.sh" "$T/loop.sh" 2>&1)" && fail "a raced volume did not stop the loop: $out"
+[[ "$out" == *"is not restored: leave it in place"* ]] || fail "a raced volume stopped with the wrong line: $out"
+[[ "$out" != *"volume rm"* ]] || fail "the STOP for a raced volume says to remove it: $out"
+
+# Step 2's reset runs down -v in the script's own environment, so on the
+# installation step 0 named, and only when answered reset.
+awk '/^### Restore them/{r=1} r&&/^printf .Does %s already hold/{f=1} f{print} f&&/^esac$/{exit}' "$doc" >"$T/reset.sh"
+grep -q 'down -v' "$T/reset.sh" || fail "no step-2 reset found in $doc"
+cat >"$T/rstub.sh" <<'EOF2'
+docker() { echo "${COMPOSE_PROJECT_NAME:-} $*" >>"$T/reset.log"; }
+ask() { :; }
+EOF2
+reset() { : >"$T/reset.log"; printf '%s\n' "$1" | T="$T" COMPOSE_PROJECT_NAME=named id="project=named ns=x" \
+  bash -c 'set -eu; . "$1"; . "$2"' _ "$T/rstub.sh" "$T/reset.sh" >/dev/null; }
+reset reset || fail "the reset answer did not run"
+grep -qxF 'named compose -f deploy/compose/docker-compose.yaml down -v' "$T/reset.log" || fail "down -v did not run for the named installation: $(cat "$T/reset.log")"
+reset no || fail "the no answer did not continue"
+[ ! -s "$T/reset.log" ] || fail "down -v ran on a no answer"
+! reset "" || fail "an empty answer did not stop"
+
 # Mutation: the same loop without the label forwarding must not restore the volume.
 grep -v -- '--label "\$x"' "$T/loop.sh" >"$T/loop-nolabels.sh"
 ! cmp -s "$T/loop.sh" "$T/loop-nolabels.sh" || fail "the label forwarding line was not found to take out"
