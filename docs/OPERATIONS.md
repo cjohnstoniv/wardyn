@@ -471,6 +471,14 @@ while IFS= read -r v <&3; do
   esac
 done 3< "$B/drives.held"
 mv "$B/drives.list.tmp" "$B/drives.list"
+#    A label record is usable when it holds exactly one wardyn.drive line,
+#    whose whole value is one drive id, exactly one wardyn.home line, which is
+#    not empty, and the wardyn.managed=true line. usable prints that drive id.
+usable() {
+  [ "$(grep -c '^wardyn\.drive=' "$1" 2>/dev/null)" = 1 ] && [ "$(grep -c '^wardyn\.home=' "$1")" = 1 ] &&
+    grep -q '^wardyn\.home=.' "$1" && grep -qxF 'wardyn.managed=true' "$1" &&
+    sed -n 's/^wardyn\.drive=//p' "$1" | grep -xE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+}
 while IFS= read -r v <&3; do
   docker run --rm -v "$v":/from -v "$B":/to alpine \
     tar czf "/to/$v.tar.gz" -C /from . &&
@@ -479,13 +487,11 @@ while IFS= read -r v <&3; do
     "$v" > "$B/$v.labels.tmp" ||
   { echo "STOP: $v is not backed up with its labels"; exit 1; }
   n=$(docker volume inspect --format '{{len .Labels}}' "$v")
-  if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] &&
-    grep -q '^wardyn.drive=.' "$B/$v.labels.tmp" &&
-    grep -q '^wardyn.home=.' "$B/$v.labels.tmp"; then
+  if [ "$n" = "$(wc -l < "$B/$v.labels.tmp")" ] && usable "$B/$v.labels.tmp" >/dev/null; then
     mv "$B/$v.labels.tmp" "$B/$v.labels"
   else
     mv "$B/$v.labels.tmp" "$B/$v.unresolved"
-    echo "UNRESOLVED: $v has no drive label, or one line per label cannot hold it: see below"
+    echo "UNRESOLVED: $v has no usable drive, home and managed labels, or one line per label cannot hold it: see below"
   fi
 done 3< "$B/drives.list"
 if [ -f "$B/drives.retired" ]; then
@@ -672,16 +678,20 @@ fi
 [ -f "$B/drives.list" ] || { echo "STOP: $B has no drives.list: see below"; exit 1; }
 ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT id FROM user_drives" < /dev/null) || { echo "STOP: the restored database's drives could not be read"; exit 1; }
+#    A label record is usable when it holds exactly one wardyn.drive line,
+#    whose whole value is one drive id, exactly one wardyn.home line, which is
+#    not empty, and the wardyn.managed=true line. usable prints that drive id.
+usable() {
+  [ "$(grep -c '^wardyn\.drive=' "$1" 2>/dev/null)" = 1 ] && [ "$(grep -c '^wardyn\.home=' "$1")" = 1 ] &&
+    grep -q '^wardyn\.home=.' "$1" && grep -qxF 'wardyn.managed=true' "$1" &&
+    sed -n 's/^wardyn\.drive=//p' "$1" | grep -xE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+}
 h=
 while IFS= read -r v <&3; do
   f="$v.tar.gz"; l="$B/$v.labels"
   [ -f "$B/$f" ] || { echo "STOP: $f is missing"; exit 1; }
-  id=$(sed -n 's/^wardyn\.drive=//p' "$l" 2>/dev/null || true)
-  case "$id" in
-    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-    *) id= ;;
-  esac
-  [ ! -e "$B/$v.unresolved" ] && [ -n "$id" ] && grep -qxF 'wardyn.managed=true' "$l" && grep -q '^wardyn\.home=.' "$l" ||
+  id=$(usable "$l" 2>/dev/null) || id=
+  [ ! -e "$B/$v.unresolved" ] && [ -n "$id" ] ||
     { echo "HOLD: $f has no usable label record: see below"; h=1; continue; }
   own=
   for i in $ids; do [ "$i" != "$id" ] || own=1; done

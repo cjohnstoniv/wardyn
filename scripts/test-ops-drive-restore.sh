@@ -63,9 +63,14 @@ out="$(run similar "$T/loop.sh" "wardyn-drive=sample-text
 $good")" || fail "a record with a similarly named label did not restore: $out"
 grep -qxF -- "--label wardyn-drive=sample-text" "$T/similar/create.args" || fail "the similarly named label was not restored"
 
-# Two drive ids, an id that is not canonical, or one carrying SQL quoting: held, no volume made.
+# Two drive ids, an id that is not canonical, one carrying SQL quoting, a valid id
+# then an empty one, or only similarly named keys: held, no volume made.
+lookalike="wardyn-drive=$ID
+wardyn-home=legacy
+wardyn.managed=true"
 for bad in "wardyn.drive=$ID
-$good" "${good/$ID/0F8C1B2A-3D4E-4F50-8A6B-7C8D9E0F1A2B}" "${good/$ID/$ID\'; SELECT 1; --}"; do
+$good" "${good/$ID/0F8C1B2A-3D4E-4F50-8A6B-7C8D9E0F1A2B}" "${good/$ID/$ID\'; SELECT 1; --}" "$good
+wardyn.drive=" "$lookalike"; do
   rm -rf "$T/bad"
   out="$(run bad "$T/loop.sh" "$bad")" || true
   [[ "$out" == *"HOLD:"* ]] || fail "a malformed drive id was not held: $out"
@@ -77,6 +82,21 @@ out="$(cd "$T" && mkdir -p nodrive && printf '%s\n' "$good" >nodrive/wardyn-driv
   echo wardyn-drive-a >nodrive/drives.list && B="$T/nodrive" DB_IDS=00000000-0000-4000-8000-000000000000 \
   bash -c 'set -eu; . "$1"; . "$2"; echo REACHED' _ "$T/stub.sh" "$T/loop.sh" 2>&1)" && fail "an unknown drive did not stop the loop: $out"
 [[ "$out" == *"has no drive $ID"* ]] || fail "an unknown drive stopped with the wrong line: $out"
+
+# The backup marks a record unresolved with the same check: both copies of usable
+# must match, and the backup's must refuse what the restore holds.
+awk '/^usable\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$doc" >"$T/usable-backup.sh"
+awk '/^### Restore them/{r=1} r&&/^usable\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$doc" >"$T/usable-restore.sh"
+[ -s "$T/usable-backup.sh" ] || fail "no usable check found in the backup"
+cmp -s "$T/usable-backup.sh" "$T/usable-restore.sh" || fail "the backup and restore usable checks differ"
+printf '%s\n' "$good" >"$T/rec"
+(. "$T/usable-backup.sh"; [ "$(usable "$T/rec")" = "$ID" ]) || fail "the backup refused a good record"
+for bad in "$lookalike" "${good/$ID/${ID%?}}" "$good
+wardyn.drive=" "$good
+wardyn.home=other" "${good/wardyn.managed=true/wardyn.managed=yes}"; do
+  printf '%s\n' "$bad" >"$T/rec"
+  ! (. "$T/usable-backup.sh"; usable "$T/rec" >/dev/null) || fail "the backup took a record it should mark unresolved: $bad"
+done
 
 # Mutation: the same loop without the label forwarding must not restore the volume.
 grep -v -- '--label "\$x"' "$T/loop.sh" >"$T/loop-nolabels.sh"
