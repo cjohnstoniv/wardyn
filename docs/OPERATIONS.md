@@ -433,28 +433,31 @@ vols=$(docker volume ls -q) &&
 #    names its own drive ids, which each volume's wardyn.drive label must match.
 ids=$(docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT id FROM user_drives") || { echo "STOP: this installation's drives could not be read"; exit 1; }
+#    A volume is this installation's only when its label is, as a whole, one
+#    of those ids; every other one is HELD and settled, one by one, before
+#    anything is copied.
 : > "$B/drives.list.tmp"
 : > "$B/drives.held"
 while IFS= read -r v <&3; do
-  d=$(docker volume inspect --format '{{index .Labels "wardyn.drive"}}' "$v") ||
+  d=$(docker volume inspect --format '{{json (index .Labels "wardyn.drive")}}' "$v") ||
     { echo "STOP: $v could not be inspected"; exit 1; }
-  if [ -n "$d" ] && printf '%s\n' "$ids" | grep -qxF -- "$d"; then
-    echo "$v" >> "$B/drives.list.tmp"
-  else
-    echo "$v" >> "$B/drives.held"
-  fi
-done 3< "$B/drives.found"
-if [ -s "$B/drives.held" ]; then
-  echo "HELD: no label names one of this installation's drives:"
-  cat "$B/drives.held"
-  printf 'Is this the only Wardyn installation on this Docker host? Type yes or no: '
-  read -r a
-  case "$a" in
-    yes) cat "$B/drives.held" >> "$B/drives.list.tmp"; : > "$B/drives.held" ;;
-    no) echo "HELD volumes are not in this backup: see the note below" ;;
-    *) echo "STOP: not answered"; exit 1 ;;
+  own=
+  case "$d" in
+    \"????????-????-????-????-????????????\")
+      u=${d#\"}; u=${u%\"}
+      for i in $ids; do [ "$i" != "$u" ] || own=1; done ;;
   esac
-fi
+  if [ -n "$own" ]; then echo "$v" >> "$B/drives.list.tmp"; else echo "$v" >> "$B/drives.held"; fi
+done 3< "$B/drives.found"
+while IFS= read -r v <&3; do
+  printf "HELD: %s names none of this installation's drives. Is it this installation's? Type yes, or no if it is another installation's: " "$v"
+  read -r a || a=
+  case "$a" in
+    yes) echo "$v" >> "$B/drives.list.tmp" ;;
+    no) echo "$v" >> "$B/drives.elsewhere" ;;
+    *) echo "STOP: $v is not settled: find which installation it belongs to, then run again"; exit 1 ;;
+  esac
+done 3< "$B/drives.held"
 mv "$B/drives.list.tmp" "$B/drives.list"
 while IFS= read -r v <&3; do
   docker run --rm -v "$v":/from -v "$B":/to alpine \
@@ -490,12 +493,13 @@ done 3< "$B/drives.list"
 #    allocations, and written that down beside it. The owner is a person, or,
 #    for a t- (group) or p- (portal) home, the allocation sharing that folder.
 #    Drive volumes carry no installation label, so a volume whose wardyn.drive
-#    id is not one of this installation's drives (another installation's, a
-#    drive deleted here, or one with no label) is HELD before anything is
-#    copied. With only this installation on the host, answer yes and they are
-#    backed up too. On a shared host answer no: drives.held lists what this
-#    backup leaves out, and each one is backed up with its own installation
-#    once you know which that is.
+#    label is not exactly one of this installation's drive ids (another
+#    installation's, a drive deleted here, one with no label or a malformed
+#    one) is HELD, and the script asks about each before anything is copied.
+#    yes backs it up here; with only this installation on the host every
+#    held volume is its own. no records it in drives.elsewhere, to back up
+#    with the installation it belongs to. A volume you cannot place stops the
+#    backup until you know.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
